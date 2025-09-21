@@ -476,7 +476,7 @@ func main() {
                 nalType := int(nalu[0] & 0x1F)
                 isVCL := nalType >= 1 && nalType <= 5
                 if i%1000 == 0 || nalType == 5 || nalType == 7 || nalType == 8 { // Reduced logging
-                    log.Printf("NALU %d type %d (%s)", i, nalType, nalTypeToString(nalType))
+//log.Printf("NALU %d type %d (%s) size %d", i, nalType, nalTypeToString(nalType), len(nalu))
                 }
 
                 start := time.Now()
@@ -494,7 +494,7 @@ func main() {
                     if !boundChecked {
                         testSample := media.Sample{Data: []byte{}, Duration: 0}
                         if err := track.WriteSample(testSample); err != nil && err.Error() == "not bound" {
-                            log.Printf("Track not bound yet, waiting...")
+                           // log.Printf("Track not bound yet, waiting...")
                             time.Sleep(time.Second)
                             break // Skip this segment, retry cycle later
                         }
@@ -507,7 +507,7 @@ func main() {
                         Duration: frameDuration,
                     }
                     if err := track.WriteSample(sample); err != nil {
-                        log.Printf("Sample write error: %v", err)
+                        //log.Printf("Sample write error: %v", err)
                         if err.Error() == "not bound" {
                             time.Sleep(time.Second)
                             break
@@ -520,7 +520,7 @@ func main() {
                     if sleep > 0 {
                         time.Sleep(sleep)
                     } else if sleep < -time.Millisecond {
-                        log.Printf("Frame %d processing overrun by %v", segmentSamples, -sleep)
+                        //log.Printf("Frame %d processing overrun by %v", segmentSamples, -sleep)
                     }
 
                     // Start new access unit with this non-VCL
@@ -529,8 +529,13 @@ func main() {
                 } else {
                     if isVCL {
                         firstMb, err := getFirstMbInSlice(nalu)
+if err == nil {
+    //log.Printf("VCL NALU %d type %d first_mb=%d", i, nalType, firstMb)
+} else {
+    //log.Printf("VCL NALU %d type %d first_mb parse error: %v", i, nalType, err)
+}
                         if err != nil {
-                            log.Printf("first_mb_in_slice parse error for NALU %d: %v", i, err)
+                            //log.Printf("first_mb_in_slice parse error for NALU %d: %v", i, err)
                             continue
                         }
                         if firstMb == 0 && len(currentFrame) > 0 && hasVCL {
@@ -545,7 +550,7 @@ func main() {
                             if !boundChecked {
                                 testSample := media.Sample{Data: []byte{}, Duration: 0}
                                 if err := track.WriteSample(testSample); err != nil && err.Error() == "not bound" {
-                                    log.Printf("Track not bound yet, waiting...")
+                                    //log.Printf("Track not bound yet, waiting...")
                                     time.Sleep(time.Second)
                                     break
                                 }
@@ -557,7 +562,7 @@ func main() {
                                 Duration: frameDuration,
                             }
                             if err := track.WriteSample(sample); err != nil {
-                                log.Printf("Sample write error: %v", err)
+                               // log.Printf("Sample write error: %v", err)
                                 if err.Error() == "not bound" {
                                     time.Sleep(time.Second)
                                     break
@@ -570,7 +575,7 @@ func main() {
                             if sleep > 0 {
                                 time.Sleep(sleep)
                             } else if sleep < -time.Millisecond {
-                                log.Printf("Frame %d processing overrun by %v", segmentSamples, -sleep)
+                               // log.Printf("Frame %d processing overrun by %v", segmentSamples, -sleep)
                             }
 
                             // Start new access unit
@@ -582,7 +587,7 @@ func main() {
                         hasVCL = true
                         if nalType == 5 {
                             idrSent = true
-                            log.Printf("IDR keyframe detected")
+                            //log.Printf("IDR keyframe detected")
                         }
                     } else {
                         // Non-VCL before any VCL: Add to current

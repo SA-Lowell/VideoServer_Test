@@ -9,11 +9,8 @@ generate_hls 3 "./compiled_episode/full.mp4" "./hls/"
 ad_insert <episode_file> <output_dir> <num_breaks> [for each break: <start_sec> <num_ads> <ad_file1> <ad_file2> ... ]
 ad_insert "./media/episode1.mp4" "./compiled_episode" 2 15.5 1 "./media/ad1.mp4" 877 3 "./media/ad2.mp4" "./media/ad3.mp4" "./media/ad4.mp4"
 
-
 run server:
 go run live_server.go
-
-
 
 ./
 ├── live_server.go
@@ -61,9 +58,6 @@ go run analyze_h264.go "./webrtc_segments/seg0.h264"
 go run analyze_h264.go "./webrtc_segments/seg2.h264"
 go run analyze_h264.go "./webrtc_segments/seg6.h264"
 
-
-
-
 Install Go: Download from golang.org (v1.21+). Run go version to verify.
 Install FFmpeg: macOS: brew install ffmpeg
 Ubuntu: sudo apt update && sudo apt install ffmpeg
@@ -77,8 +71,6 @@ go mod init tv-station
 go get github.com/gin-gonic/gin github.com/robfig/cron/v3
 
 (No goav needed; we're using os/exec for FFmpeg.)
-
-
 
 C++ version:
 Install FFmpeg Development Libraries (for libav*):Ubuntu/Debian: sudo apt update && sudo apt install libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavfilter-dev pkg-config

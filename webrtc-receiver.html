@@ -171,6 +171,10 @@
         document.getElementById('sendOfferButton').addEventListener('click', sendOfferToServer);
 
         document.getElementById('restartIceButton').addEventListener('click', restartIce);
+setInterval(() => {
+  const video = document.getElementById('remoteVideo');
+  console.log('Current time:', video.currentTime, 'Playback rate:', video.playbackRate, 'Buffered:', video.buffered.length ? video.buffered.end(0) - video.buffered.start(0) : 0);
+}, 1000);
     </script>
 </body>
 </html>
