@@ -14,9 +14,9 @@
 </head>
 <body>
     <h1>WebRTC Video Receiver</h1>
-    <video id="remoteVideo" autoplay playsinline></video>
+    <video id="remoteVideo" autoplay playsinline controls></video>
     <button id="startButton">Start Connection</button>
-    <label for="serverUrl">Go Server URL (e.g., http://localhost:8080/offer):</label>
+    <label for="serverUrl">Go Server URL (e.g., http://localhost:8081/signal):</label>
     <input id="serverUrl" type="text" value="http://localhost:8081/signal" style="width: 300px;">
     <button id="sendOfferButton" disabled>Send Offer to Server</button>
     <button id="restartIceButton" disabled>Restart ICE</button>
@@ -30,7 +30,7 @@
             logElement.textContent += message + '\n';
         }
 
-        // Configuration for ICE servers (add TURN with credentials if needed)
+        // Configuration for ICE servers
         const configuration = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
@@ -43,9 +43,9 @@
         let pc = null;
         let remoteStream = null;
         let offer = null;
-        let candidates = []; // For potential trickle ICE
+        let candidates = [];
 
-        // Function to create the local offer (recvonly video)
+        // Function to create the local offer (recvonly video and audio)
         async function createOffer() {
             pc = new RTCPeerConnection(configuration);
 
@@ -74,7 +74,7 @@
             pc.onicecandidate = (event) => {
                 if (event.candidate) {
                     log(`New ICE candidate: ${JSON.stringify(event.candidate)}`);
-                    candidates.push(event.candidate); // Collect for potential sending
+                    candidates.push(event.candidate);
                 } else {
                     log('All ICE candidates gathered (end-of-candidates)');
                 }
@@ -93,7 +93,7 @@
             // Create offer
             offer = await pc.createOffer({
                 offerToReceiveVideo: true,
-                offerToReceiveAudio: false
+                offerToReceiveAudio: true
             });
             await pc.setLocalDescription(offer);
             log('Local Offer SDP: ' + offer.sdp);
@@ -120,7 +120,6 @@
                 const answer = new RTCSessionDescription(answerJson);
                 await pc.setRemoteDescription(answer);
                 log('Remote Answer SDP set: ' + answer.sdp);
-                // If trickle ICE, add remote candidates here if provided by server
             } catch (error) {
                 log('Error sending offer: ' + error);
             }
@@ -133,8 +132,7 @@
                 const newOffer = await pc.createOffer({ iceRestart: true });
                 await pc.setLocalDescription(newOffer);
                 log('New offer with ICE restart: ' + newOffer.sdp);
-                // Re-send to server
-                offer = newOffer; // Update for re-sending
+                offer = newOffer;
             } catch (error) {
                 log('ICE restart failed: ' + error);
             }
@@ -149,6 +147,9 @@
                     stats.forEach(report => {
                         if (report.type === 'inbound-rtp' && report.kind === 'video') {
                             log(`Video inbound: packetsReceived=${report.packetsReceived || 0}, bytesReceived=${report.bytesReceived || 0}, packetsLost=${report.packetsLost || 0}, jitter=${report.jitter || 0}, frameRate=${report.frameRate || 0}`);
+                        }
+                        if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+                            log(`Audio inbound: packetsReceived=${report.packetsReceived || 0}, bytesReceived=${report.bytesReceived || 0}, packetsLost=${report.packetsLost || 0}, jitter=${report.jitter || 0}`);
                         }
                         if (report.type === 'candidate-pair' && report.state === 'succeeded') {
                             log(`Active candidate pair: localType=${report.localCandidateId}, remoteType=${report.remoteCandidateId}, bytesSent=${report.bytesSent}, bytesReceived=${report.bytesReceived}`);
@@ -171,10 +172,6 @@
         document.getElementById('sendOfferButton').addEventListener('click', sendOfferToServer);
 
         document.getElementById('restartIceButton').addEventListener('click', restartIce);
-setInterval(() => {
-  const video = document.getElementById('remoteVideo');
-  console.log('Current time:', video.currentTime, 'Playback rate:', video.playbackRate, 'Buffered:', video.buffered.length ? video.buffered.end(0) - video.buffered.start(0) : 0);
-}, 1000);
     </script>
 </body>
 </html>

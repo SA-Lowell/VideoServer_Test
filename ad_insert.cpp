@@ -137,7 +137,7 @@ std::string buildAudioFilter(int srcSR, int srcCh, int tgtSR, int tgtCh) {
  if(srcCh != tgtCh) {
  std::string layout = "mono";
  if (tgtCh == 2) layout = "stereo";
- else if (tgtCh > 2) layout = "5.1"; // Example; extend as needed
+ else if (tgtCh > 2) layout = "stereo"; // Force downmix to stereo
  filters.push_back("aformat=channel_layouts=" + layout);
  }
  if (filters.empty()) return "";
@@ -551,6 +551,9 @@ bool insertBreak(const std::string& episodePath, const std::string& outputDir, c
  std::cout << "DEBUG: Using ad " << adName << "'s higher vbr: " << targetVBitRate << " (" << adVBps << " bps)" << std::endl;
  }
  }
+ // Force stereo for WebRTC Opus compatibility
+ targetChannels = 2;
+ std::cout << "DEBUG: Forced target channels to 2 for Opus" << std::endl;
  std::cout << "DEBUG: Final targets: " << targetWidth << "x" << targetHeight << " SR " << targetSampleRate << "Hz ch " << targetChannels << " vbr " << targetVBitRate << " abr " << targetABitRate << " fps " << targetFPS << std::endl;
 
  std::string targetVCodec = "libx264";
@@ -696,49 +699,49 @@ bool insertBreak(const std::string& episodePath, const std::string& outputDir, c
  }
  std::cout << "DEBUG: Concatenated full: " << fullFile << " (" << concatParts.size() << " parts) at target " << targetWidth << "x" << targetHeight << " SR " << targetSampleRate << "Hz FPS " << targetFPS << std::endl;
 
- // Extract to .h264 segments for WebRTC server before cleanup
- std::string h264Dir = "./webrtc_segments";
- fs::create_directories(h264Dir);
- std::cout << "DEBUG: Created/verified h264 dir: " << h264Dir << std::endl;
- int h264Index = 0;
+ // Extract to .h264 and .opus segments for WebRTC server (instead of .mp4)
+ std::string segmentsDir = "./webrtc_segments";
+ fs::create_directories(segmentsDir);
+ std::cout << "DEBUG: Created/verified segments dir: " << segmentsDir << std::endl;
+ int segmentIndex = 0;
  for (const auto& tempFile : tempFiles) {
- std::string base = fs::path(tempFile).filename().string();
- std::string prefix;
- if (base.find("seg") == 0) {
- prefix = "seg";
- } else {
- prefix = "ad_";
+     std::string base = fs::path(tempFile).filename().string();
+     std::string prefix;
+     if (base.find("seg") == 0) {
+         prefix = "seg";
+     } else {
+         prefix = "ad_";
+     }
+     std::string indexStr = std::to_string(segmentIndex);
+     std::string tempMp4 = segmentsDir + "/temp_" + prefix + indexStr + ".mp4";
+     fs::rename(tempFile, tempMp4);
+     std::string h264File = segmentsDir + "/" + prefix + indexStr + ".h264";
+     std::string opusFile = segmentsDir + "/" + prefix + indexStr + ".opus";
+     std::string cmdV = "ffmpeg -y -i \"" + tempMp4 + "\" -c:v copy -bsf:v h264_mp4toannexb \"" + h264File + "\"";
+     int resV = std::system(cmdV.c_str());
+     if (resV != 0) {
+         std::cout << "Failed to extract h264 from " << tempMp4 << ": " << resV << std::endl;
+     }
+     std::string cmdA = "ffmpeg -y -i \"" + tempMp4 + "\" -vn -c:a libopus -b:a 64k -frame_duration 20 -application audio \"" + opusFile + "\"";
+     int resA = std::system(cmdA.c_str());
+     if (resA != 0) {
+         std::cout << "Failed to extract opus from " << tempMp4 << ": " << resA << std::endl;
+     }
+     fs::remove(tempMp4);
+     std::cout << "Extracted " << h264File << " and " << opusFile << std::endl;
+     ++segmentIndex;
  }
- std::string h264File = h264Dir + "/" + prefix + std::to_string(h264Index) + ".h264";
- std::string extractCmd = "ffmpeg -y -i \"" + tempFile + "\" -an -c:v copy -bsf:v h264_mp4toannexb \"" + h264File + "\" 2>nul";
- std::cout << "DEBUG: Executing h264 extract: " << extractCmd << std::endl;
- int extractRes = std::system(extractCmd.c_str());
- if (extractRes == 0) {
- std::cout << "Extracted " << tempFile << " -> " << h264File << std::endl;
- } else {
- std::cout << "Failed to extract " << tempFile << " (code: " << extractRes << ")" << std::endl;
- }
- ++h264Index;
- }
- std::cout << "DEBUG: Extracted " << tempFiles.size() << " segments to .h264" << std::endl;
+ std::cout << "DEBUG: Extracted " << tempFiles.size() << " .h264/.opus pairs" << std::endl;
 
- // Cleanup temps (.mp4 files and concat list)
- std::cout << "DEBUG: Cleaning up " << tempFiles.size() << " temp files" << std::endl;
- for (const auto& tempFile : tempFiles) {
- if (fs::exists(tempFile)) {
- fs::remove(tempFile);
- std::cout << "DEBUG: Removed temp: " << tempFile << std::endl;
- } else {
- std::cout << "DEBUG: Temp not found for removal: " << tempFile << std::endl;
- }
- }
+ // Cleanup only concat list (temps are now final segments)
+ std::cout << "DEBUG: Cleaning up concat list" << std::endl;
  if (fs::exists(concatListFile)) {
- fs::remove(concatListFile);
- std::cout << "DEBUG: Removed concat list" << std::endl;
+     fs::remove(concatListFile);
+     std::cout << "DEBUG: Removed concat list" << std::endl;
  }
 
  std::cout << "Merged file ready: " << fullFile << std::endl;
- std::cout << "WebRTC segments ready in: " << h264Dir << std::endl;
+ std::cout << "WebRTC-ready .h264 and .opus segments generated in: " << segmentsDir << std::endl;
  return true;
 }
 
@@ -811,7 +814,7 @@ int main(int argc, char* argv[]) {
  return 1;
  } else {
  std::cout << "Merged video ready in " << output_dir << "/full.mp4" << std::endl;
- std::cout << "WebRTC-ready .h264 segments generated in ./webrtc_segments/" << std::endl;
+ std::cout << "WebRTC-ready .h264 and .opus segments generated in ./webrtc_segments/" << std::endl;
  }
  return 0;
 }
