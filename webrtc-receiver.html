@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Video Receiver</title>
+    <style>
+        video {
+            width: 640px;
+            height: 480px;
+            background-color: black;
+        }
+    </style>
+</head>
+<body>
+    <h1>WebRTC Video Receiver</h1>
+    <video id="remoteVideo" autoplay playsinline></video>
+    <button id="startButton">Start Connection</button>
+    <label for="serverUrl">Go Server URL (e.g., http://localhost:8080/offer):</label>
+    <input id="serverUrl" type="text" value="http://localhost:8081/signal" style="width: 300px;">
+    <button id="sendOfferButton" disabled>Send Offer to Server</button>
+    <button id="restartIceButton" disabled>Restart ICE</button>
+    <pre id="log"></pre>
+
+    <script>
+        // Utility to log messages to the console and the page
+        function log(message) {
+            console.log(message);
+            const logElement = document.getElementById('log');
+            logElement.textContent += message + '\n';
+        }
+
+        // Configuration for ICE servers (add TURN with credentials if needed)
+        const configuration = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+                { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+            ]
+        };
+
+        // Variables
+        let pc = null;
+        let remoteStream = null;
+        let offer = null;
+        let candidates = []; // For potential trickle ICE
+
+        // Function to create the local offer (recvonly video)
+        async function createOffer() {
+            pc = new RTCPeerConnection(configuration);
+
+            // Event listeners for debugging
+            pc.oniceconnectionstatechange = () => {
+                log(`ICE connection state: ${pc.iceConnectionState}`);
+                if (pc.iceConnectionState === 'disconnected') {
+                    log('ICE disconnected - attempting automatic restart in 5 seconds...');
+                    setTimeout(restartIce, 5000);
+                }
+                if (pc.iceConnectionState === 'failed') {
+                    log('ICE failed - manual restart may be needed.');
+                    document.getElementById('restartIceButton').disabled = false;
+                }
+                if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+                    const videoElement = document.getElementById('remoteVideo');
+                    videoElement.srcObject = remoteStream;
+                    log('ICE connected - assigned stream to video element.');
+                }
+            };
+
+            pc.onconnectionstatechange = () => {
+                log(`Peer connection state: ${pc.connectionState}`);
+            };
+
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    log(`New ICE candidate: ${JSON.stringify(event.candidate)}`);
+                    candidates.push(event.candidate); // Collect for potential sending
+                } else {
+                    log('All ICE candidates gathered (end-of-candidates)');
+                }
+            };
+
+            pc.ontrack = (event) => {
+                log(`Track received: ${event.track.kind} ${event.track.readyState}`);
+                if (!remoteStream) {
+                    remoteStream = new MediaStream();
+                }
+                remoteStream.addTrack(event.track);
+                event.track.onmute = () => log('Track muted - possible black screen or no media flow');
+                event.track.onunmute = () => log('Track unmuted - media flowing');
+            };
+
+            // Create offer
+            offer = await pc.createOffer({
+                offerToReceiveVideo: true,
+                offerToReceiveAudio: false
+            });
+            await pc.setLocalDescription(offer);
+            log('Local Offer SDP: ' + offer.sdp);
+        }
+
+        // Function to send offer to Go server via fetch
+        async function sendOfferToServer() {
+            const serverUrl = document.getElementById('serverUrl').value;
+            if (!offer) {
+                log('No offer generated yet - start connection first.');
+                return;
+            }
+
+            try {
+                const response = await fetch(serverUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sdp: offer.sdp, type: offer.type })
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP error: ${response.status}`);
+                }
+                const answerJson = await response.json();
+                const answer = new RTCSessionDescription(answerJson);
+                await pc.setRemoteDescription(answer);
+                log('Remote Answer SDP set: ' + answer.sdp);
+                // If trickle ICE, add remote candidates here if provided by server
+            } catch (error) {
+                log('Error sending offer: ' + error);
+            }
+        }
+
+        // Function for ICE restart
+        async function restartIce() {
+            log('Restarting ICE...');
+            try {
+                const newOffer = await pc.createOffer({ iceRestart: true });
+                await pc.setLocalDescription(newOffer);
+                log('New offer with ICE restart: ' + newOffer.sdp);
+                // Re-send to server
+                offer = newOffer; // Update for re-sending
+            } catch (error) {
+                log('ICE restart failed: ' + error);
+            }
+        }
+
+        // Periodically get stats for debugging
+        function startStatsLogging() {
+            setInterval(async () => {
+                if (!pc) return;
+                try {
+                    const stats = await pc.getStats();
+                    stats.forEach(report => {
+                        if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                            log(`Video inbound: packetsReceived=${report.packetsReceived || 0}, bytesReceived=${report.bytesReceived || 0}, packetsLost=${report.packetsLost || 0}, jitter=${report.jitter || 0}, frameRate=${report.frameRate || 0}`);
+                        }
+                        if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+                            log(`Active candidate pair: localType=${report.localCandidateId}, remoteType=${report.remoteCandidateId}, bytesSent=${report.bytesSent}, bytesReceived=${report.bytesReceived}`);
+                        }
+                    });
+                } catch (error) {
+                    log('getStats error: ' + error);
+                }
+            }, 5000);
+        }
+
+        // Button handlers
+        document.getElementById('startButton').addEventListener('click', async () => {
+            await createOffer();
+            startStatsLogging();
+            document.getElementById('sendOfferButton').disabled = false;
+            log('Connection started. Enter server URL and click "Send Offer to Server".');
+        });
+
+        document.getElementById('sendOfferButton').addEventListener('click', sendOfferToServer);
+
+        document.getElementById('restartIceButton').addEventListener('click', restartIce);
+    </script>
+</body>
+</html>
