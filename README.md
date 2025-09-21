@@ -6,8 +6,9 @@ To run:
 generate_hls <segmentDur> <input_file> <output_dir>
 generate_hls 3 "./compiled_episode/full.mp4" "./hls/"
 
-ad_insert <episode_file> <output_dir> <num_breaks> [for each break: <start_sec> <num_ads> <ad_file1> <ad_file2> ... ]
-ad_insert "./media/episode1.mp4" "./compiled_episode" 2 15.5 1 "./media/ad1.mp4" 877 3 "./media/ad2.mp4" "./media/ad3.mp4" "./media/ad4.mp4"
+ad_insert <episode_file> <temp_dir> <full_mp4_path> <segments_dir> <num_breaks> [for each break: <start_sec> <num_ads> <ad_file1> <ad_file2> ... ] [ <custom_base_name1> <custom_base_name2> ... ]
+ad_insert "./media/episode1.mp4" "./temp_video_directory" "./full_compiled_video/full_video.mp4" "./webrtc_segments" 2 15.5 1 "./media/ad1.mp4" 877 5 "./media/ad2.mp4" "./media/ad3.mp4" "./media/ad4.mp4" "./media/ad5.mp4" "./media/ad6.mp4" "seg0" "ad_1" "seg2" "ad_3" "ad_4" "ad_5" "ad_6" "ad_7" "seg8"
+
 
 run server:
 go run live_server.go

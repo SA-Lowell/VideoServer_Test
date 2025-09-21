@@ -688,9 +688,9 @@ bool extractSegment(const std::string& inputPath, const std::string& outputPath,
 }
 
 //insertBreak creates a seamless concatenated video with multiple ad insertions (outputs full.mp4)
-bool insertBreak(const std::string& episodePath, const std::string& outputDir, const std::vector<Break>& brks)
+bool insertBreak(const std::string& episodePath, const std::string& tempDir, const std::string& fullMp4Path, const std::string& segmentsDir, const std::vector<Break>& brks, const std::vector<std::string>& custom_names = {})
 {
-	std::cout << "DEBUG: insertBreak called: episode=" << episodePath << " outputDir=" << outputDir << " numBreaks=" << brks.size() << std::endl;
+	std::cout << "DEBUG: insertBreak called: episode=" << episodePath << " tempDir=" << tempDir << " fullMp4Path=" << fullMp4Path << " segmentsDir=" << segmentsDir << " numBreaks=" << brks.size() << std::endl;
 	std::cout << "DEBUG: Episode path: " << episodePath << std::endl;
 	std::cout << "DEBUG: Number of breaks: " << brks.size() << std::endl;
 
@@ -704,25 +704,6 @@ bool insertBreak(const std::string& episodePath, const std::string& outputDir, c
 		{
 			std::cout << "DEBUG: - ad: " << ad << std::endl;
 		}
-	}
-
-	//If no breaks, just re-encode the whole episode to baseline profile
-	if(brks.empty())
-	{
-		std::cout << "DEBUG: No breaks, re-encoding whole episode to baseline profile to full.mp4" << std::endl;
-
-		std::string fullFile = outputDir + "/full.mp4";
-
-		std::string cmd = "ffmpeg -i \"" + episodePath + "\" -c:v libx264 -profile:v baseline -level 3.0 -preset veryfast -crf 23 -movflags +faststart \"" + fullFile + "\"";
-
-		int result = std::system(cmd.c_str());
-
-		if(result == 0)
-		{
-			std::cout << "Re-encoded episode to: " << fullFile << std::endl;
-		}
-
-		return result == 0;
 	}
 
 	//Probe episode
@@ -912,7 +893,7 @@ bool insertBreak(const std::string& episodePath, const std::string& outputDir, c
 
 		if(segDur > 0)
 		{
-			std::string segFile = outputDir + "/seg" + std::to_string(segIndex) + ".mp4";
+			std::string segFile = tempDir + "/seg" + std::to_string(segIndex) + ".mp4";
 
 			std::cout << "DEBUG: Extracting pre-break segment: " << segFile << std::endl;
 
@@ -948,7 +929,7 @@ bool insertBreak(const std::string& episodePath, const std::string& outputDir, c
 			}
 
 			const AdInfo& info = adIt->second;
-			std::string adTemp = outputDir + "/ad_temp_" + std::to_string(i) + "_" + std::to_string(adIdx) + "_" + fs::path(adName).filename().string();
+			std::string adTemp = tempDir + "/ad_temp_" + std::to_string(i) + "_" + std::to_string(adIdx) + "_" + fs::path(adName).filename().string();
 
 			std::cout << "DEBUG: Re-encoding ad " << adName << " to " << adTemp << " (dur=" << info.duration << ")" << std::endl;
 
@@ -994,7 +975,7 @@ bool insertBreak(const std::string& episodePath, const std::string& outputDir, c
 			tempFiles.push_back(adTemp);
 		}
 
-		currentSecFloat = brk.startSec;//Actually advance by ad duration, not just start
+		currentSecFloat = brk.startSec;//Set to break start for next episode segment
 
 		std::cout << "DEBUG: Advanced currentSec to " << currentSecFloat << std::endl;
 	}
@@ -1007,7 +988,7 @@ bool insertBreak(const std::string& episodePath, const std::string& outputDir, c
 
 	if(finalDur > 0)
 	{
-		std::string finalFile = outputDir + "/seg" + std::to_string(segIndex) + ".mp4";
+		std::string finalFile = tempDir + "/seg" + std::to_string(segIndex) + ".mp4";
 
 		std::cout << "DEBUG: Extracting final segment: " << finalFile << std::endl;
 
@@ -1042,7 +1023,7 @@ bool insertBreak(const std::string& episodePath, const std::string& outputDir, c
 
 	//Build concat list
 	std::string concatLocal = "concat.txt";
-	std::string concatListFile = outputDir + "/" + concatLocal;
+	std::string concatListFile = tempDir + "/" + concatLocal;
 	std::ofstream concatFile(concatListFile);
 
 	if(!concatFile)
@@ -1062,7 +1043,7 @@ bool insertBreak(const std::string& episodePath, const std::string& outputDir, c
 	std::cout << "DEBUG: Wrote concat list: " << concatListFile << std::endl;
 
 	//Concat
-	std::string fullFile = outputDir + "/full.mp4";
+	std::string fullFile = fullMp4Path;
 	std::string concatArgs = "-fflags +genpts -f concat -safe 0 -i \"" + concatListFile + "\" -c copy -r " + std::to_string(targetFPS) + " -movflags +faststart \"" + fullFile + "\"";
 	std::string concatFullCmd = "ffmpeg " + concatArgs;
 
@@ -1080,7 +1061,6 @@ bool insertBreak(const std::string& episodePath, const std::string& outputDir, c
 	std::cout << "DEBUG: Concatenated full: " << fullFile << " (" << concatParts.size() << " parts) at target " << targetWidth << "x" << targetHeight << " SR " << targetSampleRate << "Hz FPS " << targetFPS << std::endl;
 
 	//Extract to .h264 and .opus segments for WebRTC server (instead of .mp4)
-	std::string segmentsDir = "./webrtc_segments";
 	fs::create_directories(segmentsDir);
 
 	std::cout << "DEBUG: Created/verified segments dir: " << segmentsDir << std::endl;
@@ -1089,23 +1069,33 @@ bool insertBreak(const std::string& episodePath, const std::string& outputDir, c
 
 	for(const auto& tempFile : tempFiles)
 	{
-		std::string base = fs::path(tempFile).filename().string();
-		std::string prefix;
+		std::string name;
 
-		if(base.find("seg") == 0)
+		if(!custom_names.empty())
 		{
-			prefix = "seg";
+			name = custom_names[segmentIndex];
 		}
 		else
 		{
-			prefix = "ad_";
+			std::string base = fs::path(tempFile).filename().string();
+			std::string prefix;
+
+			if(base.find("seg") == 0)
+			{
+				prefix = "seg";
+			}
+			else
+			{
+				prefix = "ad_";
+			}
+
+			name = prefix + std::to_string(segmentIndex);
 		}
 
-		std::string indexStr = std::to_string(segmentIndex);
-		std::string tempMp4 = segmentsDir + "/temp_" + prefix + indexStr + ".mp4";
+		std::string tempMp4 = segmentsDir + "/temp_" + name + ".mp4";
 		fs::rename(tempFile, tempMp4);
-		std::string h264File = segmentsDir + "/" + prefix + indexStr + ".h264";
-		std::string opusFile = segmentsDir + "/" + prefix + indexStr + ".opus";
+		std::string h264File = segmentsDir + "/" + name + ".h264";
+		std::string opusFile = segmentsDir + "/" + name + ".opus";
 		std::string cmdV = "ffmpeg -y -i \"" + tempMp4 + "\" -c:v copy -bsf:v h264_mp4toannexb \"" + h264File + "\"";
 		int resV = std::system(cmdV.c_str());
 
@@ -1143,38 +1133,41 @@ bool insertBreak(const std::string& episodePath, const std::string& outputDir, c
 	}
 
 	std::cout << "Merged file ready: " << fullFile << std::endl;
-	std::cout << "WebRTC-ready .h264 and .opus segments generated in: " << segmentsDir << std::endl;
+	std::cout << "WebRTC-ready .h264 and .opus segments generated in " << segmentsDir << "/" << std::endl;
 
 	return true;
 }
 
 int main(int argc, char* argv[])
 {
-	if(argc < 4)
+	if(argc < 6)
 	{
-		std::cerr << "Usage: " << argv[0] << " <episode_file> <output_dir> <num_breaks> [for each break: <start_sec> <num_ads> <ad_file1> <ad_file2> ... ]" << std::endl;
+		std::cerr << "Usage: " << argv[0] << " <episode_file> <temp_dir> <full_mp4_path> <segments_dir> <num_breaks> [for each break: <start_sec> <num_ads> <ad_file1> <ad_file2> ... ] [ <custom_base_name1> <custom_base_name2> ... ]" << std::endl;
+		std::cerr << "Custom base names are optional; if provided, must be exactly the number of segments (episode parts + all ads), in order, without extensions." << std::endl;
 		std::cerr << "All parameters are required. For 0 breaks, provide just num_breaks=0." << std::endl;
 
 		return 1;
 	}
 
 	std::string episode_file = argv[1];
-	std::string output_dir = argv[2];
+	std::string temp_dir = argv[2];
+	std::string full_mp4_path = argv[3];
+	std::string segments_dir = argv[4];
 	int num_breaks;
 
 	try
 	{
-		num_breaks = std::stoi(argv[3]);
+		num_breaks = std::stoi(argv[5]);
 	}
 	catch (...)
 	{
-		std::cerr << "Invalid num_breaks: " << argv[3] << std::endl;
+		std::cerr << "Invalid num_breaks: " << argv[5] << std::endl;
 
 		return 1;
 	}
 
 	std::vector<Break> brks;
-	size_t arg_idx = 4;
+	size_t arg_idx = 6;
 
 	for(int i = 0; i < num_breaks; ++i)
 	{
@@ -1228,22 +1221,41 @@ int main(int argc, char* argv[])
 		brks.push_back({start_sec, ads});
 	}
 
-	if(arg_idx != static_cast<size_t>(argc))
+	int total_ep_segments = brks.size() + 1;
+	int total_ad_segments = 0;
+
+	for(const auto& b : brks)total_ad_segments += b.ads.size();
+
+	int total_segments = total_ep_segments + total_ad_segments;
+
+	std::vector<std::string> custom_names;
+
+	if(static_cast<size_t>(argc) - arg_idx == static_cast<size_t>(total_segments))
 	{
-		std::cerr << "Extra arguments provided after breaks." << std::endl;
+		for(; arg_idx < static_cast<size_t>(argc); ++arg_idx)
+		{
+			custom_names.push_back(argv[arg_idx]);
+		}
+	}
+	else if(static_cast<size_t>(argc) - arg_idx != 0)
+	{
+		std::cerr << "Error: Must provide exactly " << total_segments << " custom base names or none." << std::endl;
 
 		return 1;
 	}
 
 	std::cout << "Current working directory: " << fs::current_path() << std::endl;//Debug
-	std::cout << "DEBUG: Parsed args: episode=" << episode_file << " output_dir=" << output_dir << " num_breaks=" << num_breaks << std::endl;
+	std::cout << "DEBUG: Parsed args: episode=" << episode_file << " temp_dir=" << temp_dir << " num_breaks=" << num_breaks << std::endl;
 
-	fs::create_directories(output_dir);
+	fs::create_directories(temp_dir);
 
-	std::cout << "DEBUG: Created output dir" << std::endl;
+	fs::create_directories(fs::path(full_mp4_path).parent_path());
+	fs::create_directories(segments_dir);
+
+	std::cout << "DEBUG: Created temp dir" << std::endl;
 	std::cout << "Inserting ads and merging video..." << std::endl;
 
-	if(!insertBreak(episode_file, output_dir, brks))
+	if(!insertBreak(episode_file, temp_dir, full_mp4_path, segments_dir, brks, custom_names))
 	{
 		std::cout << "Ad insertion failed!" << std::endl;
 
@@ -1251,8 +1263,8 @@ int main(int argc, char* argv[])
 	}
 	else
 	{
-		std::cout << "Merged video ready in " << output_dir << "/full.mp4" << std::endl;
-		std::cout << "WebRTC-ready .h264 and .opus segments generated in ./webrtc_segments/" << std::endl;
+		std::cout << "Merged video ready in " << full_mp4_path << std::endl;
+		std::cout << "WebRTC-ready .h264 and .opus segments generated in " << segments_dir << "/" << std::endl;
 	}
 
 	return 0;
