@@ -1,0 +1,1 @@
+g++ -std=c++17 -O3 -march=native -o ad_insert ad_insert.cpp

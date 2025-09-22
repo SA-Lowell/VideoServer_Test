@@ -251,24 +251,24 @@ int main(int argc, char* argv[])
 
 			if(show_decimal && (show_start || show_midpoint || show_end))
 			{
-				std::cout << "\tDecimal seconds:" << std::endl;
+				if(show_start || show_midpoint || show_end)std::cout << "\tDecimal seconds:" << std::endl;
 
 				if(show_start)std::cout << "\t\tStart:" << std::fixed << std::setprecision(21) << p.start << std::endl;
 				if(show_midpoint)std::cout << "\t\tMidpoint:" << std::fixed << std::setprecision(21) << midpoint << std::endl;
 				if(show_end)std::cout << "\t\tEnd:" << std::fixed << std::setprecision(21) << p.end << std::endl;
 
-				std::cout << std::endl;
+				if(show_start || show_midpoint || show_end)std::cout << std::endl;
 			}
 
 			if(show_mmss && (show_start || show_midpoint || show_end))
 			{
-				std::cout << "\tMM:SS.d" << std::endl;
+				if(show_start || show_midpoint || show_end)std::cout << "\tMM:SS.d" << std::endl;
 
 				if(show_start)std::cout << "\t\tStart:" << std::fixed << secondsToMMSS(p.start) << std::endl;
 				if(show_midpoint)std::cout << "\t\tMidpoint:" << std::fixed << secondsToMMSS(midpoint) << std::endl;
 				if(show_end)std::cout << "\t\tEnd:" << std::fixed << secondsToMMSS(p.end) << std::endl;
 
-				std::cout << std::endl;
+				if(show_start || show_midpoint || show_end)std::cout << std::endl;
 			}
 		}
 	}

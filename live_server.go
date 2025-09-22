@@ -22,8 +22,6 @@ import (
     "log"
     "os"
     "path/filepath"
-    "sort"
-    "strconv"
     "strings"
     "sync"
     "time"
@@ -53,11 +51,6 @@ var (
     trackAudio  *webrtc.TrackLocalStaticSample
     fmtpLine    string // Dynamic fmtp from SPS
 )
-
-type segInfo struct {
-    name string
-    num  int
-}
 
 type bitReader struct {
     data []byte
@@ -125,32 +118,26 @@ func getFirstMbInSlice(nalu []byte) (uint, error) {
 }
 
 func scanSegments() {
-    files, _ := filepath.Glob(filepath.Join(HlsDir, "*.h264"))
-    var segInfos []segInfo
-    for _, f := range files {
-        base := filepath.Base(f)
-        numStr := ""
-        prefix := ""
-        if strings.HasPrefix(base, "seg") {
-            prefix = "seg"
-            numStr = strings.TrimSuffix(strings.TrimPrefix(base, "seg"), ".h264")
-        } else if strings.HasPrefix(base, "ad_") {
-            prefix = "ad"
-            numStr = strings.TrimSuffix(strings.TrimPrefix(base, "ad_"), ".h264")
-        } else {
+    segmentList = nil
+    segmentsFile := filepath.Join(HlsDir, "segments.txt")
+    data, err := os.ReadFile(segmentsFile)
+    if err != nil {
+        log.Fatalf("Failed to read %s: %v", segmentsFile, err)
+    }
+    lines := strings.Split(string(data), "\n")
+    for _, line := range lines {
+        line = strings.TrimSpace(line)
+        if line == "" || strings.HasPrefix(line, "#") {
             continue
         }
-        if num, err := strconv.Atoi(numStr); err == nil && num >= 0 {
-            segInfos = append(segInfos, segInfo{base, num})
-            log.Printf("Added %s segment %s (num %d)", prefix, base, num)
+        fullPath := filepath.Join(HlsDir, line)
+        if _, err := os.Stat(fullPath); err != nil {
+            log.Printf("Segment %s not found: %v", line, err)
+            continue
         }
+        segmentList = append(segmentList, fullPath)
     }
-    sort.Slice(segInfos, func(i, j int) bool { return segInfos[i].num < segInfos[j].num })
-    segmentList = nil
-    for _, si := range segInfos {
-        segmentList = append(segmentList, filepath.Join(HlsDir, si.name))
-    }
-    log.Printf("Loaded %d .h264 segments for WebRTC cycling: %v", len(segmentList), segmentList)
+    log.Printf("Loaded %d .h264 segments from segments.txt for WebRTC cycling: %v", len(segmentList), segmentList)
 
     // Extract raw SPS/PPS from any segment
     spsPPS = nil

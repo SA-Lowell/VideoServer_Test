@@ -13,7 +13,6 @@ ad_insert "./media/episode1.mp4" "./temp_video_directory" "./full_compiled_video
 ad_break_detector <video_file> [--hide-decimal] [--hide-mmss] [--hide-start] [--hide-midpoint] [--hide-end]
 ad_break_detector "episode1.mp4" --hide-mmss --hide-decimal --hide-start --hide-end
 
-
 run server:
 go run live_server.go
 
@@ -25,6 +24,7 @@ go run live_server.go
 ├── go.mod
 ├── generate_hls.cpp //NOt used for this
 ├── ad_insert.cpp //This takes a video, splits it into 2 parts, inserts otehr videos (ads) into those splits, and recombines the video. It also creates the h264 files
+├── ad_break_detector.cpp // This is just used fror detecting potential ad breaks in a file. It does nothing more than output timestamps so I can then manually investigate those times.
 ├── compiled_episode/
 │   └── full.mp4 //Note: If I double click this to run it it runs fine in VLC.
 ├── video/
