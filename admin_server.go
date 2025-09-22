@@ -1,132 +1,145 @@
 package main
 
-import
-(
-	"database/sql"
-	"errors"
-	"log"
-	"net/http"
-	"path/filepath"
-	"strings"
-	"github.com/gin-gonic/gin"
-	_ "github.com/lib/pq"
+import (
+    "database/sql"
+    "errors"
+    "log"
+    "net/http"
+    "path/filepath"
+    "strings"
+    "github.com/gin-gonic/gin"
+    _ "github.com/lib/pq"
 )
 
 func main() {
-	r := gin.Default()
+    r := gin.Default()
 
-	// Custom recovery middleware to handle runtime panics as 500 or 404
-	r.Use(customRecovery())
+    // Custom recovery middleware to handle runtime panics as 500 or 404
+    r.Use(customRecovery())
 
-	// Safe template loading (no panic if no files)
-	loadTemplatesSafely(r, "templates/*.html")
+    // Custom error handler middleware: Handles errors after handlers
+    r.Use(customErrorHandler())
 
-	// DB connection (replace with your creds)
-	db, err := sql.Open("postgres", "user=admin dbname=metadata sslmode=disable")
+    // Safe template loading (no panic if no files)
+    loadTemplatesSafely(r, "templates/*.html")
 
-	if err != nil {
-		log.Fatal(err)
-	}
+    // DB connection (replace with your creds)
+    db, err := sql.Open("postgres", "user=admin dbname=metadata sslmode=disable")
 
-	defer db.Close()
+    if err != nil {
+        log.Fatal(err)
+    }
 
-	// Set up public directory (like public_html) for static files with index handling
-	publicDir := "./public" // Change to your public_html folder path
-	r.StaticFS("/public_html", http.Dir(publicDir)) // Serve static files under /public_html
+    defer db.Close()
 
-	// Example dynamic endpoint: Add tag to file
-	r.POST("/files/:id/tags", func(c *gin.Context) {
-		id := c.Param("id")
-		var tags []string
+    // Set up public directory (like public_html) for static files with index handling
+    publicDir := "./public" // Change to your public_html folder path
+    r.StaticFS("/public_html", http.Dir(publicDir)) // Serve static files under /public_html
 
-		if err := c.BindJSON(&tags); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+    // Example dynamic endpoint: Add tag to file
+    r.POST("/files/:id/tags", func(c *gin.Context) {
+        id := c.Param("id")
+        var tags []string
 
-			return
-		}
+        if err := c.BindJSON(&tags); err != nil {
+            c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 
-		// Update DB (use prepared stmt in production)
-		_, err := db.Exec("UPDATE files SET tags = tags || $1 WHERE id = $2", tags, id)
+            return
+        }
 
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        // Update DB (use prepared stmt in production)
+        _, err := db.Exec("UPDATE files SET tags = tags || $1 WHERE id = $2", tags, id)
 
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"success": true})
-	})
+        if err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 
-	// Serve dynamic HTML interface at root (or use static if preferred)
-	r.GET("/", func(c *gin.Context) {
-		// Check if template exists before rendering
-		if r.HTMLRender.Instance("admin.html", nil) == nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Resource not found"})
+            return
+        }
+        c.JSON(http.StatusOK, gin.H{"success": true})
+    })
 
-			return
-		}
+    // Serve dynamic HTML interface at root (or use static if preferred)
+    r.GET("/", func(c *gin.Context) {
+        c.HTML(http.StatusOK, "admin.html", gin.H{
+            "Title": "Admin Panel", // Example dynamic data
+        })
+    })
 
-		// Render if found
-		c.HTML(http.StatusOK, "admin.html", gin.H{
-			"Title": "Admin Panel", // Example dynamic data
-		})
-	})
+    r.NoRoute(func(c *gin.Context) {
+        c.HTML(http.StatusNotFound, "404.html", gin.H{"error": "404"})
+    })
 
-	r.NoRoute(func(c *gin.Context) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "404"})
-	})
-
-	r.Run(":8082")
+    r.Run(":8082")
 }
 
 // Custom recovery middleware: Handles panics, checks for template errors as 404
 func customRecovery() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		defer func() {
-			if err := recover(); err != nil {
-				// Convert panic to error
-				var recoveredErr error
+    return func(c *gin.Context) {
+        defer func() {
+            if err := recover(); err != nil {
+                // Convert panic to error
+                var recoveredErr error
 
-				switch x := err.(type) {
-					case string:
-						recoveredErr = errors.New(x)
-					case error:
-						recoveredErr = x
-					default:
-						recoveredErr = errors.New("unknown panic")
-				}
+                switch x := err.(type) {
+                    case string:
+                        recoveredErr = errors.New(x)
+                    case error:
+                        recoveredErr = x
+                    default:
+                        recoveredErr = errors.New("unknown panic")
+                }
 
-				// Check if it's a template not found error (updated matching)
-				errStr := recoveredErr.Error()
+                // Check if it's a template not found error (updated matching)
+                errStr := recoveredErr.Error()
 
-				if strings.Contains(errStr, "no template") || strings.Contains(errStr, "pattern matches no files") || strings.Contains(errStr, "template:") || strings.Contains(errStr, "undefined") {
-					c.JSON(http.StatusNotFound, gin.H{"error": "Resource not found"})
-				} else {
-					// Default to 500 for other panics
-					c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
-				}
+                if strings.Contains(errStr, "no template") || strings.Contains(errStr, "pattern matches no files") || strings.Contains(errStr, "template:") || strings.Contains(errStr, "undefined") {
+                    c.HTML(http.StatusNotFound, "404.html", gin.H{"error": "Resource not found"})
+                } else {
+                    // Default to 500 for other panics
+                    c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+                }
 
-				c.Abort()
-			}
-		}()
+                c.Abort()
+            }
+        }()
 
-		c.Next()
-	}
+        c.Next()
+    }
+}
+
+// Custom error handler middleware: Handles errors after handlers
+func customErrorHandler() gin.HandlerFunc {
+    return func(c *gin.Context) {
+        c.Next()
+
+        if len(c.Errors) > 0 {
+            errStr := c.Errors.Last().Error()
+
+            if strings.Contains(errStr, "undefined") {
+                c.HTML(http.StatusNotFound, "404.html", gin.H{"error": "Resource not found"})
+            } else {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+            }
+
+            c.Abort()
+        }
+    }
 }
 
 // Safe template loading: No panic if no files match
 func loadTemplatesSafely(r *gin.Engine, pattern string) {
-	files, err := filepath.Glob(pattern)
+    files, err := filepath.Glob(pattern)
 
-	if err != nil {
-		log.Printf("Warning: Failed to glob templates: %v", err)
+    if err != nil {
+        log.Printf("Warning: Failed to glob templates: %v", err)
 
-		return
-	}
-	if len(files) == 0 {
-		log.Printf("Warning: No templates found matching '%s'", pattern)
+        return
+    }
+    if len(files) == 0 {
+        log.Printf("Warning: No templates found matching '%s'", pattern)
 
-		return
-	}
+        return
+    }
 
-	r.LoadHTMLFiles(files...)
+    r.LoadHTMLFiles(files...)
 }
