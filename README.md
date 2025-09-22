@@ -1,6 +1,7 @@
 To compile:
 g++ -std=c++17 -O3 -march=native -o ad_insert ad_insert.cpp
 g++ -std=c++17 -O3 -march=native -o generate_hls generate_hls.cpp
+g++ -std=c++17 -O3 -march=native -o ad_break_detector ad_break_detector.cpp
 
 To run:
 generate_hls <segmentDur> <input_file> <output_dir>
@@ -8,6 +9,9 @@ generate_hls 3 "./compiled_episode/full.mp4" "./hls/"
 
 ad_insert <episode_file> <temp_dir> <full_mp4_path> <segments_dir> <num_breaks> [for each break: <start_sec> <num_ads> <ad_file1> <ad_file2> ... ] [ <custom_base_name1> <custom_base_name2> ... ]
 ad_insert "./media/episode1.mp4" "./temp_video_directory" "./full_compiled_video/full_video.mp4" "./webrtc_segments" 2 15.5 1 "./media/ad1.mp4" 877 5 "./media/ad2.mp4" "./media/ad3.mp4" "./media/ad4.mp4" "./media/ad5.mp4" "./media/ad6.mp4" "seg0" "ad_1" "seg2" "ad_3" "ad_4" "ad_5" "ad_6" "ad_7" "seg8"
+
+ad_break_detector <video_file> [--hide-decimal] [--hide-mmss] [--hide-start] [--hide-midpoint] [--hide-end]
+ad_break_detector "episode1.mp4" --hide-mmss --hide-decimal --hide-start --hide-end
 
 
 run server:
