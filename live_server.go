@@ -13,6 +13,11 @@
 // Grouping fix: Parse first_mb_in_slice to detect new pictures even without non-VCL separators; handles multi-slice and long GOPs.
 // SDP fix: Force higher level in fmtp lines to allow for decoder flexibility.
 // Audio addition: Added support for paired .opus files; parses OggOpus packets and sends in parallel with video using absolute timing for sync.
+// NEW FIX: Dynamically detect FPS from segments using ffprobe to handle varying episode frame rates (prevents speed/sync issues).
+// UPDATE: Moved FPS probe per segment for robustness in case of mixed FPS.
+// NEW OPTIMIZATION: Pre-probe all segment FPS and durations in parallel at startup, cache results for fast lookup during playback.
+// NEW FEATURE: Support multiple TV stations, each with segments_{station}.txt (default: segments.txt for "default" station).
+// NEW FEATURE: Wait mode when no viewers: simulate playback by sleeping segment durations without processing/sending.
 
 package main
 
@@ -21,7 +26,10 @@ import (
     "fmt"
     "log"
     "os"
+    "os/exec"
     "path/filepath"
+    "regexp"
+    "strconv"
     "strings"
     "sync"
     "time"
@@ -33,23 +41,36 @@ import (
 )
 
 const (
-    HlsDir      = "./webrtc_segments" // Your .h264 dir
-    Port        = ":8081"
-    ClockRate   = 90000               // RTP 90kHz clock
-    // Precise 29.97 fps: numerator/denominator for frame duration calc
-    FPSNum      = 30000
-    FPSDen      = 1001
-    AudioFrameMs = 20 // Opus frame duration in ms (matches ffmpeg -frame_duration)
+    HlsDir        = "./webrtc_segments" // Your .h264 dir
+    Port          = ":8081"
+    ClockRate     = 90000               // RTP 90kHz clock
+    AudioFrameMs  = 20                  // Opus frame duration in ms (matches ffmpeg -frame_duration)
+    DefaultFPSNum = 30000
+    DefaultFPSDen = 1001                // Default if probe fails
+    DefaultDur    = 0.0                 // Default duration if probe fails
+    DefaultStation = "default"
 )
 
+type fpsPair struct {
+    num int
+    den int
+}
+
+type Station struct {
+    name           string
+    segmentList    []string
+    spsPPS         [][]byte // Raw SPS + PPS
+    fmtpLine       string   // Dynamic fmtp from SPS
+    trackVideo     *webrtc.TrackLocalStaticSample
+    trackAudio     *webrtc.TrackLocalStaticSample
+    fpsCache       sync.Map // path -> fpsPair
+    durationCache  sync.Map // path -> float64
+}
+
 var (
-    segmentList []string
+    stations    = make(map[string]*Station)
     mu          sync.Mutex
-    cycleIndex  int
-    spsPPS      [][]byte // Raw SPS + PPS
-    trackVideo  *webrtc.TrackLocalStaticSample
-    trackAudio  *webrtc.TrackLocalStaticSample
-    fmtpLine    string // Dynamic fmtp from SPS
+    globalStart = time.Now() // For potential future use
 )
 
 type bitReader struct {
@@ -117,12 +138,15 @@ func getFirstMbInSlice(nalu []byte) (uint, error) {
     return br.readUe()
 }
 
-func scanSegments() {
-    segmentList = nil
-    segmentsFile := filepath.Join(HlsDir, "segments.txt")
-    data, err := os.ReadFile(segmentsFile)
+// loadStation loads segments, probes FPS/duration, extracts SPS/PPS for a station
+func loadStation(stationName, txtPath string) *Station {
+    st := &Station{name: stationName}
+
+    // Load segment list
+    data, err := os.ReadFile(txtPath)
     if err != nil {
-        log.Fatalf("Failed to read %s: %v", segmentsFile, err)
+        log.Printf("Failed to read %s for station %s: %v", txtPath, stationName, err)
+        return nil
     }
     lines := strings.Split(string(data), "\n")
     for _, line := range lines {
@@ -132,60 +156,471 @@ func scanSegments() {
         }
         fullPath := filepath.Join(HlsDir, line)
         if _, err := os.Stat(fullPath); err != nil {
-            log.Printf("Segment %s not found: %v", line, err)
+            log.Printf("Segment %s not found for station %s: %v", line, stationName, err)
             continue
         }
-        segmentList = append(segmentList, fullPath)
+        st.segmentList = append(st.segmentList, fullPath)
     }
-    log.Printf("Loaded %d .h264 segments from segments.txt for WebRTC cycling: %v", len(segmentList), segmentList)
+    log.Printf("Station %s: Loaded %d .h264 segments from %s: %v", stationName, len(st.segmentList), txtPath, st.segmentList)
 
-    // Extract raw SPS/PPS from any segment
-    spsPPS = nil
-    for _, segPath := range segmentList {
-        data, err := os.ReadFile(segPath)
-        if err == nil && len(data) > 0 {
-            nalus := splitNALUs(data)
-            for _, nalu := range nalus {
-                if len(nalu) > 0 {
-                    nalType := int(nalu[0] & 0x1F)
-                    if nalType == 7 {
-                        spsPPS = append(spsPPS, nalu)
-                    } else if nalType == 8 {
-                        spsPPS = append(spsPPS, nalu)
-                        break
-                    }
+ // Pre-probe all FPS and durations in parallel
+var wg sync.WaitGroup
+for _, segPath := range st.segmentList {
+    wg.Add(1)
+    go func(path string) {
+        defer wg.Done()
+        // Probe FPS
+        cmdFPS := exec.Command(
+            "ffprobe",
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=r_frame_rate",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            path,
+        )
+        outputFPS, errFPS := cmdFPS.Output()
+        fpsNum := DefaultFPSNum
+        fpsDen := DefaultFPSDen
+        if errFPS == nil {
+            rate := strings.TrimSpace(string(outputFPS))
+            slash := strings.Index(rate, "/")
+            if slash != -1 {
+                num, err1 := strconv.Atoi(rate[:slash])
+                den, err2 := strconv.Atoi(rate[slash+1:])
+                if err1 == nil && err2 == nil && num > 0 && den > 0 {
+                    fpsNum = num
+                    fpsDen = den
+                }
+            } else {
+                num, err := strconv.Atoi(rate)
+                if err == nil && num > 0 {
+                    fpsNum = num
+                    fpsDen = 1
                 }
             }
-            if len(spsPPS) > 0 {
-                log.Printf("Extracted %d config NALUs (SPS/PPS) from %s", len(spsPPS), segPath)
-                break
+            log.Printf("Station %s: Pre-probed FPS for %s: %d/%d (%.2f fps)", stationName, path, fpsNum, fpsDen, float64(fpsNum)/float64(fpsDen))
+        } else {
+            log.Printf("Station %s: ffprobe FPS failed for %s: %v (default %d/%d)", stationName, path, errFPS, fpsNum, fpsDen)
+        }
+        st.fpsCache.Store(path, fpsPair{num: fpsNum, den: fpsDen})
+
+        // Probe duration
+        cmdDur := exec.Command(
+            "ffprobe",
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            path,
+        )
+        outputDur, errDur := cmdDur.Output()
+        dur := DefaultDur
+        if errDur == nil {
+            durStr := strings.TrimSpace(string(outputDur))
+            if d, err := strconv.ParseFloat(durStr, 64); err == nil {
+                dur = d
             }
         }
-    }
+        if dur <= 0 {
+            log.Printf("Station %s: Invalid duration for %s, defaulting to 0 (will not sleep)", stationName, path)
+        } else {
+            log.Printf("Station %s: Pre-probed duration for %s: %.2fs", stationName, path, dur)
+        }
+        st.durationCache.Store(path, dur)
+    }(segPath)
+}
+wg.Wait()
+    log.Printf("Station %s: Pre-probed FPS/durations for all %d segments", stationName, len(st.segmentList))
 
-    // Parse SPS for profile-level-id (full 3 bytes: profile + constraints + level)
-    if len(spsPPS) > 0 {
-        sps := spsPPS[0]
+// Extract raw SPS/PPS from any segment
+for _, segPath := range st.segmentList {
+    data, segErr := os.ReadFile(segPath)
+    if segErr == nil && len(data) > 0 {
+        nalus := splitNALUs(data)
+        for _, nalu := range nalus {
+            if len(nalu) > 0 {
+                nalType := int(nalu[0] & 0x1F)
+                if nalType == 7 {
+                    st.spsPPS = append(st.spsPPS, nalu)
+                } else if nalType == 8 {
+                    st.spsPPS = append(st.spsPPS, nalu)
+                    break
+                }
+            }
+        }
+        if len(st.spsPPS) > 0 {
+            log.Printf("Station %s: Extracted %d config NALUs (SPS/PPS) from %s", stationName, len(st.spsPPS), segPath)
+            break
+        }
+    }
+}
+
+    // Parse SPS for profile-level-id
+    if len(st.spsPPS) > 0 {
+        sps := st.spsPPS[0]
         if len(sps) >= 4 {
             profileIDC := sps[1]
             constraints := sps[2]
             levelIDC := sps[3]
             profileLevelID := fmt.Sprintf("%02x%02x%02x", profileIDC, constraints, levelIDC)
-            fmtpLine = fmt.Sprintf("level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=%s", profileLevelID)
-            log.Printf("Detected H.264 profile-level-id: %s (fmtp: %s)", profileLevelID, fmtpLine)
+            st.fmtpLine = fmt.Sprintf("level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=%s", profileLevelID)
+            log.Printf("Station %s: Detected H.264 profile-level-id: %s (fmtp: %s)", stationName, profileLevelID, st.fmtpLine)
         }
     }
-    // Fallback to High Profile if parsing failed
-    if fmtpLine == "" {
-        fmtpLine = "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=64001f"
-        log.Printf("Using fallback High Profile fmtp: %s", fmtpLine)
+    // Fallback
+    if st.fmtpLine == "" {
+        st.fmtpLine = "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=64001f"
+        log.Printf("Station %s: Using fallback High Profile fmtp: %s", stationName, st.fmtpLine)
     }
-    // Force higher level for decoder flexibility
-    fmtpLine = "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640028"
-    log.Printf("Forcing H.264 fmtp to higher level: %s", fmtpLine)
+    // Force higher level
+    st.fmtpLine = "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640028"
+    log.Printf("Station %s: Forcing H.264 fmtp to higher level: %s", stationName, st.fmtpLine)
+
+    // Create tracks
+    st.trackVideo, err = webrtc.NewTrackLocalStaticSample(
+        webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264},
+        "video_"+stationName,
+        "pion",
+    )
+    if err != nil {
+        log.Printf("Station %s: Failed to create video track: %v", stationName, err)
+        return nil
+    }
+    st.trackAudio, err = webrtc.NewTrackLocalStaticSample(
+        webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
+        "audio_"+stationName,
+        "pion",
+    )
+    if err != nil {
+        log.Printf("Station %s: Failed to create audio track: %v", stationName, err)
+        return nil
+    }
+
+    return st
 }
 
-// NALU splitter (unchanged)
+func discoverStations() {
+    files, err := os.ReadDir(HlsDir)
+    if err != nil {
+        log.Fatalf("Failed to read dir %s: %v", HlsDir, err)
+    }
+
+    re := regexp.MustCompile(`^segments_(.*)\.txt$`)
+    for _, file := range files {
+        if !file.IsDir() {
+            name := file.Name()
+            if name == "segments.txt" {
+                st := loadStation(DefaultStation, filepath.Join(HlsDir, name))
+                if st != nil {
+                    stations[DefaultStation] = st
+                }
+            } else if matches := re.FindStringSubmatch(name); len(matches) > 1 {
+                stationName := matches[1]
+                st := loadStation(stationName, filepath.Join(HlsDir, name))
+                if st != nil {
+                    stations[stationName] = st
+                }
+            }
+        }
+    }
+    log.Printf("Discovered %d stations: %v", len(stations), stations)
+    if len(stations) == 0 {
+        log.Fatal("No stations found - ensure segments_*.txt files exist")
+    }
+}
+
+// sender runs the cycling loop for a station
+func sender(st *Station) {
+    audioFrameDur := time.Duration(AudioFrameMs) * time.Millisecond
+    cycleIndex := 0
+    for {
+        if len(st.segmentList) == 0 {
+            time.Sleep(time.Second)
+            continue
+        }
+        if cycleIndex >= len(st.segmentList) {
+            cycleIndex = 0
+        }
+        segPath := st.segmentList[cycleIndex]
+        cycleIndex++
+
+        // Check if viewers (track bound)
+        testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
+        err := st.trackVideo.WriteSample(testSample)
+        if err != nil && strings.Contains(err.Error(), "not bound") {
+            // No viewers, simulate sleep
+            val, ok := st.durationCache.Load(segPath)
+            segDur := DefaultDur
+            if ok {
+                segDur = val.(float64)
+            }
+            if segDur > 0 {
+                log.Printf("Station %s: No viewers, sleeping for segment %s duration %.2fs", st.name, segPath, segDur)
+                time.Sleep(time.Duration(segDur * float64(time.Second)))
+            } else {
+                log.Printf("Station %s: No viewers, but invalid dur for %s, skipping sleep", st.name, segPath)
+            }
+            continue
+        } else if err != nil {
+            log.Printf("Station %s: Track test write error: %v (continuing)", st.name, err)
+        }
+
+        // Viewers present, process segment
+        data, segErr := os.ReadFile(segPath)
+        if segErr != nil {
+            log.Printf("Station %s: Segment read error %s: %v", st.name, segPath, segErr)
+            continue
+        }
+        if len(data) == 0 {
+            log.Printf("Station %s: Empty segment %s, skipping", st.name, segPath)
+            continue
+        }
+
+        log.Printf("Station %s: Processing segment %s (%d bytes)", st.name, segPath, len(data))
+
+        // Get cached FPS
+        fpsNum := DefaultFPSNum
+        fpsDen := DefaultFPSDen
+        if val, ok := st.fpsCache.Load(segPath); ok {
+            pair := val.(fpsPair)
+            fpsNum = pair.num
+            fpsDen = pair.den
+            log.Printf("Station %s: Cache hit FPS for %s: %d/%d (%.2f fps)", st.name, segPath, fpsNum, fpsDen, float64(fpsNum)/float64(fpsDen))
+        } else {
+            log.Printf("Station %s: Cache miss for %s, using default %d/%d", st.name, segPath, fpsNum, fpsDen)
+        }
+        frameDuration := time.Second * time.Duration(fpsDen) / time.Duration(fpsNum)
+
+        nalus := splitNALUs(data)
+        log.Printf("Station %s: Split %d NALUs from %s", st.name, len(nalus), segPath)
+
+        // Prefix SPS/PPS
+        allNALUs := nalus
+        if len(st.spsPPS) > 0 {
+            allNALUs = append(st.spsPPS, nalus...)
+            log.Printf("Station %s: Prefixed %d config NALUs to segment", st.name, len(st.spsPPS))
+        }
+
+        // Load audio
+        audioPath := strings.Replace(segPath, ".h264", ".opus", 1)
+        var audioPackets [][]byte
+        if _, err := os.Stat(audioPath); err == nil {
+            audioData, err := os.ReadFile(audioPath)
+            if err == nil && len(audioData) > 0 {
+                audioPackets = parseOpusPackets(audioData)
+                log.Printf("Station %s: Parsed %d Opus packets from %s", st.name, len(audioPackets), audioPath)
+            } else {
+                log.Printf("Station %s: Failed to read audio %s: %v", st.name, audioPath, err)
+            }
+        } else {
+            log.Printf("Station %s: No audio file for %s", st.name, segPath)
+        }
+
+        // Start sending
+        var wg sync.WaitGroup
+        wg.Add(1) // Video
+
+        // Audio goroutine
+        if len(audioPackets) > 0 {
+            wg.Add(1)
+            go func(packets [][]byte) {
+                defer wg.Done()
+                audioStart := time.Now()
+                audioTs := time.Duration(0)
+                boundCheckedAudio := false
+                for pktIdx, pkt := range packets {
+                    targetTime := audioStart.Add(audioTs)
+                    now := time.Now()
+                    if now.Before(targetTime) {
+                        time.Sleep(targetTime.Sub(now))
+                    }
+                    if !boundCheckedAudio {
+                        testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
+                        if err := st.trackAudio.WriteSample(testSample); err != nil && strings.Contains(err.Error(), "not bound") {
+                            log.Printf("Station %s: Audio track not bound, skipping segment audio", st.name)
+                            break
+                        }
+                        boundCheckedAudio = true
+                    }
+                    sample := media.Sample{Data: pkt, Duration: audioFrameDur}
+                    if err := st.trackAudio.WriteSample(sample); err != nil {
+                        log.Printf("Station %s: Audio sample %d write error: %v", st.name, pktIdx, err)
+                        if strings.Contains(err.Error(), "not bound") {
+                            break
+                        }
+                    }
+                    audioTs += audioFrameDur
+                }
+                log.Printf("Station %s: Sent %d audio samples for %s", st.name, len(packets), audioPath)
+            }(audioPackets)
+        }
+
+        // Video
+        go func(nalus [][]byte) {
+            defer wg.Done()
+            videoStart := time.Now()
+            videoTs := time.Duration(0)
+            segmentSamples := 0
+            idrSent := false
+            var currentFrame [][]byte
+            var hasVCL bool
+            boundChecked := false
+            for i, nalu := range nalus {
+                if len(nalu) == 0 {
+                    continue
+                }
+                nalType := int(nalu[0] & 0x1F)
+                isVCL := nalType >= 1 && nalType <= 5
+                if i%1000 == 0 || nalType == 5 || nalType == 7 || nalType == 8 {
+                    //log.Printf("Station %s: NALU %d type %d (%s) size %d", st.name, i, nalType, nalTypeToString(nalType), len(nalu))
+                }
+
+                if hasVCL && !isVCL {
+                    // Send frame
+                    targetTime := videoStart.Add(videoTs)
+                    now := time.Now()
+                    if now.Before(targetTime) {
+                        time.Sleep(targetTime.Sub(now))
+                    }
+                    var frameData bytes.Buffer
+                    for _, n := range currentFrame {
+                        frameData.Write([]byte{0x00, 0x00, 0x00, 0x01})
+                        frameData.Write(n)
+                    }
+                    sampleData := frameData.Bytes()
+
+                    if !boundChecked {
+                        testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
+                        if err := st.trackVideo.WriteSample(testSample); err != nil && strings.Contains(err.Error(), "not bound") {
+                            log.Printf("Station %s: Video track not bound, skipping segment video", st.name)
+                            return
+                        }
+                        boundChecked = true
+                    }
+
+                    sample := media.Sample{
+                        Data:     sampleData,
+                        Duration: frameDuration,
+                    }
+                    if err := st.trackVideo.WriteSample(sample); err != nil {
+                        log.Printf("Station %s: Video sample write error: %v", st.name, err)
+                    }
+                    segmentSamples++
+                    videoTs += frameDuration
+
+                    currentFrame = [][]byte{nalu}
+                    hasVCL = false
+                } else {
+                    if isVCL {
+                        firstMb, err := getFirstMbInSlice(nalu)
+                        if err != nil {
+                            continue
+                        }
+                        if firstMb == 0 && len(currentFrame) > 0 && hasVCL {
+                            // Send frame
+                            targetTime := videoStart.Add(videoTs)
+                            now := time.Now()
+                            if now.Before(targetTime) {
+                                time.Sleep(targetTime.Sub(now))
+                            }
+                            var frameData bytes.Buffer
+                            for _, n := range currentFrame {
+                                frameData.Write([]byte{0x00, 0x00, 0x00, 0x01})
+                                frameData.Write(n)
+                            }
+                            sampleData := frameData.Bytes()
+
+                            if !boundChecked {
+                                testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
+                                if err := st.trackVideo.WriteSample(testSample); err != nil && strings.Contains(err.Error(), "not bound") {
+                                    log.Printf("Station %s: Video track not bound, skipping segment video", st.name)
+                                    return
+                                }
+                                boundChecked = true
+                            }
+
+                            sample := media.Sample{
+                                Data:     sampleData,
+                                Duration: frameDuration,
+                            }
+                            if err := st.trackVideo.WriteSample(sample); err != nil {
+                                log.Printf("Station %s: Video sample write error: %v", st.name, err)
+                            }
+                            segmentSamples++
+                            videoTs += frameDuration
+
+                            currentFrame = [][]byte{}
+                            hasVCL = false
+                        }
+                        currentFrame = append(currentFrame, nalu)
+                        hasVCL = true
+                        if nalType == 5 {
+                            idrSent = true
+                        }
+                    } else {
+                        currentFrame = append(currentFrame, nalu)
+                    }
+                }
+            }
+            // Last frame
+            if len(currentFrame) > 0 {
+                targetTime := videoStart.Add(videoTs)
+                now := time.Now()
+                if now.Before(targetTime) {
+                    time.Sleep(targetTime.Sub(now))
+                }
+                var frameData bytes.Buffer
+                for _, n := range currentFrame {
+                    frameData.Write([]byte{0x00, 0x00, 0x00, 0x01})
+                    frameData.Write(n)
+                }
+                sampleData := frameData.Bytes()
+
+                if !boundChecked {
+                    testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
+                    if err := st.trackVideo.WriteSample(testSample); err != nil && strings.Contains(err.Error(), "not bound") {
+                        log.Printf("Station %s: Video track not bound, skipping segment video", st.name)
+                        return
+                    }
+                    boundChecked = true
+                }
+
+                sample := media.Sample{
+                    Data:     sampleData,
+                    Duration: frameDuration,
+                }
+                if err := st.trackVideo.WriteSample(sample); err != nil {
+                    log.Printf("Station %s: Video sample write error: %v", st.name, err)
+                }
+                segmentSamples++
+            }
+            if !idrSent {
+                log.Printf("Station %s: WARNING: No IDR in %s", st.name, segPath)
+            }
+            log.Printf("Station %s: Sent %d video frames for %s", st.name, segmentSamples, segPath)
+        }(allNALUs)
+
+        wg.Wait()
+        time.Sleep(10 * time.Millisecond)
+    }
+}
+
+func nalTypeToString(t int) string {
+    switch t {
+    case 1:
+        return "Non-IDR"
+    case 5:
+        return "IDR"
+    case 6:
+        return "SEI"
+    case 7:
+        return "SPS"
+    case 8:
+        return "PPS"
+    default:
+        return "Other"
+    }
+}
+
 func splitNALUs(data []byte) [][]byte {
     if len(data) == 0 {
         return nil
@@ -218,31 +653,23 @@ func splitNALUs(data []byte) [][]byte {
     return nalus
 }
 
-// Parse OggOpus to extract Opus packets (skips ID and comment headers)
 func parseOpusPackets(data []byte) [][]byte {
     var packets [][]byte
     i := 0
     for i < len(data) {
         if i+4 >= len(data) || string(data[i:i+4]) != "OggS" {
-            log.Printf("Invalid Ogg magic at %d", i)
             break
         }
         i += 4
         version := data[i]
         i++
         if version != 0 {
-            log.Printf("Unsupported Ogg version %d", version)
             break
         }
-        // headerType := data[i]
         i++
-        // granule := binary.LittleEndian.Uint64(data[i : i+8])
         i += 8
-        // serial := binary.LittleEndian.Uint32(data[i : i+4])
         i += 4
-        // pageNum := binary.LittleEndian.Uint32(data[i : i+4])
         i += 4
-        // checksum := binary.LittleEndian.Uint32(data[i : i+4])
         i += 4
         segCount := int(data[i])
         i++
@@ -255,16 +682,13 @@ func parseOpusPackets(data []byte) [][]byte {
             i++
         }
         if i+lacingSum > len(data) {
-            log.Printf("Ogg page data overflow")
             break
         }
         pageData := data[i : i+lacingSum]
         i += lacingSum
-        // Collect packets from lacing
         var currentPacket []byte
         for _, lace := range segTable {
             if len(pageData) < lace {
-                log.Printf("Ogg lacing overflow")
                 return packets
             }
             currentPacket = append(currentPacket, pageData[:lace]...)
@@ -275,11 +699,9 @@ func parseOpusPackets(data []byte) [][]byte {
             }
         }
         if currentPacket != nil {
-            // Packet spans to next page
             packets = append(packets, currentPacket)
         }
     }
-    // Skip first two packets (OpusHead and OpusTags)
     if len(packets) >= 2 && string(packets[0][:8]) == "OpusHead" && string(packets[1][:8]) == "OpusTags" {
         packets = packets[2:]
     }
@@ -287,6 +709,17 @@ func parseOpusPackets(data []byte) [][]byte {
 }
 
 func signalingHandler(c *gin.Context) {
+    stationName := c.Query("station")
+    if stationName == "" {
+        stationName = DefaultStation
+    }
+    st, ok := stations[stationName]
+    if !ok {
+        c.JSON(400, gin.H{"error": "Invalid station"})
+        return
+    }
+    log.Printf("Signaling for station %s", stationName)
+
     var msg struct {
         Type string `json:"type"`
         SDP  string `json:"sdp,omitempty"`
@@ -298,12 +731,12 @@ func signalingHandler(c *gin.Context) {
     }
 
     m := &webrtc.MediaEngine{}
-    // Register H264 codec with dynamic fmtp
+    // Register H264 with station's fmtp
     if err := m.RegisterCodec(webrtc.RTPCodecParameters{
         RTPCodecCapability: webrtc.RTPCodecCapability{
             MimeType:     webrtc.MimeTypeH264,
             ClockRate:    90000,
-            SDPFmtpLine:  fmtpLine,
+            SDPFmtpLine:  st.fmtpLine,
             RTCPFeedback: []webrtc.RTCPFeedback{{"goog-remb", ""}, {"ccm", "fir"}, {"nack", ""}, {"nack", "pli"}},
         },
         PayloadType: 96,
@@ -312,7 +745,7 @@ func signalingHandler(c *gin.Context) {
         c.JSON(500, gin.H{"error": err.Error()})
         return
     }
-    // Register Opus codec for audio
+    // Register Opus
     if err := m.RegisterCodec(webrtc.RTPCodecParameters{
         RTPCodecCapability: webrtc.RTPCodecCapability{
             MimeType:     webrtc.MimeTypeOpus,
@@ -328,25 +761,14 @@ func signalingHandler(c *gin.Context) {
     }
 
     s := webrtc.SettingEngine{}
-    // s.SetNAT1To1IPs([]string{"68.200.110.199"}, webrtc.ICECandidateTypeSrflx) // Commented for local testing
-    s.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4, webrtc.NetworkTypeTCP4}) // Disable IPv6
+    s.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4, webrtc.NetworkTypeTCP4})
 
     api := webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithSettingEngine(s))
     pc, err := api.NewPeerConnection(webrtc.Configuration{
         ICEServers: []webrtc.ICEServer{
-            {
-                URLs: []string{"stun:stun.l.google.com:19302"},
-            },
-            {
-                URLs:       []string{"turn:openrelay.metered.ca:80"},
-                Username:   "openrelayproject",
-                Credential: "openrelayproject",
-            },
-            {
-                URLs:       []string{"turn:openrelay.metered.ca:443"},
-                Username:   "openrelayproject",
-                Credential: "openrelayproject",
-            },
+            {URLs: []string{"stun:stun.l.google.com:19302"}},
+            {URLs: []string{"turn:openrelay.metered.ca:80"}, Username: "openrelayproject", Credential: "openrelayproject"},
+            {URLs: []string{"turn:openrelay.metered.ca:443"}, Username: "openrelayproject", Credential: "openrelayproject"},
         },
     })
     if err != nil {
@@ -355,12 +777,10 @@ func signalingHandler(c *gin.Context) {
         return
     }
 
-    // Log ICE connection state changes for debugging
     pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
-        log.Printf("ICE Connection State changed: %s", state.String())
+        log.Printf("Station %s: ICE state: %s", stationName, state.String())
     })
 
-    // Handle offer/answer
     if msg.Type == "offer" {
         offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: msg.SDP}
         if err := pc.SetRemoteDescription(offer); err != nil {
@@ -370,20 +790,20 @@ func signalingHandler(c *gin.Context) {
             return
         }
 
-        // NOW add global tracks after setRemoteDescription
-        if _, err = pc.AddTrack(trackVideo); err != nil {
+        // Add station's tracks
+        if _, err = pc.AddTrack(st.trackVideo); err != nil {
             log.Printf("AddTrack video error: %v", err)
             c.JSON(500, gin.H{"error": err.Error()})
             pc.Close()
             return
         }
-        if _, err = pc.AddTrack(trackAudio); err != nil {
+        if _, err = pc.AddTrack(st.trackAudio); err != nil {
             log.Printf("AddTrack audio error: %v", err)
             c.JSON(500, gin.H{"error": err.Error()})
             pc.Close()
             return
         }
-        log.Printf("Tracks added after setRemoteDescription")
+        log.Printf("Station %s: Tracks added", stationName)
 
         answer, err := pc.CreateAnswer(nil)
         if err != nil {
@@ -393,7 +813,6 @@ func signalingHandler(c *gin.Context) {
             return
         }
 
-        // Set local description and gather ICE candidates
         gatherComplete := webrtc.GatheringCompletePromise(pc)
         if err := pc.SetLocalDescription(answer); err != nil {
             log.Printf("SetLocalDescription error: %v", err)
@@ -401,17 +820,14 @@ func signalingHandler(c *gin.Context) {
             pc.Close()
             return
         }
-
-        // Wait for ICE gathering to complete
         <-gatherComplete
 
-        log.Printf("SDP Answer generated (check browser console for profile): %s", pc.LocalDescription().SDP)
+        log.Printf("Station %s: SDP Answer: %s", stationName, pc.LocalDescription().SDP)
         c.JSON(200, gin.H{"type": "answer", "sdp": pc.LocalDescription().SDP})
     }
 
-    // Auto-close on failure/disconnect (optional, for resource management)
     pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
-        log.Printf("Peer Connection State changed: %s", s.String())
+        log.Printf("Station %s: PC state: %s", stationName, s.String())
         if s == webrtc.PeerConnectionStateFailed || s == webrtc.PeerConnectionStateDisconnected {
             if err := pc.Close(); err != nil {
                 log.Printf("Failed to close PC: %v", err)
@@ -420,72 +836,188 @@ func signalingHandler(c *gin.Context) {
     })
 }
 
-// Helper to log NAL type
-func nalTypeToString(t int) string {
-    switch t {
-    case 1:
-        return "Non-IDR"
-    case 5:
-        return "IDR"
-    case 6:
-        return "SEI"
-    case 7:
-        return "SPS"
-    case 8:
-        return "PPS"
-    default:
-        return "Other"
-    }
-}
-
 func indexHandler(c *gin.Context) {
     html := `<!DOCTYPE html>
-<html><body>
-<video id="video" autoplay controls width="640" height="360"></video>
-<div id="status">Connecting...</div>
-<script>
-console.log('Starting WebRTC client');
-const pc = new RTCPeerConnection();
-const video = document.getElementById('video');
-const status = document.getElementById('status');
-video.addEventListener('loadedmetadata', () => { console.log('Metadata loaded'); status.textContent = 'Metadata OK'; });
-video.addEventListener('canplay', () => { console.log('Can play'); status.textContent = 'Playing'; video.muted = false; });
-video.addEventListener('error', (e) => { console.error('Video error:', e); status.textContent = 'Error: ' + e.message; });
-video.addEventListener('stalled', () => console.log('Stalled - jitter buffer?'));
-pc.oniceconnectionstatechange = () => console.log('ICE:', pc.iceConnectionState);
-pc.ontrack = (e) => {
-    console.log('Track received:', e.track.kind, e.track.readyState);
-    if (!video.srcObject) {
-        video.srcObject = e.streams[0];
-    } else {
-        video.srcObject.addTrack(e.track);
-    }
-    const track = e.track;
-    track.addEventListener('ended', () => console.log('Track ended'));
-    track.addEventListener('mute', () => console.log('Track muted - black screen?'));
-};
-async function start() {
-    try {
-        const offer = await pc.createOffer({offerToReceiveVideo: true, offerToReceiveAudio: true});
-        await pc.setLocalDescription(offer);
-        console.log('Local Offer SDP (check H.264 profile):', offer.sdp);
-        const res = await fetch('/signal', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({type: 'offer', sdp: offer.sdp})
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Video Receiver</title>
+    <style>
+        video {
+            width: 640px;
+            height: 480px;
+            background-color: black;
+        }
+    </style>
+</head>
+<body>
+    <h1>WebRTC Video Receiver</h1>
+    <video id="remoteVideo" autoplay playsinline controls></video>
+    <button id="startButton">Start Connection</button>
+    <label for="serverUrl">Go Server Base URL (e.g., http://localhost:8081/signal):</label>
+    <input id="serverUrl" type="text" value="http://localhost:8081/signal" style="width: 300px;">
+    <label for="station">Station (e.g., default, 1, 2):</label>
+    <input id="station" type="text" value="default" style="width: 100px;">
+    <button id="sendOfferButton" disabled>Send Offer to Server</button>
+    <button id="restartIceButton" disabled>Restart ICE</button>
+    <pre id="log"></pre>
+
+    <script>
+        // Utility to log messages to the console and the page
+        function log(message) {
+            console.log(message);
+            const logElement = document.getElementById('log');
+            logElement.textContent += message + '\n';
+        }
+
+        // Configuration for ICE servers
+        const configuration = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+                { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+            ]
+        };
+
+        // Variables
+        let pc = null;
+        let remoteStream = null;
+        let offer = null;
+        let candidates = [];
+
+        // Function to create the local offer (recvonly video and audio)
+        async function createOffer() {
+            pc = new RTCPeerConnection(configuration);
+
+            // Event listeners for debugging
+            pc.oniceconnectionstatechange = () => {
+                log('ICE connection state: ' + pc.iceConnectionState);
+                if (pc.iceConnectionState === 'disconnected') {
+                    log('ICE disconnected - attempting automatic restart in 5 seconds...');
+                    setTimeout(restartIce, 5000);
+                }
+                if (pc.iceConnectionState === 'failed') {
+                    log('ICE failed - manual restart may be needed.');
+                    document.getElementById('restartIceButton').disabled = false;
+                }
+                if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+                    const videoElement = document.getElementById('remoteVideo');
+                    videoElement.srcObject = remoteStream;
+                    log('ICE connected - assigned stream to video element.');
+                }
+            };
+
+            pc.onconnectionstatechange = () => {
+                log('Peer connection state: ' + pc.connectionState);
+            };
+
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    log('New ICE candidate: ' + JSON.stringify(event.candidate));
+                    candidates.push(event.candidate);
+                } else {
+                    log('All ICE candidates gathered (end-of-candidates)');
+                }
+            };
+
+            pc.ontrack = (event) => {
+                log('Track received: ' + event.track.kind + ' ' + event.track.readyState);
+                if (!remoteStream) {
+                    remoteStream = new MediaStream();
+                }
+                remoteStream.addTrack(event.track);
+                event.track.onmute = () => log('Track muted - possible black screen or no media flow');
+                event.track.onunmute = () => log('Track unmuted - media flowing');
+            };
+
+            // Create offer
+            offer = await pc.createOffer({
+                offerToReceiveVideo: true,
+                offerToReceiveAudio: true
+            });
+            await pc.setLocalDescription(offer);
+            log('Local Offer SDP: ' + offer.sdp);
+        }
+
+        // Function to send offer to Go server via fetch
+        async function sendOfferToServer() {
+            let baseUrl = document.getElementById('serverUrl').value;
+            const station = document.getElementById('station').value;
+            const serverUrl = baseUrl + (baseUrl.includes('?') ? '&' : '?') + 'station=' + encodeURIComponent(station);
+            if (!offer) {
+                log('No offer generated yet - start connection first.');
+                return;
+            }
+
+            try {
+                const response = await fetch(serverUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sdp: offer.sdp, type: offer.type })
+                });
+                if (!response.ok) {
+                    throw new Error('HTTP error: ' + response.status);
+                }
+                const answerJson = await response.json();
+                const answer = new RTCSessionDescription(answerJson);
+                await pc.setRemoteDescription(answer);
+                log('Remote Answer SDP set: ' + answer.sdp);
+            } catch (error) {
+                log('Error sending offer: ' + error);
+            }
+        }
+
+        // Function for ICE restart
+        async function restartIce() {
+            log('Restarting ICE...');
+            try {
+                const newOffer = await pc.createOffer({ iceRestart: true });
+                await pc.setLocalDescription(newOffer);
+                log('New offer with ICE restart: ' + newOffer.sdp);
+                offer = newOffer;
+            } catch (error) {
+                log('ICE restart failed: ' + error);
+            }
+        }
+
+        // Periodically get stats for debugging
+        function startStatsLogging() {
+            setInterval(async () => {
+                if (!pc) return;
+                try {
+                    const stats = await pc.getStats();
+                    stats.forEach(report => {
+                        if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                            log('Video inbound: packetsReceived=' + (report.packetsReceived || 0) + ', bytesReceived=' + (report.bytesReceived || 0) + ', packetsLost=' + (report.packetsLost || 0) + ', jitter=' + (report.jitter || 0) + ', frameRate=' + (report.frameRate || 0));
+                        }
+                        if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+                            log('Audio inbound: packetsReceived=' + (report.packetsReceived || 0) + ', bytesReceived=' + (report.bytesReceived || 0) + ', packetsLost=' + (report.packetsLost || 0) + ', jitter=' + (report.jitter || 0));
+                        }
+                        if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+                            log('Active candidate pair: localType=' + report.localCandidateId + ', remoteType=' + report.remoteCandidateId + ', bytesSent=' + report.bytesSent + ', bytesReceived=' + report.bytesReceived);
+                        }
+                    });
+                } catch (error) {
+                    log('getStats error: ' + error);
+                }
+            }, 5000);
+        }
+
+        // Button handlers
+        document.getElementById('startButton').addEventListener('click', async () => {
+            await createOffer();
+            startStatsLogging();
+            document.getElementById('sendOfferButton').disabled = false;
+            log('Connection started. Enter server URL and station, then click "Send Offer to Server".');
         });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const answer = await res.json();
-        console.log('Remote Answer SDP:', answer.sdp);
-        await pc.setRemoteDescription(new RTCSessionDescription(answer));
-        status.textContent = 'Connected - waiting for frames';
-    } catch (err) {
-        console.error('WebRTC failed:', err);
-        status.textContent = 'Failed: ' + err.message;
-    }
-}
-start();
-</script></body></html>`
+
+        document.getElementById('sendOfferButton').addEventListener('click', sendOfferToServer);
+
+        document.getElementById('restartIceButton').addEventListener('click', restartIce);
+    </script>
+</body>
+</html>`
     c.Header("Content-Type", "text/html")
     c.String(200, html)
 }
@@ -494,301 +1026,19 @@ func main() {
     if err := os.MkdirAll(HlsDir, 0755); err != nil {
         log.Fatal(err)
     }
-    scanSegments()
+    discoverStations()
 
-    // Create global video track as StaticSample - Pion handles RTP/PT/fragmentation
-    var err error
-    trackVideo, err = webrtc.NewTrackLocalStaticSample(
-        webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264},
-        "video",
-        "pion",
-    )
-    if err != nil {
-        log.Fatal(err)
+    // Launch senders for each station
+    for _, st := range stations {
+        go sender(st)
     }
-    // Create global audio track for Opus
-    trackAudio, err = webrtc.NewTrackLocalStaticSample(
-        webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
-        "audio",
-        "pion",
-    )
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    // Background cycling - send grouped frame NALUs as samples with frame duration
-    go func() {
-        frameDuration := time.Second * time.Duration(FPSDen) / time.Duration(FPSNum)
-        audioFrameDur := time.Duration(AudioFrameMs) * time.Millisecond
-        for {
-            mu.Lock()
-            if len(segmentList) == 0 {
-                mu.Unlock()
-                time.Sleep(time.Second)
-                continue
-            }
-            if cycleIndex >= len(segmentList) {
-                cycleIndex = 0
-            }
-            segPath := segmentList[cycleIndex]
-            cycleIndex++
-            mu.Unlock()
-
-            data, err := os.ReadFile(segPath)
-            if err != nil {
-                log.Printf("Segment read error %s: %v", segPath, err)
-                continue
-            }
-            if len(data) == 0 {
-                log.Printf("Empty segment %s, skipping", segPath)
-                continue
-            }
-
-            log.Printf("Processing segment %s (%d bytes)", segPath, len(data))
-
-            nalus := splitNALUs(data)
-            log.Printf("Split %d NALUs from %s", len(nalus), segPath)
-
-            // Always prefix SPS/PPS for loop compatibility
-            allNALUs := nalus
-            if len(spsPPS) > 0 {
-                allNALUs = append(spsPPS, nalus...)
-                log.Printf("Prefixed %d config NALUs to segment", len(spsPPS))
-            }
-
-            // Load corresponding audio
-            audioPath := strings.Replace(segPath, ".h264", ".opus", 1)
-            var audioPackets [][]byte
-            if _, err := os.Stat(audioPath); err == nil {
-                audioData, err := os.ReadFile(audioPath)
-                if err == nil && len(audioData) > 0 {
-                    audioPackets = parseOpusPackets(audioData)
-                    log.Printf("Parsed %d Opus packets from %s", len(audioPackets), audioPath)
-                } else {
-                    log.Printf("Failed to read audio %s: %v", audioPath, err)
-                }
-            } else {
-                log.Printf("No audio file for %s", segPath)
-            }
-
-            // Start video and audio sending with sync
-            var wg sync.WaitGroup
-            wg.Add(1) // For video
-
-            // Audio goroutine
-            if len(audioPackets) > 0 {
-                wg.Add(1)
-                go func(packets [][]byte) {
-                    defer wg.Done()
-                    audioStart := time.Now()
-                    audioTs := time.Duration(0)
-                    boundCheckedAudio := false
-                    for pktIdx, pkt := range packets {
-                        targetTime := audioStart.Add(audioTs)
-                        now := time.Now()
-                        if now.Before(targetTime) {
-                            time.Sleep(targetTime.Sub(now))
-                        }
-                        // Check bound on first write
-                        if !boundCheckedAudio {
-                            testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
-                            if err := trackAudio.WriteSample(testSample); err != nil && strings.Contains(err.Error(), "not bound") {
-                                log.Printf("Audio track not bound yet, skipping segment audio")
-                                break
-                            }
-                            boundCheckedAudio = true
-                        }
-                        sample := media.Sample{Data: pkt, Duration: audioFrameDur}
-                        if err := trackAudio.WriteSample(sample); err != nil {
-                            log.Printf("Audio sample %d write error: %v", pktIdx, err)
-                            if strings.Contains(err.Error(), "not bound") {
-                                break
-                            }
-                        }
-                        audioTs += audioFrameDur
-                    }
-                    log.Printf("Sent %d audio samples for %s", len(packets), audioPath)
-                }(audioPackets)
-            }
-
-            // Video sending (modified for absolute pacing)
-            go func(nalus [][]byte) {
-                defer wg.Done()
-                videoStart := time.Now()
-                videoTs := time.Duration(0)
-                segmentSamples := 0
-                idrSent := false
-                var currentFrame [][]byte
-                var hasVCL bool
-                boundChecked := false
-                for i, nalu := range nalus {
-                    if len(nalu) == 0 {
-                        continue
-                    }
-                    nalType := int(nalu[0] & 0x1F)
-                    isVCL := nalType >= 1 && nalType <= 5
-                    if i%1000 == 0 || nalType == 5 || nalType == 7 || nalType == 8 {
-                        //log.Printf("NALU %d type %d (%s) size %d", i, nalType, nalTypeToString(nalType), len(nalu))
-                    }
-
-                    if hasVCL && !isVCL {
-                        // Non-VCL after VCL: Send current access unit
-                        targetTime := videoStart.Add(videoTs)
-                        now := time.Now()
-                        if now.Before(targetTime) {
-                            time.Sleep(targetTime.Sub(now))
-                        }
-                        var frameData bytes.Buffer
-                        for _, n := range currentFrame {
-                            frameData.Write([]byte{0x00, 0x00, 0x00, 0x01})
-                            frameData.Write(n)
-                        }
-                        sampleData := frameData.Bytes()
-
-                        // Check bound status on first write attempt
-                        if !boundChecked {
-                            testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
-                            if err := trackVideo.WriteSample(testSample); err != nil && strings.Contains(err.Error(), "not bound") {
-                                log.Printf("Video track not bound yet, skipping segment")
-                                return
-                            }
-                            boundChecked = true
-                        }
-
-                        // Write the real frame sample
-                        sample := media.Sample{
-                            Data:     sampleData,
-                            Duration: frameDuration,
-                        }
-                        if err := trackVideo.WriteSample(sample); err != nil {
-                            log.Printf("Video sample write error: %v", err)
-                            if strings.Contains(err.Error(), "not bound") {
-                                return
-                            }
-                        }
-                        segmentSamples++
-                        videoTs += frameDuration
-
-                        // Start new access unit with this non-VCL
-                        currentFrame = [][]byte{nalu}
-                        hasVCL = false
-                    } else {
-                        if isVCL {
-                            firstMb, err := getFirstMbInSlice(nalu)
-                            if err != nil {
-                                //log.Printf("first_mb_in_slice parse error for NALU %d: %v", i, err)
-                                continue
-                            }
-                            if firstMb == 0 && len(currentFrame) > 0 && hasVCL {
-                                // New picture starts: Send previous access unit
-                                targetTime := videoStart.Add(videoTs)
-                                now := time.Now()
-                                if now.Before(targetTime) {
-                                    time.Sleep(targetTime.Sub(now))
-                                }
-                                var frameData bytes.Buffer
-                                for _, n := range currentFrame {
-                                    frameData.Write([]byte{0x00, 0x00, 0x00, 0x01})
-                                    frameData.Write(n)
-                                }
-                                sampleData := frameData.Bytes()
-
-                                if !boundChecked {
-                                    testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
-                                    if err := trackVideo.WriteSample(testSample); err != nil && strings.Contains(err.Error(), "not bound") {
-                                        log.Printf("Video track not bound yet, skipping segment")
-                                        return
-                                    }
-                                    boundChecked = true
-                                }
-
-                                sample := media.Sample{
-                                    Data:     sampleData,
-                                    Duration: frameDuration,
-                                }
-                                if err := trackVideo.WriteSample(sample); err != nil {
-                                    log.Printf("Video sample write error: %v", err)
-                                    if strings.Contains(err.Error(), "not bound") {
-                                        return
-                                    }
-                                }
-                                segmentSamples++
-                                videoTs += frameDuration
-
-                                // Start new access unit
-                                currentFrame = [][]byte{}
-                                hasVCL = false
-                            }
-                            // Add this VCL to current (first or continuation slice)
-                            currentFrame = append(currentFrame, nalu)
-                            hasVCL = true
-                            if nalType == 5 {
-                                idrSent = true
-                                //log.Printf("IDR keyframe detected")
-                            }
-                        } else {
-                            // Non-VCL before any VCL: Add to current
-                            currentFrame = append(currentFrame, nalu)
-                        }
-                    }
-                }
-                // Send any remaining access unit
-                if len(currentFrame) > 0 {
-                    targetTime := videoStart.Add(videoTs)
-                    now := time.Now()
-                    if now.Before(targetTime) {
-                        time.Sleep(targetTime.Sub(now))
-                    }
-                    var frameData bytes.Buffer
-                    for _, n := range currentFrame {
-                        frameData.Write([]byte{0x00, 0x00, 0x00, 0x01})
-                        frameData.Write(n)
-                    }
-                    sampleData := frameData.Bytes()
-
-                    if !boundChecked {
-                        testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
-                        if err := trackVideo.WriteSample(testSample); err != nil && strings.Contains(err.Error(), "not bound") {
-                            log.Printf("Video track not bound yet, skipping segment")
-                            return
-                        }
-                        boundChecked = true
-                    }
-
-                    sample := media.Sample{
-                        Data:     sampleData,
-                        Duration: frameDuration,
-                    }
-                    if err := trackVideo.WriteSample(sample); err != nil {
-                        log.Printf("Video sample write error: %v", err)
-                        if strings.Contains(err.Error(), "not bound") {
-                            return
-                        }
-                    }
-                    segmentSamples++
-                    videoTs += frameDuration
-                }
-                if !idrSent {
-                    log.Printf("WARNING: No IDR sent in %s - decoder may stall", segPath)
-                }
-                log.Printf("Sent %d video frame samples for %s", segmentSamples, segPath)
-            }(allNALUs)
-
-            // Wait for both video and audio to finish before next segment
-            wg.Wait()
-            time.Sleep(10 * time.Millisecond) // Small segment gap to avoid overload
-        }
-    }()
 
     r := gin.Default()
-
-    // Add CORS middleware
     r.Use(cors.Default())
-
     r.POST("/signal", signalingHandler)
     r.GET("/", indexHandler)
     r.GET("/hls/*path", func(c *gin.Context) { c.String(404, "Use WebRTC") })
 
-    log.Printf("WebRTC TV server on %s (StaticSample for H264+Opus). Open http://localhost%s/", Port, Port)
+    log.Printf("WebRTC TV server on %s. Stations: %v", Port, stations)
     log.Fatal(r.Run(Port))
 }
