@@ -14,10 +14,11 @@ ad_break_detector <video_file> [--hide-decimal] [--hide-mmss] [--hide-start] [--
 ad_break_detector "episode1.mp4" --hide-mmss --hide-decimal --hide-start --hide-end
 
 run server:
-go run live_server.go
+go run video_server.go
 
 ./
-├── live_server.go
+├── video_server.go
+├── admin_server.go
 ├── go
 ├── main.streamHandler
 ├── go.sum
