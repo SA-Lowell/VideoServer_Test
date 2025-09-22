@@ -36,7 +36,7 @@ std::string secondsToMMSS(double seconds)
 	int min = static_cast<int>(seconds / 60);
 	double sec = seconds - min * 60;
 	std::ostringstream oss;
-	oss << std::setfill('0') << std::setw(2) << min << ":" << std::fixed << std::setprecision(3) << std::setw(6) << sec;
+	oss << std::setfill('0') << std::setw(2) << min << ":" << std::fixed << std::setprecision(21) << std::setw(4) << sec;
 
 	return oss.str();
 }
@@ -197,6 +197,21 @@ int main(int argc, char* argv[])
 		}
 	}
 
+	std::string duration_cmd = "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"" + video + "\"";
+	std::string duration_output = exec(duration_cmd);
+	duration_output.erase(std::remove(duration_output.begin(), duration_output.end(), '\n'), duration_output.end());
+	duration_output.erase(std::remove(duration_output.begin(), duration_output.end(), '\r'), duration_output.end());
+
+	if(duration_output.empty() || duration_output == "ERROR")
+	{
+		std::cerr << "Failed to get video duration." << std::endl;
+
+		return 1;
+	}
+
+	double video_duration = std::stod(duration_output);
+
+	std::cout << "Video duration: " << std::fixed << std::setprecision(21) << video_duration << std::endl;
 
 	std::string silence_cmd = "ffmpeg -i \"" + video + "\" -af silencedetect=noise=-30dB:d=0.5 -f null - 2>&1";
 	std::string silence_output = exec(silence_cmd);
@@ -208,13 +223,27 @@ int main(int argc, char* argv[])
 
 	std::vector<Period> ad_points = findOverlaps(silences, blacks, 0.5);
 
-	if(ad_points.empty())
+	std::vector<Period> filtered_points;
+	const double epsilon = 1.0;
+
+	for(const auto& p : ad_points)
+	{
+		double adjusted_start = std::max(p.start, 0.0);
+		double adjusted_end = std::min(p.end, video_duration);
+
+		if(adjusted_start > epsilon && adjusted_end < (video_duration - epsilon))
+		{
+			filtered_points.push_back(p);
+		}
+	}
+
+	if(filtered_points.empty())
 	{
 		std::cout << "No suitable ad insertion points detected." << std::endl;
 	}
 	else
 	{
-		for(const auto& p : ad_points)
+		for(const auto& p : filtered_points)
 		{
 			double midpoint = p.start + ((p.end - p.start) / 2.0);
 
