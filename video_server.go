@@ -23,16 +23,18 @@ package main
 
 import (
     "bytes"
+    "database/sql"  
     "fmt"
     "log"
     "os"
     "os/exec"
     "path/filepath"
-    "regexp"
     "strconv"
     "strings"
     "sync"
     "time"
+
+    _ "github.com/lib/pq"  
 
     "github.com/gin-contrib/cors"
     "github.com/gin-gonic/gin"
@@ -50,6 +52,8 @@ const (
     DefaultDur    = 0.0                 // Default duration if probe fails
     DefaultStation = "default"
 )
+
+const dbConnString = "user=postgres password=aaaaaaaaaa dbname=webrtc_tv sslmode=disable host=localhost port=5432"
 
 type fpsPair struct {
     num int
@@ -138,32 +142,41 @@ func getFirstMbInSlice(nalu []byte) (uint, error) {
     return br.readUe()
 }
 
-// loadStation loads segments, probes FPS/duration, extracts SPS/PPS for a station
-func loadStation(stationName, txtPath string) *Station {
+func loadStation(stationName string, db *sql.DB) *Station {
     st := &Station{name: stationName}
 
-    // Load segment list
-    data, err := os.ReadFile(txtPath)
+    rows, err := db.Query(`
+        SELECT s.segment_name 
+        FROM segments s 
+        JOIN stations st ON s.station_id = st.id 
+        WHERE st.name = $1 
+        ORDER BY s.order_num ASC`, stationName)
     if err != nil {
-        log.Printf("Failed to read %s for station %s: %v", txtPath, stationName, err)
+        log.Printf("Failed to query segments for station %s: %v", stationName, err)
         return nil
     }
-    lines := strings.Split(string(data), "\n")
-    for _, line := range lines {
-        line = strings.TrimSpace(line)
-        if line == "" || strings.HasPrefix(line, "#") {
+    defer rows.Close()
+
+    for rows.Next() {
+        var segName string
+        if err := rows.Scan(&segName); err != nil {
+            log.Printf("Failed to scan segment for station %s: %v", stationName, err)
             continue
         }
-        fullPath := filepath.Join(HlsDir, line)
+        fullPath := filepath.Join(HlsDir, segName)
         if _, err := os.Stat(fullPath); err != nil {
-            log.Printf("Segment %s not found for station %s: %v", line, stationName, err)
+            log.Printf("Segment %s not found for station %s: %v", segName, stationName, err)
             continue
         }
         st.segmentList = append(st.segmentList, fullPath)
     }
-    log.Printf("Station %s: Loaded %d .h264 segments from %s: %v", stationName, len(st.segmentList), txtPath, st.segmentList)
+    if err := rows.Err(); err != nil {
+        log.Printf("Error iterating segments for station %s: %v", stationName, err)
+        return nil
+    }
+    log.Printf("Station %s: Loaded %d .h264 segments from DB: %v", stationName, len(st.segmentList), st.segmentList)
 
- // Pre-probe all FPS and durations in parallel
+ // Pre-probe all segment FPS and durations in parallel
 var wg sync.WaitGroup
 for _, segPath := range st.segmentList {
     wg.Add(1)
@@ -298,33 +311,31 @@ for _, segPath := range st.segmentList {
     return st
 }
 
-func discoverStations() {
-    files, err := os.ReadDir(HlsDir)
+func discoverStations(db *sql.DB) {
+    rows, err := db.Query("SELECT name FROM stations")
     if err != nil {
-        log.Fatalf("Failed to read dir %s: %v", HlsDir, err)
+        log.Fatalf("Failed to query stations from DB: %v", err)
     }
+    defer rows.Close()
 
-    re := regexp.MustCompile(`^segments_(.*)\.txt$`)
-    for _, file := range files {
-        if !file.IsDir() {
-            name := file.Name()
-            if name == "segments.txt" {
-                st := loadStation(DefaultStation, filepath.Join(HlsDir, name))
-                if st != nil {
-                    stations[DefaultStation] = st
-                }
-            } else if matches := re.FindStringSubmatch(name); len(matches) > 1 {
-                stationName := matches[1]
-                st := loadStation(stationName, filepath.Join(HlsDir, name))
-                if st != nil {
-                    stations[stationName] = st
-                }
-            }
+    for rows.Next() {
+        var stationName string
+        if err := rows.Scan(&stationName); err != nil {
+            log.Printf("Failed to scan station: %v", err)
+            continue
+        }
+        st := loadStation(stationName, db)
+        if st != nil {
+            stations[stationName] = st
         }
     }
-    log.Printf("Discovered %d stations: %v", len(stations), stations)
+    if err := rows.Err(); err != nil {
+        log.Fatalf("Error iterating stations: %v", err)
+    }
+
+    log.Printf("Discovered %d stations from DB: %v", len(stations), stations)
     if len(stations) == 0 {
-        log.Fatal("No stations found - ensure segments_*.txt files exist")
+        log.Fatal("No stations found in DB - populate the 'stations' and 'segments' tables")
     }
 }
 
@@ -1026,7 +1037,18 @@ func main() {
     if err := os.MkdirAll(HlsDir, 0755); err != nil {
         log.Fatal(err)
     }
-    discoverStations()
+
+    db, err := sql.Open("postgres", dbConnString)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()  
+    if err := db.Ping(); err != nil {
+        log.Fatal("DB ping failed: ", err)
+    }
+    log.Println("Connected to PostgreSQL DB")
+
+    discoverStations(db)  
 
     // Launch senders for each station
     for _, st := range stations {

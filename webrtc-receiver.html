@@ -103,16 +103,28 @@
 
         // Function to send offer to Go server via fetch
         async function sendOfferToServer() {
+            if (pc) {
+                pc.close();
+                pc = null;
+                offer = null;
+                candidates = [];
+                if (remoteStream) {
+                    remoteStream.getTracks().forEach(track => track.stop());
+                    remoteStream = null;
+                }
+                document.getElementById('remoteVideo').srcObject = null;
+                document.getElementById('restartIceButton').disabled = true;
+                log('Closed existing connection to switch channels');
+            }
+
+            await createOffer();
+
             const serverUrlInput = document.getElementById('serverUrl').value;
             const station = document.getElementById('station').value;
             let serverUrl = serverUrlInput;
             if (station && station !== 'default') {
                 const separator = serverUrlInput.includes('?') ? '&' : '?';
                 serverUrl += separator + 'station=' + encodeURIComponent(station);
-            }
-            if (!offer) {
-                log('No offer generated yet - start connection first.');
-                return;
             }
 
             try {
@@ -128,6 +140,7 @@
                 const answer = new RTCSessionDescription(answerJson);
                 await pc.setRemoteDescription(answer);
                 log('Remote Answer SDP set: ' + answer.sdp);
+                document.getElementById('restartIceButton').disabled = false;
             } catch (error) {
                 log('Error sending offer: ' + error);
             }
@@ -141,6 +154,8 @@
                 await pc.setLocalDescription(newOffer);
                 log('New offer with ICE restart: ' + newOffer.sdp);
                 offer = newOffer;
+                // Optionally re-send the new offer to the server if needed for renegotiation
+                // But in this setup, since server is sendonly, might not be necessary; depends on use case
             } catch (error) {
                 log('ICE restart failed: ' + error);
             }
