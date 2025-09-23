@@ -5,21 +5,38 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WebRTC Video Receiver</title>
     <style>
-        video {
+        #videoContainer {
+            position: relative;
             width: 640px;
             height: 480px;
             background-color: black;
+        }
+        video {
+            width: 100%;
+            height: 100%;
+        }
+        #staticCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            display: none;
         }
     </style>
 </head>
 <body>
     <h1>WebRTC Video Receiver</h1>
-    <video id="remoteVideo" autoplay playsinline controls></video>
+    <div id="videoContainer">
+        <video id="remoteVideo" autoplay playsinline controls></video>
+        <canvas id="staticCanvas" width="640" height="480"></canvas>
+    </div>
     <button id="startButton">Start Connection</button>
     <label for="serverUrl">Go Server URL (e.g., http://192.168.0.60:8081/signal):</label>
     <input id="serverUrl" type="text" value="http://192.168.0.60:8081/signal" style="width: 300px;">
-    <label for="station">Station (e.g., default, channel1, channel2):</label>
-    <input id="station" type="text" value="default" style="width: 150px;">
+    <label for="station">Station (e.g., channel1, channel2, channel3):</label>
+    <input id="station" type="text" value="channel1" style="width: 150px;">
     <button id="sendOfferButton" disabled>Send Offer to Server</button>
     <button id="restartIceButton" disabled>Restart ICE</button>
     <pre id="log"></pre>
@@ -47,6 +64,83 @@
         let offer = null;
         let candidates = [];
 
+        // Static effect variables
+        const staticCanvas = document.getElementById('staticCanvas');
+        const staticCtx = staticCanvas.getContext('2d');
+        let staticInterval;
+        let staticTime = 0;
+
+        // Audio variables for static noise
+        let audioCtx;
+        let noiseNode;
+        let gainNode;
+
+        function startStatic() {
+            staticCanvas.style.display = 'block';
+            staticInterval = setInterval(makeStaticNoise, 50);
+            log('Starting TV static effect');
+
+            // Start audio
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            noiseNode = audioCtx.createScriptProcessor(4096, 1, 1);
+            noiseNode.onaudioprocess = function(e) {
+                const output = e.outputBuffer.getChannelData(0);
+                for (let i = 0; i < output.length; i++) {
+                    output[i] = Math.random() * 2 - 1; // White noise
+                }
+            };
+            gainNode = audioCtx.createGain();
+            gainNode.gain.value = 0.05; // Lower volume to avoid being too loud
+            noiseNode.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            log('Starting static audio');
+        }
+
+        function stopStatic() {
+            clearInterval(staticInterval);
+            staticCanvas.style.display = 'none';
+            log('Stopping TV static effect');
+
+            // Stop audio with fade out
+            if (audioCtx && gainNode) {
+                try {
+                    gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.5); // Fade to 0 over 0.5 seconds
+                } catch (error) {
+                    log('Error during audio fade: ' + error);
+                }
+                setTimeout(() => {
+                    if (noiseNode) noiseNode.disconnect();
+                    if (gainNode) gainNode.disconnect();
+                    if (audioCtx) {
+                        audioCtx.close().then(() => {
+                            log('AudioContext closed');
+                        }).catch(error => {
+                            log('Error closing AudioContext: ' + error);
+                        });
+                        audioCtx = null;
+                    }
+                    log('Stopping static audio');
+                }, 500);
+            }
+        }
+
+        function makeStaticNoise() {
+            const width = staticCanvas.width;
+            const height = staticCanvas.height;
+            const imgd = staticCtx.createImageData(width, height);
+            const pix = imgd.data;
+
+            for (let i = 0, n = pix.length; i < n; i += 4) {
+                const c = 7 + Math.sin(i / 50000 + staticTime / 7);
+                const gray = 40 * Math.random() * c;
+                pix[i] = pix[i + 1] = pix[i + 2] = gray;
+                pix[i + 3] = 255; // alpha
+            }
+
+            staticCtx.putImageData(imgd, 0, 0);
+            staticTime = (staticTime + 1) % height;
+        }
+
         // Function to create the local offer (recvonly video and audio)
         async function createOffer() {
             pc = new RTCPeerConnection(configuration);
@@ -55,10 +149,12 @@
             pc.oniceconnectionstatechange = () => {
                 log('ICE connection state: ' + pc.iceConnectionState);
                 if (pc.iceConnectionState === 'disconnected') {
+                    stopStatic();
                     log('ICE disconnected - attempting automatic restart in 5 seconds...');
                     setTimeout(restartIce, 5000);
                 }
                 if (pc.iceConnectionState === 'failed') {
+                    stopStatic();
                     log('ICE failed - manual restart may be needed.');
                     document.getElementById('restartIceButton').disabled = false;
                 }
@@ -103,6 +199,9 @@
 
         // Function to send offer to Go server via fetch
         async function sendOfferToServer() {
+            stopStatic(); // Stop any existing static first to prevent multiples/orphans
+            startStatic(); // Then start new static
+
             if (pc) {
                 pc.close();
                 pc = null;
@@ -143,22 +242,14 @@
                 document.getElementById('restartIceButton').disabled = false;
             } catch (error) {
                 log('Error sending offer: ' + error);
+                stopStatic();
             }
         }
 
         // Function for ICE restart
         async function restartIce() {
-            log('Restarting ICE...');
-            try {
-                const newOffer = await pc.createOffer({ iceRestart: true });
-                await pc.setLocalDescription(newOffer);
-                log('New offer with ICE restart: ' + newOffer.sdp);
-                offer = newOffer;
-                // Optionally re-send the new offer to the server if needed for renegotiation
-                // But in this setup, since server is sendonly, might not be necessary; depends on use case
-            } catch (error) {
-                log('ICE restart failed: ' + error);
-            }
+            log('Restarting connection...');
+            await sendOfferToServer();
         }
 
         // Periodically get stats for debugging
@@ -183,6 +274,13 @@
                 }
             }, 5000);
         }
+
+        // Setup video playing event to stop static
+        const videoElement = document.getElementById('remoteVideo');
+        videoElement.onplaying = () => {
+            stopStatic();
+            log('Video started playing - static effect stopped');
+        };
 
         // Button handlers
         document.getElementById('startButton').addEventListener('click', async () => {
