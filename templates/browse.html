@@ -8,6 +8,7 @@
         body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f4; }
         h1 { color: #333; }
         .title { background: #fff; padding: 15px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .title-metadata { margin-left: 20px; font-size: 0.9em; color: #555; border-bottom: 1px solid #ddd; padding-bottom: 10px; }
         .video { margin-left: 20px; padding: 10px; border-left: 4px solid #007bff; }
         .metadata, .tags { margin-left: 40px; font-size: 0.9em; color: #555; }
         form { margin-bottom: 20px; }
@@ -30,6 +31,14 @@
         <div class="title">
             <h2>{{.Name}}</h2>
             <p>{{.Description}}</p>
+            <div class="title-metadata">
+                <strong>Title Metadata:</strong>
+                <ul>
+                    {{range .TitleMetadata}}
+                    <li>{{.TypeName}}: {{.Value}}</li>
+                    {{end}}
+                </ul>
+            </div>
             {{range .Videos}}
             <div class="video">
                 <h3>Video ID: {{.ID}} - URI: {{.URI}}</h3>

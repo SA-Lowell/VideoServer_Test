@@ -92,3 +92,28 @@ Windows: Use vcpkg (vcpkg install ffmpeg) or MSYS2 (pacman -S mingw-w64-x86_64-f
 Verify: pkg-config --cflags --libs libavformat should output paths/flags.
 
 Compiler: g++ 11+ (C++17 standard).
+
+
+
+
+
+
+
+
+
+
+
+
+
+GROK:
+Other Types of "Commercials" and Promotional Content to Account ForYes, commercials and promos come in many flavors, especially in media/TV/gaming contexts like yours. Your schema's metadata abstraction (e.g., 'media_type' = "commercial" with subtypes or details in JSONB) handles this well without new tables—use consistent naming conventions in metadata to categorize. Here's a breakdown of common types beyond basic ads, with suggestions for your DB:Standard TV/Radio Spots: Short (15-60s) ads for broadcast. E.g., a 30s RE2 TV commercial. Name convention: Use 'media_type' = "commercial", with 'subtype' = "tv_spot" or JSONB: {"type": "commercial", "subtype": "tv_spot", "duration": "00:00:30"}. Account for regional variants (e.g., 'country' = "US" vs. "JP" for localized voiceovers/subtitles).
+Trailers/Teasers: Longer previews (1-3min) showing gameplay/footage. E.g., RE2 E3 teaser. Convention: 'media_type' = "trailer" or "teaser" (distinguish: teaser = short/hype-focused, trailer = story-revealing). Add 'event' = "E3 1997" or 'version' = "red_band" for mature cuts.
+Sneak Peeks/Previews: Early/incomplete glimpses, often exclusive (e.g., magazine DVD extras). E.g., RE2 beta preview. Convention: 'media_type' = "sneak_peak" or "preview", with 'stage' = "beta" or "alpha". Useful for games with dev cycles.
+Behind-the-Scenes (BTS)/Making-Of: Featurettes on production. E.g., RE2 dev diary. Convention: 'media_type' = "bts", with 'focus' = "development" or "voice_acting".
+Interviews/Panels: Talent discussions (e.g., RE2 director interview). Convention: 'media_type' = "interview", with 'person' = "Shinji Mikami" or 'event' = "Comic-Con".
+Viral/User-Generated Promos: Modern social media clips (e.g., fan-made RE2 hype video, if curated). Convention: 'media_type' = "viral_promo", with 'source' = "user_generated" to flag non-official.
+Cross-Promos/Tie-Ins: Ads linking to other media (e.g., RE2 comic tie-in ad). Convention: Add 'linked_title_id' metadata (or column) referencing another title.
+Other Edge Cases: PSAs (public service ads, if thematic), bumpers (short channel IDs), or infomercials (long-form sales). Convention: 'media_type' = "psa" or "infomercial". For non-ads (e.g., full episodes as "promo" clips), use tags like "excerpt".
+
+Naming Conventions Tips: Standardize metadata keys (e.g., always 'subtype' for variants, 'country' as ISO codes like "US"). Document in a schema note or app enum. For inserts, use JSONB objects for multi-values (e.g., {"countries": ["US", "JP"]}). If types proliferate, add a promo-specific metadata_type cluster (e.g., prefix "promo_"). This keeps your DB extensible without changes.If adding many, consider a 'promo_type' column in videos for quick filtering, but your metadata works fine now.
+
