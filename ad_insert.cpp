@@ -556,7 +556,7 @@ bool probeVideo(const std::string& filePath, int& width, int& height, int& sarNu
 				sarNum = 1;
 				sarDen = 1;
 			}
-		}
+			}
 		else if(!hasAudio && (stream.channels > 0 || !stream.sampleRate.empty()))
 		{
 			std::cout << "DEBUG: Found audio stream" << std::endl;
@@ -1094,6 +1094,35 @@ bool insertBreak(const std::string& episodePath, const std::string& tempDir, con
 
 		std::string tempMp4 = segmentsDir + "/temp_" + name + ".mp4";
 		fs::rename(tempFile, tempMp4);
+
+		// Probe duration from tempMp4
+		double segmentDuration = 0.0;
+		std::string probeCmd = "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"" + tempMp4 + "\"";
+		FILE* probePipe = _popen(probeCmd.c_str(), "r");
+		if (probePipe) {
+			char buffer[128];
+			if (fgets(buffer, sizeof(buffer), probePipe) != NULL) {
+				try {
+					segmentDuration = std::stod(trim(std::string(buffer)));
+					std::cout << "DEBUG: Segment duration for " << tempMp4 << ": " << segmentDuration << "s" << std::endl;
+				} catch (...) {
+					std::cout << "DEBUG: Failed to parse segment duration for " << tempMp4 << std::endl;
+				}
+			}
+			_pclose(probePipe);
+		}
+
+		// Save duration to .dur file
+		std::string durFilePath = segmentsDir + "/" + name + ".dur";
+		std::ofstream durFile(durFilePath);
+		if (durFile) {
+			durFile << segmentDuration;
+			durFile.close();
+			std::cout << "DEBUG: Saved duration to " << durFilePath << std::endl;
+		} else {
+			std::cout << "DEBUG: Failed to save duration file " << durFilePath << std::endl;
+		}
+
 		std::string h264File = segmentsDir + "/" + name + ".h264";
 		std::string opusFile = segmentsDir + "/" + name + ".opus";
 		std::string cmdV = "ffmpeg -y -i \"" + tempMp4 + "\" -c:v copy -bsf:v h264_mp4toannexb \"" + h264File + "\"";
@@ -1104,7 +1133,7 @@ bool insertBreak(const std::string& episodePath, const std::string& tempDir, con
 			std::cout << "Failed to extract h264 from " << tempMp4 << ": " << resV << std::endl;
 		}
 
-		std::string cmdA = "ffmpeg -y -i \"" + tempMp4 + "\" -vn -c:a libopus -b:a 64k -frame_duration 20 -application audio \"" + opusFile + "\"";
+		std::string cmdA = "ffmpeg -y -i \"" + tempMp4 + "\" -vn -c:a libopus -b:a 64k -frame_duration 20 -application audio -avoid_negative_ts make_zero -fflags +genpts \"" + opusFile + "\"";
 
 		int resA = std::system(cmdA.c_str());
 
