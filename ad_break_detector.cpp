@@ -67,7 +67,7 @@ std::vector<Period> parseSilence(const std::string& output)
 			size_t space_pos = line.find(' ', end_pos);
 			double end = std::stod(line.substr(end_pos, space_pos - end_pos));
 
-			if(end - current_start >= 0.5)
+			if(end - current_start >= 0.1)
 			{
 				periods.push_back({current_start, end});
 			}
@@ -95,7 +95,7 @@ std::vector<Period> parseBlack(const std::string& output)
 			double start = std::stod(line.substr(pos_black_start + 12, pos_black_end - (pos_black_start + 12)));
 			double end = std::stod(line.substr(pos_black_end + 11));
 
-			if(end - start >= 0.3)
+			if(end - start >= 0.05)
 			{
 				periods.push_back({start, end});
 			}
@@ -213,15 +213,15 @@ int main(int argc, char* argv[])
 
 	std::cout << "Video duration: " << std::fixed << std::setprecision(21) << video_duration << std::endl;
 
-	std::string silence_cmd = "ffmpeg -i \"" + video + "\" -af silencedetect=noise=-30dB:d=0.5 -f null - 2>&1";
+	std::string silence_cmd = "ffmpeg -i \"" + video + "\" -af silencedetect=noise=-15dB:d=0.5 -f null - 2>&1";
 	std::string silence_output = exec(silence_cmd);
 	std::vector<Period> silences = parseSilence(silence_output);
 
-	std::string black_cmd = "ffmpeg -i \"" + video + "\" -vf blackdetect=d=0.3:pix_th=0.1 -f null - 2>&1";
+	std::string black_cmd = "ffmpeg -i \"" + video + "\" -vf blackdetect=d=0.2:pix_th=0.05 -f null - 2>&1";
 	std::string black_output = exec(black_cmd);
 	std::vector<Period> blacks = parseBlack(black_output);
 
-	std::vector<Period> ad_points = findOverlaps(silences, blacks, 0.5);
+	std::vector<Period> ad_points = findOverlaps(silences, blacks, 0.2);
 
 	std::vector<Period> filtered_points;
 	const double epsilon = 1.0;
