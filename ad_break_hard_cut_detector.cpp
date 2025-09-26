@@ -67,7 +67,7 @@ std::vector<Period> parseSilence(const std::string& output)
             size_t space_pos = line.find(' ', end_pos);
             double end = std::stod(line.substr(end_pos, space_pos - end_pos));
 
-            if(end - current_start >= 0.01)
+            if(end - current_start >= 0.005)
             {
                 periods.push_back({current_start, end});
             }
@@ -107,7 +107,7 @@ std::vector<double> parseScenes(const std::string& output)
     return scenes;
 }
 
-std::vector<double> findSilentScenes(const std::vector<Period>& silences, const std::vector<double>& scenes, double min_silence_duration = 0.03)
+std::vector<double> findSilentScenes(const std::vector<Period>& silences, const std::vector<double>& scenes, double min_silence_duration = 0.01)
 {
     std::vector<double> silent_scenes;
 
@@ -134,7 +134,7 @@ int main(int argc, char* argv[])
 {
     if(argc < 2)
     {
-        std::cerr << "Usage: " << argv[0] << " <video_file> [--no-format] [--hide-decimal] [--hide-mmss] [--hide-start] [--hide-midpoint] [--hide-end]" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <video_file> [--no-format] [--hide-decimal] [--hide-mmss] [--hide-start] [--hide-midpoint] [--hide-end] [--silence-db <db>] [--silence-dur <dur>] [--scene-thresh <thresh>]" << std::endl;
         return 1;
     }
 
@@ -146,6 +146,9 @@ int main(int argc, char* argv[])
     bool show_start = true;
     bool show_midpoint = true;
     bool show_end = true;
+    double silence_db = -40.0;
+    double silence_dur = 0.01;
+    double scene_thresh = 0.2;
 
     for(int i = 2; i < argc; ++i)
     {
@@ -157,6 +160,18 @@ int main(int argc, char* argv[])
         else if(arg == "--hide-midpoint")show_midpoint = false;
         else if(arg == "--hide-end")show_end = false;
         else if(arg == "--no-format")no_format = true;
+        else if(arg == "--silence-db" && i + 1 < argc)
+        {
+            silence_db = std::stod(argv[++i]);
+        }
+        else if(arg == "--silence-dur" && i + 1 < argc)
+        {
+            silence_dur = std::stod(argv[++i]);
+        }
+        else if(arg == "--scene-thresh" && i + 1 < argc)
+        {
+            scene_thresh = std::stod(argv[++i]);
+        }
         else
         {
             std::cerr << "Unknown option: " << arg << std::endl;
@@ -179,15 +194,17 @@ int main(int argc, char* argv[])
 
     if(!no_format)std::cout << "Video duration: " << std::fixed << std::setprecision(21) << video_duration << std::endl;
 
-    std::string silence_cmd = "ffmpeg -i \"" + video + "\" -af silencedetect=noise=-35dB:d=0.03 -f null - 2>&1";
-    std::string silence_output = exec(silence_cmd);
+    std::ostringstream silence_cmd_ss;
+    silence_cmd_ss << "ffmpeg -i \"" << video << "\" -af silencedetect=noise=" << silence_db << "dB:d=" << silence_dur << " -f null - 2>&1";
+    std::string silence_output = exec(silence_cmd_ss.str());
     std::vector<Period> silences = parseSilence(silence_output);
 
-    std::string scene_cmd = "ffmpeg -i \"" + video + "\" -vf \"select=gt(scene\\,0.4),showinfo\" -f null - 2>&1";
-    std::string scene_output = exec(scene_cmd);
+    std::ostringstream scene_cmd_ss;
+    scene_cmd_ss << "ffmpeg -i \"" << video << "\" -vf \"select=gt(scene\\," << scene_thresh << "),showinfo\" -f null - 2>&1";
+    std::string scene_output = exec(scene_cmd_ss.str());
     std::vector<double> scenes = parseScenes(scene_output);
 
-    std::vector<double> ad_points = findSilentScenes(silences, scenes, 0.03);
+    std::vector<double> ad_points = findSilentScenes(silences, scenes, silence_dur);
 
     std::vector<double> filtered_points;
     const double epsilon = 1.0;

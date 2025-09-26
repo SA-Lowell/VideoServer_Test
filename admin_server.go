@@ -328,39 +328,50 @@ func detectBreaksHandler(c *gin.Context) {
 	}
 
 	outStr := strings.TrimSpace(string(output))
-	log.Printf("Detector output: %s", outStr)
+	log.Printf("Detector raw output: %s", outStr)
 	if outStr == "No suitable ad insertion points detected." {
 		c.JSON(http.StatusOK, gin.H{"breaks": []interface{}{}, "video_id": videoID})
 		return
 	}
 
 	fields := strings.Fields(outStr)
-	if len(fields)%3 != 0 {
-		log.Printf("Invalid break data format: %v", fields)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid ad break data format"})
+	log.Printf("Number of fields: %d", len(fields))
+	if len(fields) < 3 {
+		log.Printf("Insufficient fields in output: got %d, expected at least 3", len(fields))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Insufficient data from ad break detector"})
 		return
+	}
+	if len(fields)%3 != 0 {
+		log.Printf("Invalid break data format: expected triplets, got %d fields (processing complete triplets only)", len(fields))
 	}
 
 	var breaks []map[string]float64
-	for i := 0; i < len(fields); i += 3 {
+	for i := 0; i < len(fields)-2; i += 3 {
 		start, err := strconv.ParseFloat(fields[i], 64)
 		if err != nil {
-			log.Printf("Failed to parse start time %s: %v", fields[i], err)
+			log.Printf("Failed to parse start time %s at index %d: %v", fields[i], i, err)
 			continue
 		}
 		mid, err := strconv.ParseFloat(fields[i+1], 64)
 		if err != nil {
-			log.Printf("Failed to parse mid time %s: %v", fields[i+1], err)
+			log.Printf("Failed to parse mid time %s at index %d: %v", fields[i+1], i+1, err)
 			continue
 		}
 		end, err := strconv.ParseFloat(fields[i+2], 64)
 		if err != nil {
-			log.Printf("Failed to parse end time %s: %v", fields[i+2], err)
+			log.Printf("Failed to parse end time %s at index %d: %v", fields[i+2], i+2, err)
 			continue
 		}
 		breaks = append(breaks, map[string]float64{"start": start, "mid": mid, "end": end})
 	}
-	log.Printf("Returning %d breaks for video ID %d", len(breaks), videoID)
+
+	if len(breaks) == 0 {
+		log.Printf("No valid breakpoints parsed from %d fields", len(fields))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "No valid breakpoints detected"})
+		return
+	}
+
+	log.Printf("Returning %d valid breaks for video ID %d", len(breaks), videoID)
 	c.JSON(http.StatusOK, gin.H{"breaks": breaks, "video_id": videoID})
 }
 

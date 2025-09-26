@@ -129,7 +129,9 @@
             selectedID = id;
             selectedURI = uri;
             document.getElementById('selected-info').innerHTML = `Selected Video ID: ${id}, URI: ${uri}`;
-            document.getElementById('video-player').src = `/videos/${uri}`;
+            const video = document.getElementById('video-player');
+            video.src = `/videos/${uri}`;
+            video.load(); // Ensure video reloads
             document.getElementById('detect-fade-button').disabled = false;
             document.getElementById('detect-hard-cut-button').disabled = false;
             document.getElementById('add-break-button').disabled = true;
@@ -145,8 +147,17 @@
             currentPath = path;
             document.getElementById('current-path').innerHTML = `Current Path: /${path}`;
             fetch(`/list-contents?path=${encodeURIComponent(path)}`)
-                .then(res => res.json())
+                .then(res => {
+                    if (!res.ok) {
+                        throw new Error(`HTTP error! Status: ${res.status}`);
+                    }
+                    return res.json();
+                })
                 .then(data => {
+                    console.log('Response data:', data); // Debug log
+                    if (!data.contents || !Array.isArray(data.contents)) {
+                        throw new Error('Invalid response format: contents is missing or not an array');
+                    }
                     const browser = document.getElementById('folder-browser');
                     browser.innerHTML = '';
                     data.contents.forEach(item => {
@@ -170,7 +181,11 @@
                         }
                         browser.appendChild(div);
                     });
-                }).catch(err => console.error(err));
+                })
+                .catch(err => {
+                    console.error('Error loading contents:', err);
+                    document.getElementById('folder-browser').innerHTML = `<div style="color: red;">Error: ${err.message}</div>`;
+                });
         }
 
         function navigateTo(path) {
@@ -191,7 +206,12 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
-            }).then(res => res.json()).then(data => {
+            }).then(res => {
+                if (!res.ok) {
+                    throw new Error(`HTTP error! Status: ${res.status}`);
+                }
+                return res.json();
+            }).then(data => {
                 statusDiv.classList.remove('active');
                 fadeButton.disabled = false;
                 hardCutButton.disabled = false;
@@ -295,18 +315,30 @@
 
         document.getElementById('seek-backward-button').addEventListener('click', () => {
             const video = document.getElementById('video-player');
+            if (isNaN(video.duration)) {
+                alert('Video not loaded yet. Please wait.');
+                return;
+            }
             const seconds = parseFloat(document.getElementById('seek-seconds').value) || 0;
             video.currentTime = Math.max(0, video.currentTime - seconds);
         });
 
         document.getElementById('seek-forward-button').addEventListener('click', () => {
             const video = document.getElementById('video-player');
+            if (isNaN(video.duration)) {
+                alert('Video not loaded yet. Please wait.');
+                return;
+            }
             const seconds = parseFloat(document.getElementById('seek-seconds').value) || 0;
             video.currentTime = Math.min(video.duration, video.currentTime + seconds);
         });
 
         function previewBreak(time) {
             const video = document.getElementById('video-player');
+            if (isNaN(video.duration)) {
+                alert('Video not loaded yet. Please wait.');
+                return;
+            }
             video.currentTime = time;
             video.play();
         }
