@@ -105,6 +105,7 @@ func main() {
 	})
 
 	r.GET("/update-ad-breaks", updateAdBreaksHandler)
+	r.GET("/get-video-metadata/:id", getVideoMetadataHandler)
 	r.GET("/list-contents", listContentsHandler)
 	r.POST("/add-video", addVideoHandler)
 	r.POST("/detect-breaks", detectBreaksHandler)
@@ -170,6 +171,87 @@ func loadTemplatesSafely(r *gin.Engine, pattern string) {
 		return
 	}
 	r.LoadHTMLFiles(files...)
+}
+
+func getVideoMetadataHandler(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid video ID"})
+		return
+	}
+
+	vrows, err := db.Query(`
+		SELECT v.id, v.uri
+		FROM videos v
+		WHERE v.id = $1
+	`, id)
+	if err != nil {
+		log.Printf("Video query error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer vrows.Close()
+
+	var video Video
+	if vrows.Next() {
+		if err := vrows.Scan(&video.ID, &video.URI); err != nil {
+			log.Printf("Video scan error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	} else {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Video not found"})
+		return
+	}
+
+	mrows, err := db.Query(`
+		SELECT mt.name, vm.value::text
+		FROM video_metadata vm
+		JOIN metadata_types mt ON vm.metadata_type_id = mt.id
+		WHERE vm.video_id = $1
+	`, video.ID)
+	if err != nil {
+		log.Printf("Video metadata query error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer mrows.Close()
+
+	for mrows.Next() {
+		var m Metadata
+		if err := mrows.Scan(&m.TypeName, &m.Value); err != nil {
+			log.Printf("Video metadata scan error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		video.Metadata = append(video.Metadata, m)
+	}
+
+	trows, err := db.Query(`
+		SELECT tg.name
+		FROM video_tags vt
+		JOIN tags tg ON vt.tag_id = tg.id
+		WHERE vt.video_id = $1
+	`, video.ID)
+	if err != nil {
+		log.Printf("Tags query error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer trows.Close()
+
+	for trows.Next() {
+		var tag Tag
+		if err := trows.Scan(&tag.Name); err != nil {
+			log.Printf("Tags scan error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		video.Tags = append(video.Tags, tag)
+	}
+
+	c.JSON(http.StatusOK, video)
 }
 
 func listContentsHandler(c *gin.Context) {

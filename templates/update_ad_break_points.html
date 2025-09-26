@@ -46,15 +46,34 @@
         #video-player { width: 640px; height: 360px; }
         #breaks-list { margin-top: 20px; }
         #selected-breaks-list { margin-top: 20px; }
+        #existing-breaks-list { margin-top: 20px; }
         .break-item { margin-bottom: 10px; }
-        #folder-browser { border: 1px solid #ccc; padding: 10px; max-height: 300px; overflow-y: auto; }
-        .dir-item { cursor: pointer; color: blue; }
-        .file-item { cursor: pointer; color: green; }
+        #folder-browser, #file-browser { 
+            border: 1px solid #ccc; 
+            padding: 10px; 
+            max-height: 300px; 
+            overflow-y: auto; 
+            margin-top: 10px;
+        }
+        .dir-item, .file-item { cursor: pointer; margin-bottom: 5px; }
+        .dir-item { color: blue; }
+        .file-item { color: green; }
+        #breadcrumb-nav { margin-top: 10px; }
+        .breadcrumb-item { 
+            cursor: pointer; 
+            color: blue; 
+            text-decoration: underline; 
+            margin-right: 5px; 
+        }
+        .breadcrumb-item:hover { color: darkblue; }
+        .breadcrumb-item::after { content: '/'; margin-left: 5px; }
+        .breadcrumb-item:last-child::after { content: ''; }
         .detector-buttons { margin-top: 10px; }
         #detection-status { margin-top: 10px; color: #333; font-weight: bold; display: none; }
         #detection-status.active { display: block; }
         #breaks-select { width: 300px; }
         #selected-breaks-list .break-item button { margin-left: 10px; }
+        #existing-breaks-list .break-item button { margin-left: 10px; }
         #save-breaks-button { margin-top: 10px; }
         #seek-controls { margin-top: 10px; }
         #seek-seconds { width: 60px; }
@@ -72,7 +91,7 @@
                 {{range .Videos}}
                 <li>
                     Video ID: {{.ID}}, URI: {{.URI}}
-                    <button onclick="selectVideo({{.ID}}, '{{.URI}}', true)">Select from DB</button>
+                    <button onclick="selectVideo({{.ID}}, '{{.URI}}', true, [{{range $index, $meta := .Metadata}}{{if eq $meta.TypeName "break_point"}}{{if $index}}, {{end}}{{$meta.Value}}{{end}}{{end}}])">Select from DB</button>
                     <ul>
                         {{range .Metadata}}
                         <li>Metadata: {{.TypeName}} - {{.Value}}</li>
@@ -90,7 +109,11 @@
 
     <h2>Files from Video Folder</h2>
     <div id="current-path">Current Path: /</div>
+    <div id="breadcrumb-nav"></div>
+    <h3>Folders</h3>
     <div id="folder-browser"></div>
+    <h3>Files in Current Folder</h3>
+    <div id="file-browser"></div>
     <button onclick="navigateTo('')">Back to Root</button>
 
     <h2>Selected Video</h2>
@@ -107,11 +130,14 @@
     </div>
     <div id="detection-status">Detecting ad breaks, please wait...</div>
 
+    <h2>Existing Break Points</h2>
+    <div id="existing-breaks-list"></div>
+
     <h2>Detected Breaks</h2>
     <div id="breaks-list">
         <select id="breaks-select" size="5"></select>
-        <button id="add-break-button" disabled>Add Selected Break</button>
         <button id="preview-break-button" disabled>Preview Selected Break</button>
+        <button id="add-break-button" disabled>Add Selected Break</button>
     </div>
 
     <h2>Selected Breaks to Save</h2>
@@ -124,14 +150,24 @@
         let currentPath = '';
         let detectedBreaks = [];
         let selectedBreaks = [];
+        let existingBreaks = [];
 
-        function selectVideo(id, uri, fromDB) {
+        // Convert seconds to HH:MM:SS.dddd format
+        function formatTime(seconds) {
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = seconds % 60;
+            const formatted = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs.toFixed(4)).padStart(7, '0')}`;
+            return formatted;
+        }
+
+        function selectVideo(id, uri, fromDB, metadataBreaks = []) {
             selectedID = id;
             selectedURI = uri;
             document.getElementById('selected-info').innerHTML = `Selected Video ID: ${id}, URI: ${uri}`;
             const video = document.getElementById('video-player');
             video.src = `/videos/${uri}`;
-            video.load(); // Ensure video reloads
+            video.load();
             document.getElementById('detect-fade-button').disabled = false;
             document.getElementById('detect-hard-cut-button').disabled = false;
             document.getElementById('add-break-button').disabled = true;
@@ -139,13 +175,18 @@
             document.getElementById('save-breaks-button').disabled = true;
             detectedBreaks = [];
             selectedBreaks = [];
+            // Load existing break points from metadata
+            existingBreaks = metadataBreaks.map(parseFloat).filter(time => !isNaN(time));
+            existingBreaks.sort((a, b) => a - b);
             updateBreaksSelect();
             updateSelectedBreaksList();
+            updateExistingBreaksList();
         }
 
         function loadContents(path) {
             currentPath = path;
             document.getElementById('current-path').innerHTML = `Current Path: /${path}`;
+            updateBreadcrumbNav();
             fetch(`/list-contents?path=${encodeURIComponent(path)}`)
                 .then(res => {
                     if (!res.ok) {
@@ -154,18 +195,21 @@
                     return res.json();
                 })
                 .then(data => {
-                    console.log('Response data:', data); // Debug log
+                    console.log('Response data:', data);
                     if (!data.contents || !Array.isArray(data.contents)) {
                         throw new Error('Invalid response format: contents is missing or not an array');
                     }
-                    const browser = document.getElementById('folder-browser');
-                    browser.innerHTML = '';
+                    const folderBrowser = document.getElementById('folder-browser');
+                    const fileBrowser = document.getElementById('file-browser');
+                    folderBrowser.innerHTML = '';
+                    fileBrowser.innerHTML = '';
                     data.contents.forEach(item => {
                         const div = document.createElement('div');
                         if (item.type === 'dir') {
                             div.className = 'dir-item';
                             div.innerHTML = `[Dir] ${item.name}`;
                             div.onclick = () => navigateTo(item.path);
+                            folderBrowser.appendChild(div);
                         } else {
                             div.className = 'file-item';
                             div.innerHTML = `[File] ${item.name}`;
@@ -175,21 +219,62 @@
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({ uri: item.path, title_id: 0 })
                                 }).then(res => res.json()).then(addData => {
-                                    selectVideo(addData.id, item.path, addData.existed);
+                                    // Fetch metadata for the video
+                                    fetchMetadata(addData.id, item.path, addData.existed);
                                 }).catch(err => console.error(err));
                             };
+                            fileBrowser.appendChild(div);
                         }
-                        browser.appendChild(div);
                     });
                 })
                 .catch(err => {
                     console.error('Error loading contents:', err);
                     document.getElementById('folder-browser').innerHTML = `<div style="color: red;">Error: ${err.message}</div>`;
+                    document.getElementById('file-browser').innerHTML = `<div style="color: red;">Error: ${err.message}</div>`;
                 });
+        }
+
+        function updateBreadcrumbNav() {
+            const breadcrumbNav = document.getElementById('breadcrumb-nav');
+            breadcrumbNav.innerHTML = '';
+            const parts = currentPath.split('/').filter(part => part.length > 0);
+            let cumulativePath = '';
+            const rootSpan = document.createElement('span');
+            rootSpan.className = 'breadcrumb-item';
+            rootSpan.innerHTML = 'Root';
+            rootSpan.onclick = () => navigateTo('');
+            breadcrumbNav.appendChild(rootSpan);
+            parts.forEach((part, index) => {
+                cumulativePath += (index > 0 ? '/' : '') + part;
+                const span = document.createElement('span');
+                span.className = 'breadcrumb-item';
+                span.innerHTML = part;
+                const pathToNavigate = cumulativePath;
+                span.onclick = () => navigateTo(pathToNavigate);
+                breadcrumbNav.appendChild(span);
+            });
         }
 
         function navigateTo(path) {
             loadContents(path);
+        }
+
+        function fetchMetadata(id, path, existed) {
+            fetch(`/get-video-metadata/${id}`)
+                .then(res => {
+                    if (!res.ok) {
+                        throw new Error(`HTTP error! Status: ${res.status}`);
+                    }
+                    return res.json();
+                })
+                .then(data => {
+                    const metadataBreaks = data.Metadata.filter(m => m.TypeName === 'break_point').map(m => parseFloat(m.Value));
+                    selectVideo(id, path, existed, metadataBreaks);
+                })
+                .catch(err => {
+                    console.error('Error fetching metadata:', err);
+                    selectVideo(id, path, existed, []);
+                });
         }
 
         function detectBreaks(detectorType) {
@@ -235,7 +320,7 @@
             detectedBreaks.forEach((b, index) => {
                 const option = document.createElement('option');
                 option.value = index;
-                option.text = `Start: ${b.start.toFixed(4)}, Mid: ${b.mid.toFixed(4)}, End: ${b.end.toFixed(4)}`;
+                option.text = `Start: ${formatTime(b.start)}, Mid: ${formatTime(b.mid)}, End: ${formatTime(b.end)}`;
                 select.appendChild(option);
             });
         }
@@ -246,7 +331,7 @@
             selectedBreaks.forEach((b, index) => {
                 const div = document.createElement('div');
                 div.className = 'break-item';
-                div.innerHTML = `Start: ${b.start.toFixed(4)}, Mid: ${b.mid.toFixed(4)}, End: ${b.end.toFixed(4)}`;
+                div.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(b.mid)}, End: ${formatTime(b.end)}`;
                 const removeBtn = document.createElement('button');
                 removeBtn.textContent = 'Remove';
                 removeBtn.onclick = () => {
@@ -258,6 +343,21 @@
                 previewBtn.textContent = 'Preview Break';
                 previewBtn.onclick = () => previewBreak(b.mid);
                 div.appendChild(removeBtn);
+                div.appendChild(previewBtn);
+                list.appendChild(div);
+            });
+        }
+
+        function updateExistingBreaksList() {
+            const list = document.getElementById('existing-breaks-list');
+            list.innerHTML = '';
+            existingBreaks.forEach((time, index) => {
+                const div = document.createElement('div');
+                div.className = 'break-item';
+                div.innerHTML = `Break Point: ${formatTime(time)}`;
+                const previewBtn = document.createElement('button');
+                previewBtn.textContent = 'Preview Break';
+                previewBtn.onclick = () => previewBreak(time);
                 div.appendChild(previewBtn);
                 list.appendChild(div);
             });
@@ -303,6 +403,10 @@
             }).then(res => res.json()).then(data => {
                 if (data.success) {
                     alert('Breakpoints saved successfully');
+                    // Add new breaks to existing breaks
+                    existingBreaks.push(...selectedBreaks.map(b => b.mid));
+                    existingBreaks.sort((a, b) => a - b);
+                    updateExistingBreaksList();
                     selectedBreaks = [];
                     updateSelectedBreaksList();
                     document.getElementById('save-breaks-button').disabled = true;
@@ -317,7 +421,7 @@
             const video = document.getElementById('video-player');
             if (isNaN(video.duration)) {
                 alert('Video not loaded yet. Please wait.');
-                return;
+                return
             }
             const seconds = parseFloat(document.getElementById('seek-seconds').value) || 0;
             video.currentTime = Math.max(0, video.currentTime - seconds);
@@ -327,7 +431,7 @@
             const video = document.getElementById('video-player');
             if (isNaN(video.duration)) {
                 alert('Video not loaded yet. Please wait.');
-                return;
+                return
             }
             const seconds = parseFloat(document.getElementById('seek-seconds').value) || 0;
             video.currentTime = Math.min(video.duration, video.currentTime + seconds);
