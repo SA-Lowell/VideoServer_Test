@@ -1,4 +1,43 @@
-<!DOCTYPE html>
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -10,6 +49,9 @@
         #folder-browser { border: 1px solid #ccc; padding: 10px; max-height: 300px; overflow-y: auto; }
         .dir-item { cursor: pointer; color: blue; }
         .file-item { cursor: pointer; color: green; }
+        .detector-buttons { margin-top: 10px; }
+        #detection-status { margin-top: 10px; color: #333; font-weight: bold; display: none; }
+        #detection-status.active { display: block; }
     </style>
 </head>
 <body>
@@ -48,7 +90,11 @@
     <h2>Selected Video</h2>
     <div id="selected-info"></div>
     <video id="video-player" controls></video>
-    <button id="detect-button" disabled>Detect Ad Breaks</button>
+    <div class="detector-buttons">
+        <button id="detect-fade-button" disabled>Detect Fade-to-Black Ad Breaks</button>
+        <button id="detect-hard-cut-button" disabled>Detect Hard-Cut Ad Breaks</button>
+    </div>
+    <div id="detection-status">Detecting ad breaks, please wait...</div>
 
     <h2>Detected Breaks</h2>
     <div id="breaks-list"></div>
@@ -63,7 +109,8 @@
             selectedURI = uri;
             document.getElementById('selected-info').innerHTML = `Selected Video ID: ${id}, URI: ${uri}`;
             document.getElementById('video-player').src = `/videos/${uri}`;
-            document.getElementById('detect-button').disabled = false;
+            document.getElementById('detect-fade-button').disabled = false;
+            document.getElementById('detect-hard-cut-button').disabled = false;
         }
 
         function loadContents(path) {
@@ -84,13 +131,12 @@
                             div.className = 'file-item';
                             div.innerHTML = `[File] ${item.name}`;
                             div.onclick = () => {
-                                // Add to DB and select
                                 fetch('/add-video', {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({ uri: item.path, title_id: 0 })
                                 }).then(res => res.json()).then(addData => {
-                                    selectVideo(addData.id, item.path, false);
+                                    selectVideo(addData.id, item.path, addData.existed);
                                 }).catch(err => console.error(err));
                             };
                         }
@@ -103,15 +149,43 @@
             loadContents(path);
         }
 
-        document.getElementById('detect-button').addEventListener('click', () => {
-            const body = selectedID ? { id: selectedID } : { uri: selectedURI };
+        function detectBreaks(detectorType) {
+            const statusDiv = document.getElementById('detection-status');
+            const fadeButton = document.getElementById('detect-fade-button');
+            const hardCutButton = document.getElementById('detect-hard-cut-button');
+            
+            // Show status and disable buttons
+            statusDiv.classList.add('active');
+            fadeButton.disabled = true;
+            hardCutButton.disabled = true;
+
+            const body = selectedID ? { id: selectedID, detector: detectorType } : { uri: selectedURI, detector: detectorType };
             fetch('/detect-breaks', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
             }).then(res => res.json()).then(data => {
+                // Hide status and re-enable buttons
+                statusDiv.classList.remove('active');
+                fadeButton.disabled = false;
+                hardCutButton.disabled = false;
                 displayBreaks(data.breaks);
-            }).catch(err => console.error(err));
+            }).catch(err => {
+                // Hide status, re-enable buttons, and show error
+                statusDiv.classList.remove('active');
+                fadeButton.disabled = false;
+                hardCutButton.disabled = false;
+                console.error(err);
+                alert('Error detecting ad breaks: ' + err.message);
+            });
+        }
+
+        document.getElementById('detect-fade-button').addEventListener('click', () => {
+            detectBreaks('fade');
+        });
+
+        document.getElementById('detect-hard-cut-button').addEventListener('click', () => {
+            detectBreaks('hard-cut');
         });
 
         function displayBreaks(breaks) {
@@ -151,7 +225,6 @@
             video.play();
         }
 
-        // Initial load
         loadContents('');
     </script>
 </body>

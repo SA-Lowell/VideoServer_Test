@@ -56,16 +56,10 @@ var db *sql.DB
 func main() {
 	r := gin.Default()
 
-	// Custom recovery middleware to handle runtime panics as 500 or 404
 	r.Use(customRecovery())
-
-	// Custom error handler middleware: Handles errors after handlers
 	r.Use(customErrorHandler())
-
-	// Safe template loading (no panic if no files)
 	loadTemplatesSafely(r, "templates/*.html")
 
-	// DB connection (replace with your creds)
 	var err error
 	db, err = sql.Open("postgres", "user=postgres password=aaaaaaaaaa dbname=webrtc_tv sslmode=disable host=localhost port=5432")
 	if err != nil {
@@ -73,7 +67,6 @@ func main() {
 	}
 	defer db.Close()
 
-	// Log current working directory for debugging
 	cwd, err := os.Getwd()
 	if err != nil {
 		log.Printf("Failed to get current working directory: %v", err)
@@ -81,24 +74,17 @@ func main() {
 		log.Printf("Current working directory: %s", cwd)
 	}
 
-	// Set up public directory (like public_html) for static files with index handling
-	publicDir := "./public" // Change to your public_html folder path
-	r.StaticFS("/public_html", http.Dir(publicDir)) // Serve static files under /public_html
-
-	// Serve videos from videoBaseDir
+	publicDir := "./public"
+	r.StaticFS("/public_html", http.Dir(publicDir))
 	r.StaticFS("/videos", http.Dir(videoBaseDir))
 
-	// Example dynamic endpoint: Add tag to file
 	r.POST("/files/:id/tags", func(c *gin.Context) {
 		id := c.Param("id")
 		var tags []string
-
 		if err := c.BindJSON(&tags); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-
-		// Update DB (use prepared stmt in production)
 		_, err := db.Exec("UPDATE files SET tags = tags || $1 WHERE id = $2", tags, id)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -107,26 +93,16 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"success": true})
 	})
 
-	// Serve dynamic HTML interface at root
 	r.GET("/", func(c *gin.Context) {
 		c.HTML(http.StatusOK, "admin.html", gin.H{
 			"Title": "Admin Panel",
 		})
 	})
 
-	// Add the new update ad break points route
 	r.GET("/update-ad-breaks", updateAdBreaksHandler)
-
-	// List contents in video directory (files and dirs)
 	r.GET("/list-contents", listContentsHandler)
-
-	// Add video to database
 	r.POST("/add-video", addVideoHandler)
-
-	// Detect breaks
 	r.POST("/detect-breaks", detectBreaksHandler)
-
-	// Add break to database
 	r.POST("/add-break", addBreakHandler)
 
 	r.NoRoute(func(c *gin.Context) {
@@ -136,12 +112,10 @@ func main() {
 	r.Run(":8082")
 }
 
-// Custom recovery middleware: Handles panics, checks for template errors as 404
 func customRecovery() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		defer func() {
 			if err := recover(); err != nil {
-				// Convert panic to error
 				var recoveredErr error
 				switch x := err.(type) {
 				case string:
@@ -151,13 +125,10 @@ func customRecovery() gin.HandlerFunc {
 				default:
 					recoveredErr = errors.New("unknown panic")
 				}
-
-				// Check if it's a template not found error
 				errStr := recoveredErr.Error()
 				if strings.Contains(errStr, "no template") || strings.Contains(errStr, "pattern matches no files") || strings.Contains(errStr, "template:") || strings.Contains(errStr, "undefined") {
 					c.HTML(http.StatusNotFound, "404.html", gin.H{"error": "Resource not found"})
 				} else {
-					// Default to 500 for other panics
 					c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
 				}
 				c.Abort()
@@ -167,7 +138,6 @@ func customRecovery() gin.HandlerFunc {
 	}
 }
 
-// Custom error handler middleware: Handles errors after handlers
 func customErrorHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Next()
@@ -183,7 +153,6 @@ func customErrorHandler() gin.HandlerFunc {
 	}
 }
 
-// Safe template loading: No panic if no files match
 func loadTemplatesSafely(r *gin.Engine, pattern string) {
 	files, err := filepath.Glob(pattern)
 	if err != nil {
@@ -197,7 +166,6 @@ func loadTemplatesSafely(r *gin.Engine, pattern string) {
 	r.LoadHTMLFiles(files...)
 }
 
-// Handler to list immediate contents (files and dirs) of a path
 func listContentsHandler(c *gin.Context) {
 	relPath := c.Query("path")
 	fullPath := filepath.Join(videoBaseDir, relPath)
@@ -222,7 +190,6 @@ func listContentsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"contents": contents})
 }
 
-// Handler to add a video to the database
 type AddVideoReq struct {
 	URI     string `json:"uri"`
 	TitleID int64  `json:"title_id"`
@@ -235,21 +202,37 @@ func addVideoHandler(c *gin.Context) {
 		return
 	}
 	if req.TitleID == 0 {
-		req.TitleID = 0 // Default to N/A title
+		req.TitleID = 0
 	}
+
+	// Check if video already exists
 	var id int64
-	err := db.QueryRow("INSERT INTO videos (title_id, uri) VALUES ($1, $2) RETURNING id", req.TitleID, req.URI).Scan(&id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	err := db.QueryRow("SELECT id FROM videos WHERE uri = $1", req.URI).Scan(&id)
+	if err == nil {
+		// Video exists, return its ID
+		c.JSON(http.StatusOK, gin.H{"id": id, "existed": true})
+		return
+	} else if err != sql.ErrNoRows {
+		// Unexpected database error
+		log.Printf("Check video query error for URI %s: %v", req.URI, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error: " + err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"id": id})
+
+	// Video does not exist, insert it
+	err = db.QueryRow("INSERT INTO videos (title_id, uri) VALUES ($1, $2) RETURNING id", req.TitleID, req.URI).Scan(&id)
+	if err != nil {
+		log.Printf("Failed to add video to DB: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add video to DB: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"id": id, "existed": false})
 }
 
-// Handler to detect ad breaks
 type DetectReq struct {
-	URI string `json:"uri,omitempty"`
-	ID  int64  `json:"id,omitempty"`
+	URI      string `json:"uri,omitempty"`
+	ID       int64  `json:"id,omitempty"`
+	Detector string `json:"detector"`
 }
 
 func detectBreaksHandler(c *gin.Context) {
@@ -309,31 +292,37 @@ func detectBreaksHandler(c *gin.Context) {
 		return
 	}
 
-	// Resolve absolute path for ad_break_detector.exe
-	absAdBreakFadeToBlackDetectorPath, err := filepath.Abs(adBreakFadeToBlackDetectorPath)
+	var detectorPath string
+	if req.Detector == "hard-cut" {
+		detectorPath = adBreakHardCutDetectorPath
+	} else {
+		detectorPath = adBreakFadeToBlackDetectorPath
+	}
+
+	absDetectorPath, err := filepath.Abs(detectorPath)
 	if err != nil {
-		log.Printf("Failed to resolve absolute path for %s: %v", adBreakFadeToBlackDetectorPath, err)
+		log.Printf("Failed to resolve absolute path for %s: %v", detectorPath, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Cannot resolve ad break detector path"})
 		return
 	}
-	log.Printf("Resolved ad_break_detector.exe path: %s", absAdBreakFadeToBlackDetectorPath)
-	if _, err := os.Stat(absAdBreakFadeToBlackDetectorPath); err != nil {
-		log.Printf("ad_break_detector.exe not found at %s: %v", absAdBreakFadeToBlackDetectorPath, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ad break detector executable not found at " + absAdBreakFadeToBlackDetectorPath})
+	log.Printf("Resolved detector path: %s", absDetectorPath)
+	if _, err := os.Stat(absDetectorPath); err != nil {
+		log.Printf("Detector executable not found at %s: %v", absDetectorPath, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ad break detector executable not found at " + absDetectorPath})
 		return
 	}
 
-	log.Printf("Running ad_break_detector.exe on %s with --no-format", fullPath)
-	cmd := exec.Command(absAdBreakFadeToBlackDetectorPath, fullPath, "--no-format")
+	log.Printf("Running detector on %s with --no-format", fullPath)
+	cmd := exec.Command(absDetectorPath, fullPath, "--no-format")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Printf("ad_break_detector.exe failed: %v, output: %s", err, string(output))
+		log.Printf("Detector failed: %v, output: %s", err, string(output))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ad break detection failed: " + string(output)})
 		return
 	}
 
 	outStr := strings.TrimSpace(string(output))
-	log.Printf("ad_break_detector.exe output: %s", outStr)
+	log.Printf("Detector output: %s", outStr)
 	if outStr == "No suitable ad insertion points detected." {
 		c.JSON(http.StatusOK, gin.H{"breaks": []interface{}{}, "video_id": videoID})
 		return
@@ -369,7 +358,6 @@ func detectBreaksHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"breaks": breaks, "video_id": videoID})
 }
 
-// Handler to add a break
 type AddBreakReq struct {
 	ID   int64   `json:"id"`
 	Time float64 `json:"time"`
@@ -389,9 +377,7 @@ func addBreakHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
-// Handler for updating ad break points
 func updateAdBreaksHandler(c *gin.Context) {
-	// Fetch all titles with nested title_metadata, videos, metadata, tags
 	rows, err := db.Query(`
         SELECT t.id, t.name, t.description
         FROM titles t
@@ -413,7 +399,6 @@ func updateAdBreaksHandler(c *gin.Context) {
 			return
 		}
 
-		// Fetch title_metadata for title
 		tmrows, err := db.Query(`
             SELECT mt.name, tm.value::text
             FROM title_metadata tm
@@ -431,13 +416,12 @@ func updateAdBreaksHandler(c *gin.Context) {
 			var m Metadata
 			if err := tmrows.Scan(&m.TypeName, &m.Value); err != nil {
 				log.Printf("Title metadata scan error: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			 c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
 			t.TitleMetadata = append(t.TitleMetadata, m)
 		}
 
-		// Fetch videos for title
 		vrows, err := db.Query(`
             SELECT v.id, v.uri
             FROM videos v
@@ -459,7 +443,6 @@ func updateAdBreaksHandler(c *gin.Context) {
 				return
 			}
 
-			// Fetch metadata for video
 			mrows, err := db.Query(`
                 SELECT mt.name, vm.value::text
                 FROM video_metadata vm
@@ -483,7 +466,6 @@ func updateAdBreaksHandler(c *gin.Context) {
 				v.Metadata = append(v.Metadata, m)
 			}
 
-			// Fetch tags for video
 			trows, err := db.Query(`
                 SELECT tg.name
                 FROM video_tags vt
@@ -510,7 +492,6 @@ func updateAdBreaksHandler(c *gin.Context) {
 			t.Videos = append(t.Videos, v)
 		}
 
-		// Check if any data was fetched (for debugging)
 		if len(t.Videos) == 0 && len(t.TitleMetadata) == 0 {
 			log.Printf("No data for title ID %d: %s", t.ID, t.Name)
 		}
