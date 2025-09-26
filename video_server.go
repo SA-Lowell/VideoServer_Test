@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"math"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -326,6 +327,42 @@ func processVideo(st *Station, videoID int64, db *sql.DB) ([]string, [][]byte, s
 	return segments, spsPPS, fmtpLine, nil
 }
 
+// getQueueDuration calculates the total duration of all videos in the queue, excluding ads
+func getQueueDuration(videoIDs []int64, db *sql.DB) (float64, error) {
+    totalDuration := 0.0
+    for _, vid := range videoIDs {
+        var duration sql.NullFloat64
+        var hasCommercialTag bool
+
+        // Check if the video has the commercial tag (tag_id = 4)
+        err := db.QueryRow(`
+            SELECT EXISTS (
+                SELECT 1 FROM video_tags vt WHERE vt.video_id = $1 AND vt.tag_id = 4
+            )`, vid).Scan(&hasCommercialTag)
+        if err != nil {
+            log.Printf("Failed to check commercial tag for video %d: %v", vid, err)
+            continue
+        }
+
+        if hasCommercialTag {
+            continue // Skip ads
+        }
+
+        // Get the duration of the video
+        err = db.QueryRow(`SELECT duration FROM videos WHERE id = $1`, vid).Scan(&duration)
+        if err != nil {
+            log.Printf("Failed to get duration for video %d: %v", vid, err)
+            continue
+        }
+        if duration.Valid {
+            totalDuration += duration.Float64
+        } else {
+            log.Printf("Video %d has null duration, skipping in duration calculation", vid)
+        }
+    }
+    return totalDuration, nil
+}
+
 // preprocessNextVideos continuously preprocesses upcoming videos
 func preprocessNextVideos(st *Station, db *sql.DB) {
 	for {
@@ -369,80 +406,188 @@ func preprocessNextVideos(st *Station, db *sql.DB) {
 }
 
 func loadStation(stationName string, db *sql.DB) *Station {
-	st := &Station{
-		name:         stationName,
-		currentIndex: 0,
-		preprocessed: make(chan PreprocessedVideo, 2), // Buffer for up to 2 preprocessed videos
-	}
+    st := &Station{
+        name:         stationName,
+        currentIndex: 0,
+        preprocessed: make(chan PreprocessedVideo, 2), // Buffer for up to 2 preprocessed videos
+    }
 
-	rows, err := db.Query(`
-		SELECT sv.video_id
-		FROM station_videos sv
-		JOIN stations s ON sv.station_id = s.id
-		WHERE s.name = $1
-		ORDER BY sv.id ASC`, stationName)
-	if err != nil {
-		log.Printf("Failed to query station_videos for station %s: %v", stationName, err)
-		return nil
-	}
-	defer rows.Close()
+    // Get station's unix_start
+    var unixStart int64
+    err := db.QueryRow(`SELECT unix_start FROM stations WHERE name = $1`, stationName).Scan(&unixStart)
+    if err != nil {
+        log.Printf("Failed to get unix_start for station %s: %v", stationName, err)
+        return nil
+    }
 
-	var videoIds []int64
-	for rows.Next() {
-		var vid int64
-		if err := rows.Scan(&vid); err != nil {
-			log.Printf("Failed to scan video_id for station %s: %v", stationName, err)
-			continue
-		}
-		videoIds = append(videoIds, vid)
-	}
-	if err := rows.Err(); err != nil {
-		log.Printf("Error iterating station_videos for station %s: %v", stationName, err)
-		return nil
-	}
+    // Get video IDs for the station
+    rows, err := db.Query(`
+        SELECT sv.video_id
+        FROM station_videos sv
+        JOIN stations s ON sv.station_id = s.id
+        WHERE s.name = $1
+        ORDER BY sv.id ASC`, stationName)
+    if err != nil {
+        log.Printf("Failed to query station_videos for station %s: %v", stationName, err)
+        return nil
+    }
+    defer rows.Close()
 
-	if len(videoIds) == 0 {
-		log.Printf("No videos found for station %s", stationName)
-		return nil
-	}
+    var videoIds []int64
+    for rows.Next() {
+        var vid int64
+        if err := rows.Scan(&vid); err != nil {
+            log.Printf("Failed to scan video_id for station %s: %v", stationName, err)
+            continue
+        }
+        videoIds = append(videoIds, vid)
+    }
+    if err := rows.Err(); err != nil {
+        log.Printf("Error iterating station_videos for station %s: %v", stationName, err)
+        return nil
+    }
 
-	st.videoQueue = videoIds
-	st.currentVideo = videoIds[0]
+    if len(videoIds) == 0 {
+        log.Printf("No videos found for station %s", stationName)
+        return nil
+    }
+    st.videoQueue = videoIds
 
-	// Process current video
-	segments, spsPPS, fmtpLine, err := processVideo(st, st.currentVideo, db)
-	if err != nil {
-		log.Printf("Failed to process current video %d for station %s: %v", st.currentVideo, stationName, err)
-		return nil
-	}
-	st.segmentList = segments
-	st.spsPPS = spsPPS
-	st.fmtpLine = fmtpLine
+    // Calculate elapsed time since unix_start
+    currentTime := time.Now().Unix()
+    elapsedSeconds := float64(currentTime - unixStart)
 
-	// Start preprocessing goroutine
-	go preprocessNextVideos(st, db)
+    // Calculate total duration of the queue (excluding ads)
+    totalQueueDuration, err := getQueueDuration(videoIds, db)
+    if err != nil {
+        log.Printf("Failed to calculate queue duration for station %s: %v", stationName, err)
+        return nil
+    }
+    if totalQueueDuration <= 0 {
+        log.Printf("Total queue duration is zero or negative for station %s, cannot proceed", stationName)
+        return nil
+    }
 
-	st.trackVideo, err = webrtc.NewTrackLocalStaticSample(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264},
-		"video_"+sanitizeTrackID(stationName),
-		"pion",
-	)
-	if err != nil {
-		log.Printf("Station %s: Failed to create video track: %v", stationName, err)
-		return nil
-	}
-	st.trackAudio, err = webrtc.NewTrackLocalStaticSample(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
-		"audio_"+sanitizeTrackID(stationName),
-		"pion",
-	)
-	if err != nil {
-		log.Printf("Station %s: Failed to create audio track: %v", stationName, err)
-		return nil
-	}
+    // Calculate number of loops and remaining time
+    loops := int(elapsedSeconds / totalQueueDuration)
+    remainingSeconds := math.Mod(elapsedSeconds, totalQueueDuration)
+    log.Printf("Station %s: Elapsed %f seconds, %d loops, remaining %f seconds", stationName, elapsedSeconds, loops, remainingSeconds)
 
-	log.Printf("Station %s: Initialized with %d segments for video %d", stationName, len(st.segmentList), st.currentVideo)
-	return st
+    // Find the current video and offset
+    currentOffset := remainingSeconds
+    currentVideoIndex := 0
+    var currentVideoID int64
+    for i, vid := range videoIds {
+        var duration sql.NullFloat64
+        var hasCommercialTag bool
+
+        // Check if the video is an ad
+        err = db.QueryRow(`
+            SELECT EXISTS (
+                SELECT 1 FROM video_tags vt WHERE vt.video_id = $1 AND vt.tag_id = 4
+            )`, vid).Scan(&hasCommercialTag)
+        if err != nil {
+            log.Printf("Failed to check commercial tag for video %d: %v", vid, err)
+            continue
+        }
+        if hasCommercialTag {
+            continue // Skip ads in offset calculation
+        }
+
+        err = db.QueryRow(`SELECT duration FROM videos WHERE id = $1`, vid).Scan(&duration)
+        if err != nil {
+            log.Printf("Failed to get duration for video %d: %v", vid, err)
+            continue
+        }
+        if duration.Valid && currentOffset >= duration.Float64 {
+            currentOffset -= duration.Float64
+            continue
+        }
+        if duration.Valid {
+            currentVideoIndex = i
+            currentVideoID = vid
+            break
+        }
+    }
+
+    if currentVideoID == 0 {
+        log.Printf("No valid non-ad video found for station %s, defaulting to first video", stationName)
+        currentVideoID = videoIds[0]
+        currentOffset = 0
+    }
+
+    st.currentVideo = currentVideoID
+    st.currentIndex = currentVideoIndex
+    log.Printf("Station %s: Starting at video %d (index %d) with offset %f seconds", stationName, currentVideoID, currentVideoIndex, currentOffset)
+
+    // Process current video
+    segments, spsPPS, fmtpLine, err := processVideo(st, st.currentVideo, db)
+    if err != nil {
+        log.Printf("Failed to process current video %d for station %s: %v", st.currentVideo, stationName, err)
+        return nil
+    }
+    st.segmentList = segments
+    st.spsPPS = spsPPS
+    st.fmtpLine = fmtpLine
+
+    // Calculate which segment to start at based on currentOffset
+    currentSegmentIndex := 0
+    segmentOffset := currentOffset
+    for i, segPath := range segments {
+        val, ok := st.durationCache.Load(segPath)
+        segDur := DefaultDur
+        if ok {
+            segDur = val.(float64)
+        }
+        if segmentOffset >= segDur && segDur > 0 {
+            segmentOffset -= segDur
+            currentSegmentIndex = i + 1
+            continue
+        }
+        break
+    }
+
+    // If we've gone through all segments, loop back
+    if currentSegmentIndex >= len(segments) {
+        currentSegmentIndex = 0
+        segmentOffset = 0
+        log.Printf("Station %s: Segment index %d out of bounds, resetting to 0", stationName, currentSegmentIndex)
+    }
+
+    // Adjust segment list to start at the correct segment
+    if currentSegmentIndex > 0 {
+        st.segmentList = st.segmentList[currentSegmentIndex:]
+        log.Printf("Station %s: Adjusted segment list to start at segment %d, offset %f seconds", stationName, currentSegmentIndex, segmentOffset)
+    }
+
+    // Store the initial offset for the sender to use
+    st.durationCache.Store("initial_offset", segmentOffset)
+
+    // Start preprocessing goroutine
+    go preprocessNextVideos(st, db)
+
+    // Initialize tracks
+    st.trackVideo, err = webrtc.NewTrackLocalStaticSample(
+        webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264},
+        "video_"+sanitizeTrackID(stationName),
+        "pion",
+    )
+    if err != nil {
+        log.Printf("Station %s: Failed to create video track: %v", stationName, err)
+        return nil
+    }
+    st.trackAudio, err = webrtc.NewTrackLocalStaticSample(
+        webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
+        "audio_"+sanitizeTrackID(stationName),
+        "pion",
+    )
+    if err != nil {
+        log.Printf("Station %s: Failed to create audio track: %v", stationName, err)
+        return nil
+    }
+
+    log.Printf("Station %s: Initialized with %d segments for video %d, starting at segment %d with offset %f seconds", stationName, len(st.segmentList), st.currentVideo, currentSegmentIndex, segmentOffset)
+    return st
 }
 
 func discoverStations(db *sql.DB) {
@@ -472,315 +617,388 @@ func discoverStations(db *sql.DB) {
 }
 
 func sender(st *Station, db *sql.DB) {
-	audioFrameDur := time.Duration(AudioFrameMs) * time.Millisecond
-	cycleIndex := 0
-	for {
-		st.mu.Lock()
-		if len(st.segmentList) == 0 {
-			st.mu.Unlock()
-			time.Sleep(time.Second)
-			continue
-		}
-		if cycleIndex >= len(st.segmentList) {
-			// Current video finished, move to next video
-			oldSegments := st.segmentList
-			st.segmentList = nil
-			st.currentIndex++
-			if st.currentIndex >= len(st.videoQueue) {
-				st.currentIndex = 0 // Loop back to start
-			}
-			st.currentVideo = st.videoQueue[st.currentIndex]
+    audioFrameDur := time.Duration(AudioFrameMs) * time.Millisecond
+    cycleIndex := 0
+    initialOffsetApplied := false
+    var initialOffset float64
 
-			// Try to load preprocessed data
-			key := "preprocessed_" + fmt.Sprintf("%d", st.currentVideo)
-			var preprocessed PreprocessedVideo
-			if val, ok := st.fpsCache.Load(key); ok {
-				preprocessed = val.(PreprocessedVideo)
-				st.segmentList = preprocessed.segments
-				st.spsPPS = preprocessed.spsPPS
-				st.fmtpLine = preprocessed.fmtpLine
-				st.fpsCache.Delete(key)
-				log.Printf("Station %s: Using preprocessed data for video %d with %d segments", st.name, st.currentVideo, len(st.segmentList))
-			} else {
-				// Fallback: Process synchronously with timeout
-				log.Printf("Station %s: No preprocessed data for video %d, processing synchronously", st.name, st.currentVideo)
-				timeout := time.After(PreprocessTimeout)
-				done := make(chan struct{})
-				var segments []string
-				var spsPPS [][]byte
-				var fmtpLine string
-				var err error
-				go func() {
-					segments, spsPPS, fmtpLine, err = processVideo(st, st.currentVideo, db)
-					close(done)
-				}()
-				select {
-				case <-done:
-					if err != nil {
-						log.Printf("Station %s: Failed to process video %d: %v, retrying in 5s", st.name, st.currentVideo, err)
-						st.mu.Unlock()
-						time.Sleep(5 * time.Second)
-						continue
-					}
-					st.segmentList = segments
-					st.spsPPS = spsPPS
-					st.fmtpLine = fmtpLine
-				case <-timeout:
-					log.Printf("Station %s: Timeout processing video %d, retrying in 5s", st.name, st.currentVideo)
-					st.mu.Unlock()
-					time.Sleep(5 * time.Second)
-					continue
-				}
-			}
+    // Check for initial offset
+    if val, ok := st.durationCache.Load("initial_offset"); ok {
+        initialOffset = val.(float64)
+        log.Printf("Station %s: Applying initial offset of %f seconds", st.name, initialOffset)
+    }
 
-			// Clean up old segments
-			for _, seg := range oldSegments {
-				if err := os.Remove(seg); err != nil {
-					log.Printf("Failed to remove old segment %s: %v", seg, err)
-				}
-				opusSeg := strings.Replace(seg, ".h264", ".opus", 1)
-				if err := os.Remove(opusSeg); err != nil {
-					log.Printf("Failed to remove old opus segment %s: %v", opusSeg, err)
-				}
-				durSeg := strings.Replace(seg, ".h264", ".dur", 1)
-				if err := os.Remove(durSeg); err != nil {
-					log.Printf("Failed to remove old duration file %s: %v", durSeg, err)
-				}
-				st.fpsCache.Delete(seg)
-				st.durationCache.Delete(seg)
-			}
+    for {
+        st.mu.Lock()
+        if len(st.segmentList) == 0 {
+            st.mu.Unlock()
+            time.Sleep(time.Second)
+            continue
+        }
+        if cycleIndex >= len(st.segmentList) {
+            // Current video finished, move to next video
+            oldSegments := st.segmentList
+            st.segmentList = nil
+            st.currentIndex++
+            if st.currentIndex >= len(st.videoQueue) {
+                st.currentIndex = 0 // Loop back to start
+            }
+            st.currentVideo = st.videoQueue[st.currentIndex]
 
-			cycleIndex = 0
-			log.Printf("Station %s: Switched to video %d with %d segments", st.name, st.currentVideo, len(st.segmentList))
-		}
-		segPath := st.segmentList[cycleIndex]
-		st.mu.Unlock()
+            // Try to load preprocessed data
+            key := "preprocessed_" + fmt.Sprintf("%d", st.currentVideo)
+            var preprocessed PreprocessedVideo
+            if val, ok := st.fpsCache.Load(key); ok {
+                preprocessed = val.(PreprocessedVideo)
+                st.segmentList = preprocessed.segments
+                st.spsPPS = preprocessed.spsPPS
+                st.fmtpLine = preprocessed.fmtpLine
+                st.fpsCache.Delete(key)
+                log.Printf("Station %s: Using preprocessed data for video %d with %d segments", st.name, st.currentVideo, len(st.segmentList))
+            } else {
+                // Fallback: Process synchronously with timeout
+                log.Printf("Station %s: No preprocessed data for video %d, processing synchronously", st.name, st.currentVideo)
+                timeout := time.After(PreprocessTimeout)
+                done := make(chan struct{})
+                var segments []string
+                var spsPPS [][]byte
+                var fmtpLine string
+                var err error
+                go func() {
+                    segments, spsPPS, fmtpLine, err = processVideo(st, st.currentVideo, db)
+                    close(done)
+                }()
+                select {
+                case <-done:
+                    if err != nil {
+                        log.Printf("Station %s: Failed to process video %d: %v, retrying in 5s", st.name, st.currentVideo, err)
+                        st.mu.Unlock()
+                        time.Sleep(5 * time.Second)
+                        continue
+                    }
+                    st.segmentList = segments
+                    st.spsPPS = spsPPS
+                    st.fmtpLine = fmtpLine
+                case <-timeout:
+                    log.Printf("Station %s: Timeout processing video %d, retrying in 5s", st.name, st.currentVideo)
+                    st.mu.Unlock()
+                    time.Sleep(5 * time.Second)
+                    continue
+                }
+            }
 
-		testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
-		err := st.trackVideo.WriteSample(testSample)
-		if err != nil && strings.Contains(err.Error(), "not bound") {
-			val, ok := st.durationCache.Load(segPath)
-			segDur := DefaultDur
-			if ok {
-				segDur = val.(float64)
-			}
-			if segDur > 0 {
-				log.Printf("Station %s: No viewers, sleeping for segment %s duration %.2fs", st.name, segPath, segDur)
-				time.Sleep(time.Duration(segDur * float64(time.Second)))
-			} else {
-				log.Printf("Station %s: No viewers, but invalid dur for %s, skipping sleep", st.name, segPath)
-			}
-			cycleIndex++
-			continue
-		} else if err != nil {
-			log.Printf("Station %s: Track test write error: %v (continuing)", st.name, err)
-		}
-		data, segErr := os.ReadFile(segPath)
-		if segErr != nil {
-			log.Printf("Station %s: Segment read error %s: %v", st.name, segPath, segErr)
-			continue
-		}
-		if len(data) == 0 {
-			log.Printf("Station %s: Empty segment %s, skipping", st.name, segPath)
-			continue
-		}
-		log.Printf("Station %s: Processing segment %s (%d bytes)", st.name, segPath, len(data))
-		fpsNum := DefaultFPSNum
-		fpsDen := DefaultFPSDen
-		if val, ok := st.fpsCache.Load(segPath); ok {
-			pair := val.(fpsPair)
-			fpsNum = pair.num
-			fpsDen = pair.den
-			log.Printf("Station %s: Cache hit FPS for %s: %d/%d (%.2f fps)", st.name, segPath, fpsNum, fpsDen, float64(fpsNum)/float64(fpsDen))
-		}
-		frameDuration := time.Second * time.Duration(fpsDen) / time.Duration(fpsNum)
-		nalus := splitNALUs(data)
-		log.Printf("Station %s: Split %d NALUs from %s", st.name, len(nalus), segPath)
-		allNALUs := nalus
-		if len(st.spsPPS) > 0 {
-			allNALUs = append(st.spsPPS, nalus...)
-			log.Printf("Station %s: Prefixed %d config NALUs to segment", st.name, len(st.spsPPS))
-		}
-		audioPath := strings.Replace(segPath, ".h264", ".opus", 1)
-		var audioPackets [][]byte
-		if _, err := os.Stat(audioPath); err == nil {
-			audioData, err := os.ReadFile(audioPath)
-			if err == nil && len(audioData) > 0 {
-				audioPackets = parseOpusPackets(audioData)
-				log.Printf("Station %s: Parsed %d Opus packets from %s", st.name, len(audioPackets), audioPath)
-			} else {
-				log.Printf("Station %s: Failed to read audio %s: %v", st.name, audioPath, err)
-			}
-		} else {
-			log.Printf("Station %s: No audio file for %s", st.name, segPath)
-		}
-		var wg sync.WaitGroup
-		wg.Add(1)
-		if len(audioPackets) > 0 {
-			wg.Add(1)
-			go func(packets [][]byte) {
-				defer wg.Done()
-				audioStart := time.Now()
-				audioTs := time.Duration(0)
-				boundCheckedAudio := false
-				for pktIdx, pkt := range packets {
-					targetTime := audioStart.Add(audioTs)
-					now := time.Now()
-					if now.Before(targetTime) {
-						time.Sleep(targetTime.Sub(now))
-					}
-					if !boundCheckedAudio {
-						testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
-						if err := st.trackAudio.WriteSample(testSample); err != nil && strings.Contains(err.Error(), "not bound") {
-							log.Printf("Station %s: Audio track not bound, skipping segment audio", st.name)
-							break
-						}
-						boundCheckedAudio = true
-					}
-					sample := media.Sample{Data: pkt, Duration: audioFrameDur}
-					if err := st.trackAudio.WriteSample(sample); err != nil {
-						log.Printf("Station %s: Audio sample %d write error: %v", st.name, pktIdx, err)
-						if strings.Contains(err.Error(), "not bound") {
-							break
-						}
-					}
-					audioTs += audioFrameDur
-				}
-				log.Printf("Station %s: Sent %d audio samples for %s", st.name, len(packets), audioPath)
-			}(audioPackets)
-		}
-		go func(nalus [][]byte) {
-			defer wg.Done()
-			videoStart := time.Now()
-			videoTs := time.Duration(0)
-			segmentSamples := 0
-			idrSent := false
-			var currentFrame [][]byte
-			var hasVCL bool
-			boundChecked := false
-			for _, nalu := range nalus {
-				if len(nalu) == 0 {
-					continue
-				}
-				nalType := int(nalu[0] & 0x1F)
-				isVCL := nalType >= 1 && nalType <= 5
-				if hasVCL && !isVCL {
-					targetTime := videoStart.Add(videoTs)
-					now := time.Now()
-					if now.Before(targetTime) {
-						time.Sleep(targetTime.Sub(now))
-					}
-					var frameData bytes.Buffer
-					for _, n := range currentFrame {
-						frameData.Write([]byte{0x00, 0x00, 0x00, 0x01})
-						frameData.Write(n)
-					}
-					sampleData := frameData.Bytes()
-					if !boundChecked {
-						testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
-						if err := st.trackVideo.WriteSample(testSample); err != nil && strings.Contains(err.Error(), "not bound") {
-							log.Printf("Station %s: Video track not bound, skipping segment video", st.name)
-							return
-						}
-						boundChecked = true
-					}
-					sample := media.Sample{
-						Data:     sampleData,
-						Duration: frameDuration,
-					}
-					if err := st.trackVideo.WriteSample(sample); err != nil {
-						log.Printf("Station %s: Video sample write error: %v", st.name, err)
-					}
-					segmentSamples++
-					videoTs += frameDuration
-					currentFrame = [][]byte{nalu}
-					hasVCL = false
-				} else {
-					if isVCL {
-						firstMb, err := getFirstMbInSlice(nalu)
-						if err != nil {
-							continue
-						}
-						if firstMb == 0 && len(currentFrame) > 0 && hasVCL {
-							targetTime := videoStart.Add(videoTs)
-							now := time.Now()
-							if now.Before(targetTime) {
-								time.Sleep(targetTime.Sub(now))
-							}
-							var frameData bytes.Buffer
-							for _, n := range currentFrame {
-								frameData.Write([]byte{0x00, 0x00, 0x00, 0x01})
-								frameData.Write(n)
-							}
-							sampleData := frameData.Bytes()
-							if !boundChecked {
-								testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
-								if err := st.trackVideo.WriteSample(testSample); err != nil && strings.Contains(err.Error(), "not bound") {
-									log.Printf("Station %s: Video track not bound, skipping segment video", st.name)
-									return
-								}
-								boundChecked = true
-							}
-							sample := media.Sample{
-								Data:     sampleData,
-								Duration: frameDuration,
-							}
-							if err := st.trackVideo.WriteSample(sample); err != nil {
-								log.Printf("Station %s: Video sample write error: %v", st.name, err)
-							}
-							segmentSamples++
-							videoTs += frameDuration
-							currentFrame = [][]byte{}
-							hasVCL = false
-						}
-						currentFrame = append(currentFrame, nalu)
-						hasVCL = true
-						if nalType == 5 {
-							idrSent = true
-						}
-					} else {
-						currentFrame = append(currentFrame, nalu)
-					}
-				}
-			}
-			if len(currentFrame) > 0 {
-				targetTime := videoStart.Add(videoTs)
-				now := time.Now()
-				if now.Before(targetTime) {
-					time.Sleep(targetTime.Sub(now))
-				}
-				var frameData bytes.Buffer
-				for _, n := range currentFrame {
-					frameData.Write([]byte{0x00, 0x00, 0x00, 0x01})
-					frameData.Write(n)
-				}
-				sampleData := frameData.Bytes()
-				if !boundChecked {
-					testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
-					if err := st.trackVideo.WriteSample(testSample); err != nil && strings.Contains(err.Error(), "not bound") {
-						log.Printf("Station %s: Video track not bound, skipping segment video", st.name)
-						return
-					}
-					boundChecked = true
-				}
-				sample := media.Sample{
-					Data:     sampleData,
-					Duration: frameDuration,
-				}
-				if err := st.trackVideo.WriteSample(sample); err != nil {
-					log.Printf("Station %s: Video sample write error: %v", st.name, err)
-				}
-				segmentSamples++
-			}
-			if !idrSent {
-				log.Printf("Station %s: WARNING: No IDR in %s", st.name, segPath)
-			}
-			log.Printf("Station %s: Sent %d video frames for %s", st.name, segmentSamples, segPath)
-			cycleIndex++
-		}(allNALUs)
-		wg.Wait()
-		time.Sleep(10 * time.Millisecond)
-	}
+            // Clean up old segments
+            for _, seg := range oldSegments {
+                if err := os.Remove(seg); err != nil {
+                    log.Printf("Failed to remove old segment %s: %v", seg, err)
+                }
+                opusSeg := strings.Replace(seg, ".h264", ".opus", 1)
+                if err := os.Remove(opusSeg); err != nil {
+                    log.Printf("Failed to remove old opus segment %s: %v", opusSeg, err)
+                }
+                durSeg := strings.Replace(seg, ".h264", ".dur", 1)
+                if err := os.Remove(durSeg); err != nil {
+                    log.Printf("Failed to remove old duration file %s: %v", durSeg, err)
+                }
+                st.fpsCache.Delete(seg)
+                st.durationCache.Delete(seg)
+            }
+
+            cycleIndex = 0
+            initialOffsetApplied = false // Reset for new video
+            log.Printf("Station %s: Switched to video %d with %d segments", st.name, st.currentVideo, len(st.segmentList))
+        }
+        segPath := st.segmentList[cycleIndex]
+        st.mu.Unlock()
+
+        testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
+        err := st.trackVideo.WriteSample(testSample)
+        if err != nil && strings.Contains(err.Error(), "not bound") {
+            val, ok := st.durationCache.Load(segPath)
+            segDur := DefaultDur
+            if ok {
+                segDur = val.(float64)
+            }
+            if segDur > 0 {
+                log.Printf("Station %s: No viewers, sleeping for segment %s duration %.2fs", st.name, segPath, segDur)
+                time.Sleep(time.Duration(segDur * float64(time.Second)))
+            } else {
+                log.Printf("Station %s: No viewers, but invalid dur for %s, skipping sleep", st.name, segPath)
+            }
+            cycleIndex++
+            continue
+        } else if err != nil {
+            log.Printf("Station %s: Track test write error: %v (continuing)", st.name, err)
+        }
+        data, segErr := os.ReadFile(segPath)
+        if segErr != nil {
+            log.Printf("Station %s: Segment read error %s: %v", st.name, segPath, segErr)
+            continue
+        }
+        if len(data) == 0 {
+            log.Printf("Station %s: Empty segment %s, skipping", st.name, segPath)
+            continue
+        }
+        log.Printf("Station %s: Processing segment %s (%d bytes)", st.name, segPath, len(data))
+        fpsNum := DefaultFPSNum
+        fpsDen := DefaultFPSDen
+        if val, ok := st.fpsCache.Load(segPath); ok {
+            pair := val.(fpsPair)
+            fpsNum = pair.num
+            fpsDen = pair.den
+            log.Printf("Station %s: Cache hit FPS for %s: %d/%d (%.2f fps)", st.name, segPath, fpsNum, fpsDen, float64(fpsNum)/float64(fpsDen))
+        }
+        frameDuration := time.Second * time.Duration(fpsDen) / time.Duration(fpsNum)
+        nalus := splitNALUs(data)
+        log.Printf("Station %s: Split %d NALUs from %s", st.name, len(nalus), segPath)
+        allNALUs := nalus
+        if len(st.spsPPS) > 0 {
+            allNALUs = append(st.spsPPS, nalus...)
+            log.Printf("Station %s: Prefixed %d config NALUs to segment", st.name, len(st.spsPPS))
+        }
+        audioPath := strings.Replace(segPath, ".h264", ".opus", 1)
+        var audioPackets [][]byte
+        if _, err := os.Stat(audioPath); err == nil {
+            audioData, err := os.ReadFile(audioPath)
+            if err == nil && len(audioData) > 0 {
+                audioPackets = parseOpusPackets(audioData)
+                log.Printf("Station %s: Parsed %d Opus packets from %s", st.name, len(audioPackets), audioPath)
+            } else {
+                log.Printf("Station %s: Failed to read audio %s: %v", st.name, audioPath, err)
+            }
+        } else {
+            log.Printf("Station %s: No audio file for %s", st.name, segPath)
+        }
+
+        // Apply initial offset for the first segment
+        if !initialOffsetApplied && initialOffset > 0 {
+            framesToSkip := int(initialOffset / (float64(frameDuration) / float64(time.Second)))
+            audioFramesToSkip := int(initialOffset / (float64(audioFrameDur) / float64(time.Second)))
+            log.Printf("Station %s: Skipping %d video frames and %d audio frames for initial offset %f seconds", st.name, framesToSkip, audioFramesToSkip, initialOffset)
+
+            // Skip video frames
+            currentFrameCount := 0
+            var filteredNALUs [][]byte
+            var currentFrame [][]byte
+            var hasVCL bool
+            for _, nalu := range allNALUs {
+                if len(nalu) == 0 {
+                    continue
+                }
+                nalType := int(nalu[0] & 0x1F)
+                isVCL := nalType >= 1 && nalType <= 5
+                if hasVCL && !isVCL {
+                    if currentFrameCount >= framesToSkip {
+                        filteredNALUs = append(filteredNALUs, currentFrame...)
+                        filteredNALUs = append(filteredNALUs, nalu)
+                    }
+                    currentFrame = [][]byte{nalu}
+                    hasVCL = false
+                    currentFrameCount++
+                } else {
+                    if isVCL {
+                        firstMb, err := getFirstMbInSlice(nalu)
+                        if err != nil {
+                            continue
+                        }
+                        if firstMb == 0 && len(currentFrame) > 0 && hasVCL {
+                            if currentFrameCount >= framesToSkip {
+                                filteredNALUs = append(filteredNALUs, currentFrame...)
+                            }
+                            currentFrame = [][]byte{}
+                            hasVCL = false
+                            currentFrameCount++
+                        }
+                        currentFrame = append(currentFrame, nalu)
+                        hasVCL = true
+                    } else {
+                        currentFrame = append(currentFrame, nalu)
+                    }
+                }
+            }
+            if len(currentFrame) > 0 && currentFrameCount >= framesToSkip {
+                filteredNALUs = append(filteredNALUs, currentFrame...)
+            }
+            allNALUs = filteredNALUs
+
+            // Adjust audio packets
+            if len(audioPackets) > audioFramesToSkip {
+                audioPackets = audioPackets[audioFramesToSkip:]
+            } else {
+                audioPackets = nil
+            }
+
+            initialOffsetApplied = true
+            st.durationCache.Delete("initial_offset")
+        }
+
+        var wg sync.WaitGroup
+        wg.Add(1)
+        if len(audioPackets) > 0 {
+            wg.Add(1)
+            go func(packets [][]byte) {
+                defer wg.Done()
+                audioStart := time.Now()
+                audioTs := time.Duration(0)
+                boundCheckedAudio := false
+                for pktIdx, pkt := range packets {
+                    targetTime := audioStart.Add(audioTs)
+                    now := time.Now()
+                    if now.Before(targetTime) {
+                        time.Sleep(targetTime.Sub(now))
+                    }
+                    if !boundCheckedAudio {
+                        testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
+                        if err := st.trackAudio.WriteSample(testSample); err != nil && strings.Contains(err.Error(), "not bound") {
+                            log.Printf("Station %s: Audio track not bound, skipping segment audio", st.name)
+                            break
+                        }
+                        boundCheckedAudio = true
+                    }
+                    sample := media.Sample{Data: pkt, Duration: audioFrameDur}
+                    if err := st.trackAudio.WriteSample(sample); err != nil {
+                        log.Printf("Station %s: Audio sample %d write error: %v", st.name, pktIdx, err)
+                        if strings.Contains(err.Error(), "not bound") {
+                            break
+                        }
+                    }
+                    audioTs += audioFrameDur
+                }
+                log.Printf("Station %s: Sent %d audio samples for %s", st.name, len(packets), audioPath)
+            }(audioPackets)
+        }
+        go func(nalus [][]byte) {
+            defer wg.Done()
+            videoStart := time.Now()
+            videoTs := time.Duration(0)
+            segmentSamples := 0
+            idrSent := false
+            var currentFrame [][]byte
+            var hasVCL bool
+            boundChecked := false
+            for _, nalu := range nalus {
+                if len(nalu) == 0 {
+                    continue
+                }
+                nalType := int(nalu[0] & 0x1F)
+                isVCL := nalType >= 1 && nalType <= 5
+                if hasVCL && !isVCL {
+                    targetTime := videoStart.Add(videoTs)
+                    now := time.Now()
+                    if now.Before(targetTime) {
+                        time.Sleep(targetTime.Sub(now))
+                    }
+                    var frameData bytes.Buffer
+                    for _, n := range currentFrame {
+                        frameData.Write([]byte{0x00, 0x00, 0x00, 0x01})
+                        frameData.Write(n)
+                    }
+                    sampleData := frameData.Bytes()
+                    if !boundChecked {
+                        testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
+                        if err := st.trackVideo.WriteSample(testSample); err != nil && strings.Contains(err.Error(), "not bound") {
+                            log.Printf("Station %s: Video track not bound, skipping segment video", st.name)
+                            return
+                        }
+                        boundChecked = true
+                    }
+                    sample := media.Sample{
+                        Data:     sampleData,
+                        Duration: frameDuration,
+                    }
+                    if err := st.trackVideo.WriteSample(sample); err != nil {
+                        log.Printf("Station %s: Video sample write error: %v", st.name, err)
+                    }
+                    segmentSamples++
+                    videoTs += frameDuration
+                    currentFrame = [][]byte{nalu}
+                    hasVCL = false
+                } else {
+                    if isVCL {
+                        firstMb, err := getFirstMbInSlice(nalu)
+                        if err != nil {
+                            continue
+                        }
+                        if firstMb == 0 && len(currentFrame) > 0 && hasVCL {
+                            targetTime := videoStart.Add(videoTs)
+                            now := time.Now()
+                            if now.Before(targetTime) {
+                                time.Sleep(targetTime.Sub(now))
+                            }
+                            var frameData bytes.Buffer
+                            for _, n := range currentFrame {
+                                frameData.Write([]byte{0x00, 0x00, 0x00, 0x01})
+                                frameData.Write(n)
+                            }
+                            sampleData := frameData.Bytes()
+                            if !boundChecked {
+                                testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
+                                if err := st.trackVideo.WriteSample(testSample); err != nil && strings.Contains(err.Error(), "not bound") {
+                                    log.Printf("Station %s: Video track not bound, skipping segment video", st.name)
+                                    return
+                                }
+                                boundChecked = true
+                            }
+                            sample := media.Sample{
+                                Data:     sampleData,
+                                Duration: frameDuration,
+                            }
+                            if err := st.trackVideo.WriteSample(sample); err != nil {
+                                log.Printf("Station %s: Video sample write error: %v", st.name, err)
+                            }
+                            segmentSamples++
+                            videoTs += frameDuration
+                            currentFrame = [][]byte{}
+                            hasVCL = false
+                        }
+                        currentFrame = append(currentFrame, nalu)
+                        hasVCL = true
+                        if nalType == 5 {
+                            idrSent = true
+                        }
+                    } else {
+                        currentFrame = append(currentFrame, nalu)
+                    }
+                }
+            }
+            if len(currentFrame) > 0 {
+                targetTime := videoStart.Add(videoTs)
+                now := time.Now()
+                if now.Before(targetTime) {
+                    time.Sleep(targetTime.Sub(now))
+                }
+                var frameData bytes.Buffer
+                for _, n := range currentFrame {
+                    frameData.Write([]byte{0x00, 0x00, 0x00, 0x01})
+                    frameData.Write(n)
+                }
+                sampleData := frameData.Bytes()
+                if !boundChecked {
+                    testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
+                    if err := st.trackVideo.WriteSample(testSample); err != nil && strings.Contains(err.Error(), "not bound") {
+                        log.Printf("Station %s: Video track not bound, skipping segment video", st.name)
+                        return
+                    }
+                    boundChecked = true
+                }
+                sample := media.Sample{
+                    Data:     sampleData,
+                    Duration: frameDuration,
+                }
+                if err := st.trackVideo.WriteSample(sample); err != nil {
+                    log.Printf("Station %s: Video sample write error: %v", st.name, err)
+                }
+                segmentSamples++
+            }
+            if !idrSent {
+                log.Printf("Station %s: WARNING: No IDR in %s", st.name, segPath)
+            }
+            log.Printf("Station %s: Sent %d video frames for %s", st.name, segmentSamples, segPath)
+            cycleIndex++
+        }(allNALUs)
+        wg.Wait()
+        time.Sleep(10 * time.Millisecond)
+    }
 }
 
 func nalTypeToString(t int) string {

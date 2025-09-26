@@ -1,1 +1,0 @@
-g++ -std=c++17 -O3 -march=native -o ad_break_detector ad_break_detector.cpp
