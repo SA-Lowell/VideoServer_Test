@@ -45,6 +45,7 @@
     <style>
         #video-player { width: 640px; height: 360px; }
         #breaks-list { margin-top: 20px; }
+        #selected-breaks-list { margin-top: 20px; }
         .break-item { margin-bottom: 10px; }
         #folder-browser { border: 1px solid #ccc; padding: 10px; max-height: 300px; overflow-y: auto; }
         .dir-item { cursor: pointer; color: blue; }
@@ -52,6 +53,11 @@
         .detector-buttons { margin-top: 10px; }
         #detection-status { margin-top: 10px; color: #333; font-weight: bold; display: none; }
         #detection-status.active { display: block; }
+        #breaks-select { width: 300px; }
+        #selected-breaks-list .break-item button { margin-left: 10px; }
+        #save-breaks-button { margin-top: 10px; }
+        #seek-controls { margin-top: 10px; }
+        #seek-seconds { width: 60px; }
     </style>
 </head>
 <body>
@@ -90,6 +96,11 @@
     <h2>Selected Video</h2>
     <div id="selected-info"></div>
     <video id="video-player" controls></video>
+    <div id="seek-controls">
+        <input type="number" id="seek-seconds" value="10" min="0"> seconds
+        <button id="seek-backward-button">Seek Backward</button>
+        <button id="seek-forward-button">Seek Forward</button>
+    </div>
     <div class="detector-buttons">
         <button id="detect-fade-button" disabled>Detect Fade-to-Black Ad Breaks</button>
         <button id="detect-hard-cut-button" disabled>Detect Hard-Cut Ad Breaks</button>
@@ -97,12 +108,22 @@
     <div id="detection-status">Detecting ad breaks, please wait...</div>
 
     <h2>Detected Breaks</h2>
-    <div id="breaks-list"></div>
+    <div id="breaks-list">
+        <select id="breaks-select" size="5"></select>
+        <button id="add-break-button" disabled>Add Selected Break</button>
+        <button id="preview-break-button" disabled>Preview Selected Break</button>
+    </div>
+
+    <h2>Selected Breaks to Save</h2>
+    <div id="selected-breaks-list"></div>
+    <button id="save-breaks-button" disabled>Save Breakpoints</button>
 
     <script>
         let selectedID = null;
         let selectedURI = null;
         let currentPath = '';
+        let detectedBreaks = [];
+        let selectedBreaks = [];
 
         function selectVideo(id, uri, fromDB) {
             selectedID = id;
@@ -111,6 +132,13 @@
             document.getElementById('video-player').src = `/videos/${uri}`;
             document.getElementById('detect-fade-button').disabled = false;
             document.getElementById('detect-hard-cut-button').disabled = false;
+            document.getElementById('add-break-button').disabled = true;
+            document.getElementById('preview-break-button').disabled = true;
+            document.getElementById('save-breaks-button').disabled = true;
+            detectedBreaks = [];
+            selectedBreaks = [];
+            updateBreaksSelect();
+            updateSelectedBreaksList();
         }
 
         function loadContents(path) {
@@ -154,7 +182,6 @@
             const fadeButton = document.getElementById('detect-fade-button');
             const hardCutButton = document.getElementById('detect-hard-cut-button');
             
-            // Show status and disable buttons
             statusDiv.classList.add('active');
             fadeButton.disabled = true;
             hardCutButton.disabled = true;
@@ -165,18 +192,54 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
             }).then(res => res.json()).then(data => {
-                // Hide status and re-enable buttons
                 statusDiv.classList.remove('active');
                 fadeButton.disabled = false;
                 hardCutButton.disabled = false;
-                displayBreaks(data.breaks);
+                detectedBreaks = data.breaks;
+                updateBreaksSelect();
+                const hasBreaks = detectedBreaks.length > 0;
+                document.getElementById('add-break-button').disabled = !hasBreaks;
+                document.getElementById('preview-break-button').disabled = !hasBreaks;
             }).catch(err => {
-                // Hide status, re-enable buttons, and show error
                 statusDiv.classList.remove('active');
                 fadeButton.disabled = false;
                 hardCutButton.disabled = false;
                 console.error(err);
                 alert('Error detecting ad breaks: ' + err.message);
+            });
+        }
+
+        function updateBreaksSelect() {
+            const select = document.getElementById('breaks-select');
+            select.innerHTML = '';
+            detectedBreaks.forEach((b, index) => {
+                const option = document.createElement('option');
+                option.value = index;
+                option.text = `Start: ${b.start.toFixed(4)}, Mid: ${b.mid.toFixed(4)}, End: ${b.end.toFixed(4)}`;
+                select.appendChild(option);
+            });
+        }
+
+        function updateSelectedBreaksList() {
+            const list = document.getElementById('selected-breaks-list');
+            list.innerHTML = '';
+            selectedBreaks.forEach((b, index) => {
+                const div = document.createElement('div');
+                div.className = 'break-item';
+                div.innerHTML = `Start: ${b.start.toFixed(4)}, Mid: ${b.mid.toFixed(4)}, End: ${b.end.toFixed(4)}`;
+                const removeBtn = document.createElement('button');
+                removeBtn.textContent = 'Remove';
+                removeBtn.onclick = () => {
+                    selectedBreaks.splice(index, 1);
+                    updateSelectedBreaksList();
+                    document.getElementById('save-breaks-button').disabled = selectedBreaks.length === 0;
+                };
+                const previewBtn = document.createElement('button');
+                previewBtn.textContent = 'Preview Break';
+                previewBtn.onclick = () => previewBreak(b.mid);
+                div.appendChild(removeBtn);
+                div.appendChild(previewBtn);
+                list.appendChild(div);
             });
         }
 
@@ -188,36 +251,59 @@
             detectBreaks('hard-cut');
         });
 
-        function displayBreaks(breaks) {
-            const list = document.getElementById('breaks-list');
-            list.innerHTML = '';
-            breaks.forEach(b => {
-                const div = document.createElement('div');
-                div.className = 'break-item';
-                div.innerHTML = `Start: ${b.start.toFixed(4)}, Mid: ${b.mid.toFixed(4)}, End: ${b.end.toFixed(4)}`;
-                const addBtn = document.createElement('button');
-                addBtn.textContent = 'Add Break';
-                addBtn.onclick = () => addBreak(selectedID, b.mid);
-                const prevBtn = document.createElement('button');
-                prevBtn.textContent = 'Preview Break';
-                prevBtn.onclick = () => previewBreak(b.mid);
-                div.appendChild(addBtn);
-                div.appendChild(prevBtn);
-                list.appendChild(div);
-            });
-        }
+        document.getElementById('add-break-button').addEventListener('click', () => {
+            const select = document.getElementById('breaks-select');
+            const selectedIndex = select.selectedIndex;
+            if (selectedIndex >= 0) {
+                const breakPoint = detectedBreaks[selectedIndex];
+                if (!selectedBreaks.some(b => b.mid === breakPoint.mid)) {
+                    selectedBreaks.push(breakPoint);
+                    updateSelectedBreaksList();
+                    document.getElementById('save-breaks-button').disabled = false;
+                }
+            }
+        });
 
-        function addBreak(id, time) {
-            fetch('/add-break', {
+        document.getElementById('preview-break-button').addEventListener('click', () => {
+            const select = document.getElementById('breaks-select');
+            const selectedIndex = select.selectedIndex;
+            if (selectedIndex >= 0) {
+                const breakPoint = detectedBreaks[selectedIndex];
+                previewBreak(breakPoint.mid);
+            }
+        });
+
+        document.getElementById('save-breaks-button').addEventListener('click', () => {
+            if (selectedBreaks.length === 0) return;
+            const breaks = selectedBreaks.map(b => ({ id: selectedID, time: b.mid }));
+            fetch('/add-breaks', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: id, time: time })
+                body: JSON.stringify(breaks)
             }).then(res => res.json()).then(data => {
                 if (data.success) {
-                    alert('Break added');
+                    alert('Breakpoints saved successfully');
+                    selectedBreaks = [];
+                    updateSelectedBreaksList();
+                    document.getElementById('save-breaks-button').disabled = true;
                 }
-            }).catch(err => console.error(err));
-        }
+            }).catch(err => {
+                console.error(err);
+                alert('Error saving breakpoints: ' + err.message);
+            });
+        });
+
+        document.getElementById('seek-backward-button').addEventListener('click', () => {
+            const video = document.getElementById('video-player');
+            const seconds = parseFloat(document.getElementById('seek-seconds').value) || 0;
+            video.currentTime = Math.max(0, video.currentTime - seconds);
+        });
+
+        document.getElementById('seek-forward-button').addEventListener('click', () => {
+            const video = document.getElementById('video-player');
+            const seconds = parseFloat(document.getElementById('seek-seconds').value) || 0;
+            video.currentTime = Math.min(video.duration, video.currentTime + seconds);
+        });
 
         function previewBreak(time) {
             const video = document.getElementById('video-player');

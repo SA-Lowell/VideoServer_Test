@@ -51,6 +51,11 @@ type DirEntry struct {
 	Path string `json:"path"` // Relative path
 }
 
+type AddBreakReq struct {
+	ID   int64   `json:"id"`
+	Time float64 `json:"time"`
+}
+
 var db *sql.DB
 
 func main() {
@@ -104,6 +109,7 @@ func main() {
 	r.POST("/add-video", addVideoHandler)
 	r.POST("/detect-breaks", detectBreaksHandler)
 	r.POST("/add-break", addBreakHandler)
+	r.POST("/add-breaks", addBreaksHandler)
 
 	r.NoRoute(func(c *gin.Context) {
 		c.HTML(http.StatusNotFound, "404.html", gin.H{"error": "404"})
@@ -358,11 +364,6 @@ func detectBreaksHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"breaks": breaks, "video_id": videoID})
 }
 
-type AddBreakReq struct {
-	ID   int64   `json:"id"`
-	Time float64 `json:"time"`
-}
-
 func addBreakHandler(c *gin.Context) {
 	var req AddBreakReq
 	if err := c.BindJSON(&req); err != nil {
@@ -374,6 +375,53 @@ func addBreakHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+func addBreaksHandler(c *gin.Context) {
+	var req []AddBreakReq
+	if err := c.BindJSON(&req); err != nil {
+		log.Printf("BindJSON error for add-breaks: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body: " + err.Error()})
+		return
+	}
+
+	if len(req) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No breakpoints provided"})
+		return
+	}
+
+	// Start a transaction
+	tx, err := db.Begin()
+	if err != nil {
+		log.Printf("Failed to start transaction: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start transaction: " + err.Error()})
+		return
+	}
+
+	// Insert all breakpoints
+	for _, breakPoint := range req {
+		if breakPoint.ID == 0 {
+			tx.Rollback()
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid video ID in breakpoint"})
+			return
+		}
+		_, err := tx.Exec("INSERT INTO video_metadata (video_id, metadata_type_id, value) VALUES ($1, 1, to_jsonb($2::numeric))", breakPoint.ID, breakPoint.Time)
+		if err != nil {
+			tx.Rollback()
+			log.Printf("Failed to insert breakpoint for video ID %d: %v", breakPoint.ID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to insert breakpoint: " + err.Error()})
+			return
+		}
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		log.Printf("Failed to commit transaction: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit transaction: " + err.Error()})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
@@ -416,7 +464,7 @@ func updateAdBreaksHandler(c *gin.Context) {
 			var m Metadata
 			if err := tmrows.Scan(&m.TypeName, &m.Value); err != nil {
 				log.Printf("Title metadata scan error: %v", err)
-			 c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
 			t.TitleMetadata = append(t.TitleMetadata, m)
