@@ -13,17 +13,26 @@ struct Period
     double end;
 };
 
+struct FrameData
+{
+    double timestamp;
+    int black_percentage = 0;
+    bool is_scene_change = false;
+    double scene_score = 0.0;
+    double rms_level = 0.0;
+};
+
 std::string exec(const std::string& cmd)
 {
     std::string result = "";
     char buffer[128];
     FILE* pipe = popen(cmd.c_str(), "r");
 
-    if(!pipe)return "ERROR";
+    if(!pipe) return "ERROR";
 
     while(!feof(pipe))
     {
-        if(fgets(buffer, 128, pipe) != NULL)result += buffer;
+        if(fgets(buffer, 128, pipe) != NULL) result += buffer;
     }
 
     pclose(pipe);
@@ -36,12 +45,12 @@ std::string secondsToMMSS(double seconds)
     int min = static_cast<int>(seconds / 60);
     double sec = seconds - min * 60;
     std::ostringstream oss;
-    oss << std::setfill('0') << std::setw(2) << min << ":" << std::fixed << std::setprecision(21) << std::setw(24) << sec;
+    oss << std::setfill('0') << std::setw(2) << min << ":" << std::fixed << std::setprecision(3) << std::setw(6) << sec;
 
     return oss.str();
 }
 
-std::vector<Period> parseSilence(const std::string& output)
+std::vector<Period> parseSilence(const std::string& output, double start_time)
 {
     std::vector<Period> periods;
     std::istringstream iss(output);
@@ -51,23 +60,31 @@ std::vector<Period> parseSilence(const std::string& output)
     while(std::getline(iss, line))
     {
         size_t pos_start = line.find("[silencedetect @");
-
-        if(pos_start == std::string::npos)continue;
+        if(pos_start == std::string::npos) continue;
 
         size_t pos_silence_start = line.find("silence_start: ");
         size_t pos_silence_end = line.find("silence_end: ");
 
         if(pos_silence_start != std::string::npos)
         {
-            current_start = std::stod(line.substr(pos_silence_start + 15));
+            try {
+                current_start = start_time + std::stod(line.substr(pos_silence_start + 15));
+            } catch (...) {
+                continue;
+            }
         }
-        else if(pos_silence_end != std::string::npos && current_start >= 0.0)
+        else if(pos_silence_end != std::string::npos && current_start >= start_time)
         {
             size_t end_pos = pos_silence_end + 13;
             size_t space_pos = line.find(' ', end_pos);
-            double end = std::stod(line.substr(end_pos, space_pos - end_pos));
+            double end;
+            try {
+                end = start_time + std::stod(line.substr(end_pos, space_pos - end_pos));
+            } catch (...) {
+                continue;
+            }
 
-            if(end - current_start >= 0.01)
+            if(end - current_start >= 0.005)
             {
                 periods.push_back({current_start, end});
             }
@@ -79,7 +96,7 @@ std::vector<Period> parseSilence(const std::string& output)
     return periods;
 }
 
-std::vector<Period> parseBlack(const std::string& output)
+std::vector<Period> parseBlack(const std::string& output, double start_time)
 {
     std::vector<Period> periods;
     std::istringstream iss(output);
@@ -92,10 +109,15 @@ std::vector<Period> parseBlack(const std::string& output)
 
         if(pos_black_start != std::string::npos && pos_black_end != std::string::npos)
         {
-            double start = std::stod(line.substr(pos_black_start + 12, pos_black_end - (pos_black_start + 12)));
-            double end = std::stod(line.substr(pos_black_end + 11));
+            double start, end;
+            try {
+                start = start_time + std::stod(line.substr(pos_black_start + 12, pos_black_end - (pos_black_start + 12)));
+                end = start_time + std::stod(line.substr(pos_black_end + 11));
+            } catch (...) {
+                continue;
+            }
 
-            if(end - start >= 0.01)
+            if(end - start >= 0.005)
             {
                 periods.push_back({start, end});
             }
@@ -105,60 +127,153 @@ std::vector<Period> parseBlack(const std::string& output)
     return periods;
 }
 
-bool overlaps(const Period& a, const Period& b, double& overlap_start, double& overlap_end)
+std::vector<FrameData> parseFrameData(const std::string& output, double start_time)
 {
-    overlap_start = std::max(a.start, b.start);
-    overlap_end = std::min(a.end, b.end);
+    std::vector<FrameData> frame_data;
+    std::istringstream iss(output);
+    std::string line;
+    double current_scene_score = 0.0;
 
-    return overlap_start < overlap_end;
-}
-
-std::vector<Period> findOverlaps(const std::vector<Period>& silences, const std::vector<Period>& blacks, double min_duration = 0.1)
-{
-    std::vector<Period> overlap_periods;
-
-    for (const auto& s : silences)
+    while(std::getline(iss, line))
     {
-        for (const auto& b : blacks)
+        size_t pos_metadata = line.find("lavfi.scene_score=");
+        if(pos_metadata != std::string::npos)
         {
-            double o_start, o_end;
+            try {
+                current_scene_score = std::stod(line.substr(pos_metadata + 18));
+            } catch (...) {
+                current_scene_score = 0.0;
+            }
+        }
 
-            if (overlaps(s, b, o_start, o_end) && (o_end - o_start >= min_duration))
+        size_t pos_blackframe = line.find("[blackframe @");
+        if(pos_blackframe != std::string::npos)
+        {
+            size_t pos_pblack = line.find(" pblack:");
+            if(pos_pblack != std::string::npos)
             {
-                overlap_periods.push_back({o_start, o_end});
+                try {
+                    int black_percentage = std::stoi(line.substr(pos_pblack + 8));
+                    FrameData frame;
+                    frame.black_percentage = black_percentage;
+                    frame_data.push_back(frame);
+                } catch (...) {
+                    continue;
+                }
+            }
+        }
+
+        size_t pos_showinfo = line.find("[showinfo @");
+        if(pos_showinfo != std::string::npos)
+        {
+            size_t pos_pts_time = line.find("pts_time:");
+            if(pos_pts_time != std::string::npos)
+            {
+                try {
+                    double relative_time = std::stod(line.substr(pos_pts_time + 9));
+                    double absolute_time = start_time + relative_time;
+                    if(!frame_data.empty() && frame_data.back().timestamp == 0.0)
+                    {
+                        frame_data.back().timestamp = absolute_time;
+                        frame_data.back().scene_score = current_scene_score;
+                        frame_data.back().is_scene_change = (current_scene_score > 0.3);
+                    }
+                    else
+                    {
+                        FrameData frame;
+                        frame.timestamp = absolute_time;
+                        frame.scene_score = current_scene_score;
+                        frame.is_scene_change = (current_scene_score > 0.3);
+                        frame_data.push_back(frame);
+                    }
+                    current_scene_score = 0.0;
+                } catch (...) {
+                    continue;
+                }
+            }
+        }
+
+        size_t pos_astats = line.find("[astats @");
+        if(pos_astats != std::string::npos)
+        {
+            size_t pos_rms = line.find("RMS level dB:");
+            size_t pos_pts_time = line.find("pts_time:");
+            if(pos_rms != std::string::npos && pos_pts_time != std::string::npos)
+            {
+                try {
+                    double relative_time = std::stod(line.substr(pos_pts_time + 9));
+                    double absolute_time = start_time + relative_time;
+                    double rms = std::stod(line.substr(pos_rms + 13));
+                    for(auto& frame : frame_data)
+                    {
+                        if(std::abs(frame.timestamp - absolute_time) < 0.02)
+                        {
+                            frame.rms_level = rms;
+                            break;
+                        }
+                    }
+                } catch (...) {
+                    continue;
+                }
             }
         }
     }
 
-    if(overlap_periods.empty())return overlap_periods;
+    std::sort(frame_data.begin(), frame_data.end(), [](const FrameData& a, const FrameData& b) {
+        return a.timestamp < b.timestamp;
+    });
 
-    std::sort
-    (
-        overlap_periods.begin(),
-        overlap_periods.end(),
-        [](const Period& a, const Period& b)
-        {
-            return a.start < b.start;
-        }
-    );
+    return frame_data;
+}
 
-    std::vector<Period> merged;
-    Period current = overlap_periods[0];
+bool overlaps(const Period& a, const Period& b, double& overlap_start, double& overlap_end)
+{
+    overlap_start = std::max(a.start, b.start);
+    overlap_end = std::min(a.end, b.end);
+    return overlap_start < overlap_end;
+}
 
-    for(size_t i = 1; i < overlap_periods.size(); ++i)
+std::vector<Period> findOverlaps(const std::vector<Period>& silences, const std::vector<FrameData>& frame_data, const std::vector<Period>& blacks, double min_duration = 0.005)
+{
+    std::vector<Period> periods;
+
+    // Check overlaps between silences and black periods
+    for (const auto& s : silences)
     {
-        if(current.end >= overlap_periods[i].start)
+        for (const auto& b : blacks)
         {
-            current.end = std::max(current.end, overlap_periods[i].end);
-        }
-        else
-        {
-            merged.push_back(current);
-            current = overlap_periods[i];
+            double overlap_start, overlap_end;
+            if (overlaps(s, b, overlap_start, overlap_end) && (overlap_end - overlap_start >= min_duration))
+            {
+                periods.push_back({overlap_start, overlap_end});
+            }
         }
     }
 
-    merged.push_back(current);
+    if (periods.empty()) return periods;
+
+    std::sort(periods.begin(), periods.end(), [](const Period& a, const Period& b) {
+        return a.start < b.start;
+    });
+
+    std::vector<Period> merged;
+    if (!periods.empty())
+    {
+        Period current = periods[0];
+        for (size_t i = 1; i < periods.size(); ++i)
+        {
+            if (current.end >= periods[i].start)
+            {
+                current.end = std::max(current.end, periods[i].end);
+            }
+            else
+            {
+                merged.push_back(current);
+                current = periods[i];
+            }
+        }
+        merged.push_back(current);
+    }
 
     return merged;
 }
@@ -172,6 +287,7 @@ int main(int argc, char* argv[])
     }
 
     std::string video = argv[1];
+    const double start_time = 0.0;
 
     bool show_decimal = true;
     bool no_format = false;
@@ -183,13 +299,12 @@ int main(int argc, char* argv[])
     for(int i = 2; i < argc; ++i)
     {
         std::string arg = argv[i];
-
-        if(arg == "--hide-decimal")show_decimal = false;
-        else if(arg == "--hide-mmss")show_mmss = false;
-        else if(arg == "--hide-start")show_start = false;
-        else if(arg == "--hide-midpoint")show_midpoint = false;
-        else if(arg == "--hide-end")show_end = false;
-        else if(arg == "--no-format")no_format = true;
+        if(arg == "--hide-decimal") show_decimal = false;
+        else if(arg == "--hide-mmss") show_mmss = false;
+        else if(arg == "--hide-start") show_start = false;
+        else if(arg == "--hide-midpoint") show_midpoint = false;
+        else if(arg == "--hide-end") show_end = false;
+        else if(arg == "--no-format") no_format = true;
         else
         {
             std::cerr << "Unknown option: " << arg << std::endl;
@@ -210,29 +325,31 @@ int main(int argc, char* argv[])
 
     double video_duration = std::stod(duration_output);
 
-    if(!no_format)std::cout << "Video duration: " << std::fixed << std::setprecision(21) << video_duration << std::endl;
+    if(!no_format) std::cout << "Video duration: " << std::fixed << std::setprecision(3) << video_duration << std::endl;
 
-    std::string silence_cmd = "ffmpeg -i \"" + video + "\" -af silencedetect=noise=-35dB:d=0.03 -f null - 2>&1";
+    std::string silence_cmd = "ffmpeg -i \"" + video + "\" -af silencedetect=noise=-45dB:d=0.005 -f null - 2>&1";
     std::string silence_output = exec(silence_cmd);
-    std::vector<Period> silences = parseSilence(silence_output);
+    std::vector<Period> silences = parseSilence(silence_output, start_time);
 
-    std::string black_cmd = "ffmpeg -i \"" + video + "\" -vf blackdetect=d=0.1:pic_th=0.95:pix_th=0.10 -f null - 2>&1";
+    std::string black_cmd = "ffmpeg -i \"" + video + "\" -vf blackdetect=d=0.01:pic_th=0.70:pix_th=0.05 -f null - 2>&1";
     std::string black_output = exec(black_cmd);
-    std::vector<Period> blacks = parseBlack(black_output);
+    std::vector<Period> blacks = parseBlack(black_output, start_time);
 
-    std::vector<Period> ad_points = findOverlaps(silences, blacks, 0.03);
+    std::string frame_cmd = "ffmpeg -i \"" + video + "\" -vf \"setpts=PTS-STARTPTS,select=1,metadata=print,blackframe=amount=0:threshold=0,showinfo\" -af astats=metadata=1:reset=1 -f null - 2>&1";
+    std::string frame_output = exec(frame_cmd);
+
+    std::vector<FrameData> frame_data = parseFrameData(frame_output, start_time);
+
+    std::vector<Period> ad_points = findOverlaps(silences, frame_data, blacks, 0.005);
 
     std::vector<Period> filtered_points;
-    const double epsilon = 1.0;
-
     for(const auto& p : ad_points)
     {
         double adjusted_start = std::max(p.start, 0.0);
         double adjusted_end = std::min(p.end, video_duration);
-
-        if(adjusted_start > epsilon && adjusted_end < (video_duration - epsilon))
+        if(adjusted_start > 1.0 && adjusted_end < (video_duration - 1.0))
         {
-            filtered_points.push_back(p);
+            filtered_points.push_back({adjusted_start, adjusted_end});
         }
     }
 
@@ -242,62 +359,61 @@ int main(int argc, char* argv[])
     }
     else
     {
-bool output_written = false;
+        bool output_written = false;
         for(const auto& p : filtered_points)
         {
             double midpoint = p.start + ((p.end - p.start) / 2.0);
 
-
-        if(no_format)
-        {
-            if(show_decimal && (show_start || show_midpoint || show_end))
+            if(no_format)
             {
-                if(show_start)
+                if(show_decimal && (show_start || show_midpoint || show_end))
                 {
-                if(output_written)std::cout << ' ';
-                    std::cout << std::fixed << std::setprecision(21) << p.start;
-                    output_written = true;
-                }
-                if(show_midpoint)
-                {
-                if(output_written)std::cout << ' ';
-                    std::cout << std::fixed << std::setprecision(21) << midpoint;
-                    output_written = true;
-                }
-                if(show_end)
-                {
-                if(output_written)std::cout << ' ';
-                    std::cout << std::fixed << std::setprecision(21) << p.end;
-                    output_written = true;
+                    if(show_start)
+                    {
+                        if(output_written) std::cout << ' ';
+                        std::cout << std::fixed << std::setprecision(3) << p.start;
+                        output_written = true;
+                    }
+                    if(show_midpoint)
+                    {
+                        if(output_written) std::cout << ' ';
+                        std::cout << std::fixed << std::setprecision(3) << midpoint;
+                        output_written = true;
+                    }
+                    if(show_end)
+                    {
+                        if(output_written) std::cout << ' ';
+                        std::cout << std::fixed << std::setprecision(3) << p.end;
+                        output_written = true;
+                    }
                 }
             }
-        }
-        else
-        {
-            std::cout << "Potential ad insertion period:" << std::endl;
-
-            if(show_decimal && (show_start || show_midpoint || show_end))
+            else
             {
-                if(show_start || show_midpoint || show_end)std::cout << "\tDecimal seconds:" << std::endl;
+                std::cout << "Potential ad insertion period:" << std::endl;
 
-                if(show_start)std::cout << "\t\tStart:" << std::fixed << std::setprecision(21) << p.start << std::endl;
-                if(show_midpoint)std::cout << "\t\tMidpoint:" << std::fixed << std::setprecision(21) << midpoint << std::endl;
-                if(show_end)std::cout << "\t\tEnd:" << std::fixed << std::setprecision(21) << p.end << std::endl;
+                if(show_decimal && (show_start || show_midpoint || show_end))
+                {
+                    if(show_start || show_midpoint || show_end) std::cout << "\tDecimal seconds:" << std::endl;
 
-                if(show_start || show_midpoint || show_end)std::cout << std::endl;
+                    if(show_start) std::cout << "\t\tStart: " << std::fixed << std::setprecision(3) << p.start << std::endl;
+                    if(show_midpoint) std::cout << "\t\tMidpoint: " << std::fixed << std::setprecision(3) << midpoint << std::endl;
+                    if(show_end) std::cout << "\t\tEnd: " << std::fixed << std::setprecision(3) << p.end << std::endl;
+
+                    if(show_start || show_midpoint || show_end) std::cout << std::endl;
+                }
+
+                if(show_mmss && (show_start || show_midpoint || show_end))
+                {
+                    if(show_start || show_midpoint || show_end) std::cout << "\tMM:SS.d" << std::endl;
+
+                    if(show_start) std::cout << "\t\tStart: " << secondsToMMSS(p.start) << std::endl;
+                    if(show_midpoint) std::cout << "\t\tMidpoint: " << secondsToMMSS(midpoint) << std::endl;
+                    if(show_end) std::cout << "\t\tEnd: " << secondsToMMSS(p.end) << std::endl;
+
+                    if(show_start || show_midpoint || show_end) std::cout << std::endl;
+                }
             }
-
-            if(show_mmss && (show_start || show_midpoint || show_end))
-            {
-                if(show_start || show_midpoint || show_end)std::cout << "\tMM:SS.d" << std::endl;
-
-                if(show_start)std::cout << "\t\tStart:" << std::fixed << secondsToMMSS(p.start) << std::endl;
-                if(show_midpoint)std::cout << "\t\tMidpoint:" << std::fixed << secondsToMMSS(midpoint) << std::endl;
-                if(show_end)std::cout << "\t\tEnd:" << std::fixed << secondsToMMSS(p.end) << std::endl;
-
-                if(show_start || show_midpoint || show_end)std::cout << std::endl;
-            }
-        }
         }
     }
 

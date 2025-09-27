@@ -170,7 +170,7 @@
             const container = document.getElementById('selected-videos-container');
             const sectionHtml = `
                 <div class="video-section" id="video-section-${id}">
-                    <div>Video ID: ${id}, URI: ${uri} <button id="remove-button-${id}">Remove</button></div>
+                    <div>Video ID: ${id}, URI: ${uri} <button id="remove-button-${id}">Remove</button> <button id="repair-button-${id}">Repair Video</button> <button id="fix-audio-button-${id}">Fix Audio</button></div>
                     <video class="video-player" id="video-player-${id}" controls></video>
                     <div class="seek-controls" id="seek-controls-${id}">
                         <input type="number" class="seek-seconds" id="seek-seconds-${id}" value="10" min="0"> seconds
@@ -214,6 +214,94 @@
             document.getElementById(`seek-backward-button-${id}`).addEventListener('click', () => seekBackward(id));
             document.getElementById(`seek-forward-button-${id}`).addEventListener('click', () => seekForward(id));
             document.getElementById(`remove-button-${id}`).addEventListener('click', () => removeSection(id));
+            document.getElementById(`repair-button-${id}`).addEventListener('click', () => repairVideo(id));
+            document.getElementById(`fix-audio-button-${id}`).addEventListener('click', () => fixAudio(id));
+        }
+
+        function fixAudio(id) {
+            const video = document.getElementById(`video-player-${id}`);
+            const fixButton = document.getElementById(`fix-audio-button-${id}`);
+            fixButton.disabled = true;
+
+            // Pause the video to release any file locks
+            const wasPlaying = !video.paused;
+            if (wasPlaying) {
+                video.pause();
+            }
+
+            fetch('/fix-audio', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: id })
+            }).then(res => {
+                if (!res.ok) {
+                    throw new Error(`HTTP error! Status: ${res.status}`);
+                }
+                return res.json();
+            }).then(data => {
+                if (data.temp_uri) {
+                    const currentTime = video.currentTime;
+                    video.src = `${data.temp_uri}?t=${new Date().getTime()}`; // Add timestamp to avoid caching
+                    video.load();
+                    video.addEventListener('loadeddata', () => {
+                        video.currentTime = currentTime;
+                        if (wasPlaying) {
+                            video.play();
+                        }
+                    }, { once: true });
+                    alert('Audio fixed successfully (temporary version loaded)');
+                } else {
+                    throw new Error(data.error || 'Unknown error during audio fix');
+                }
+                fixButton.disabled = false;
+            }).catch(err => {
+                fixButton.disabled = false;
+                console.error('Error fixing audio:', err);
+                alert('Error fixing audio: ' + err.message);
+            });
+        }
+
+        function repairVideo(id) {
+            const video = document.getElementById(`video-player-${id}`);
+            const repairButton = document.getElementById(`repair-button-${id}`);
+            repairButton.disabled = true;
+            const uri = videosData[id].uri;
+
+            // Pause the video to release any file locks
+            if (!video.paused) {
+                video.pause();
+            }
+
+            fetch('/repair-video', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: id })
+            }).then(res => {
+                if (!res.ok) {
+                    throw new Error(`HTTP error! Status: ${res.status}`);
+                }
+                return res.json();
+            }).then(data => {
+                repairButton.disabled = false;
+                if (data.success) {
+                    // Reload the video to use the repaired version
+                    const currentTime = video.currentTime;
+                    video.src = `/videos/${uri}?t=${new Date().getTime()}`; // Add timestamp to avoid caching
+                    video.load();
+                    video.currentTime = currentTime;
+                    alert('Video repaired successfully');
+                } else {
+                    throw new Error(data.error || 'Unknown error during repair');
+                }
+            }).catch(err => {
+                repairButton.disabled = false;
+                console.error('Error repairing video:', err);
+                if (err.message.includes('Input/output error')) {
+                    alert('Error repairing video: The file may be in use. Please ensure the video is not playing or being accessed by another application and try again.');
+                } else {
+                    alert('Error repairing video: ' + err.message);
+                }
+            });
         }
 
         function updatePagination() {
@@ -506,8 +594,6 @@
             } else if (currentVideoIndex >= videoIds.length) {
                 currentVideoIndex = videoIds.length - 1;
             } else if (videoIds[currentVideoIndex] !== id) {
-                // If the removed video wasn't the current one, keep the index
-                // Adjust index if the removed video was before the current one
                 const removedIndex = videoIds.indexOf(id);
                 if (removedIndex < currentVideoIndex) {
                     currentVideoIndex--;

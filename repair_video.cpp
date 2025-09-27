@@ -2,6 +2,7 @@
 #include <string>
 #include <cstdlib>
 #include <cstdio>
+#include <filesystem>
 
 std::string exec(const std::string& cmd) {
     std::string result = "";
@@ -21,16 +22,31 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::string input = argv[1];
-    size_t dot_pos = input.find_last_of('.');
-    std::string output;
-    if (dot_pos != std::string::npos) {
-        output = input.substr(0, dot_pos) + "_fixed" + input.substr(dot_pos);
-    } else {
-        output = input + "_fixed";
+    std::filesystem::path input_path = argv[1];
+    std::filesystem::path parent_dir = input_path.parent_path();
+    std::filesystem::path filename = input_path.filename();
+    std::filesystem::path old_version_dir = parent_dir / "Old Versions (Delete This)";
+    std::filesystem::path old_file_path = old_version_dir / filename;
+    std::filesystem::path output_path = parent_dir / filename;
+
+    // Create the "Old Versions (Delete This)" directory if it doesn't exist
+    try {
+        std::filesystem::create_directory(old_version_dir);
+    } catch (const std::filesystem::filesystem_error& e) {
+        std::cerr << "Failed to create directory " << old_version_dir << ": " << e.what() << std::endl;
+        return 1;
     }
 
-    std::string cmd = "ffmpeg -i \"" + input + "\" -c copy \"" + output + "\" 2>&1";
+    // Move the original file to the subfolder
+    try {
+        std::filesystem::rename(input_path, old_file_path);
+    } catch (const std::filesystem::filesystem_error& e) {
+        std::cerr << "Failed to move original file to " << old_version_dir << ": " << e.what() << std::endl;
+        return 1;
+    }
+
+    // Construct the ffmpeg command with platform-independent paths
+    std::string cmd = "ffmpeg -i \"" + old_file_path.string() + "\" -c copy \"" + output_path.string() + "\" 2>&1";
     std::cout << "Executing command: " << cmd << std::endl;
 
     std::string ffmpeg_output = exec(cmd);
@@ -42,6 +58,6 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::cout << "Fixed video saved as: " << output << std::endl;
+    std::cout << "Fixed video saved as: " << output_path.string() << std::endl;
     return 0;
 }

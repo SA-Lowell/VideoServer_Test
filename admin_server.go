@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -17,15 +18,16 @@ import (
 
 const (
 	videoBaseDir = "Z:/Videos"
-	adBreakFadeToBlackDetectorPath  = "./ad_break_fade_to_black_detector.exe" // Relative to the program
-	adBreakHardCutDetectorPath  = "./ad_break_hard_cut_detector.exe" // Relative to the program
+	adBreakFadeToBlackDetectorPath  = "./ad_break_fade_to_black_detector.exe"
+	adBreakHardCutDetectorPath      = "./ad_break_hard_cut_detector.exe"
+	repairVideoPath                 = "./repair_video.exe"
 )
 
 type Title struct {
 	ID            int64
 	Name          string
 	Description   string
-	TitleMetadata []Metadata // For title-level metadata
+	TitleMetadata []Metadata
 	Videos        []Video
 }
 
@@ -38,7 +40,7 @@ type Video struct {
 
 type Metadata struct {
 	TypeName string
-	Value    string // JSONB as string
+	Value    string
 }
 
 type Tag struct {
@@ -46,14 +48,18 @@ type Tag struct {
 }
 
 type DirEntry struct {
-	Type string `json:"type"` // "file" or "dir"
+	Type string `json:"type"`
 	Name string `json:"name"`
-	Path string `json:"path"` // Relative path
+	Path string `json:"path"`
 }
 
 type AddBreakReq struct {
 	ID   int64   `json:"id"`
 	Time float64 `json:"time"`
+}
+
+type RepairVideoReq struct {
+	ID int64 `json:"id"`
 }
 
 var db *sql.DB
@@ -82,6 +88,7 @@ func main() {
 	publicDir := "./public"
 	r.StaticFS("/public_html", http.Dir(publicDir))
 	r.StaticFS("/videos", http.Dir(videoBaseDir))
+	r.StaticFS("/temp_videos", http.Dir("./temp_videos"))
 
 	r.POST("/files/:id/tags", func(c *gin.Context) {
 		id := c.Param("id")
@@ -111,6 +118,8 @@ func main() {
 	r.POST("/detect-breaks", detectBreaksHandler)
 	r.POST("/add-break", addBreakHandler)
 	r.POST("/add-breaks", addBreaksHandler)
+	r.POST("/repair-video", repairVideoHandler)
+	r.POST("/fix-audio", fixAudioHandler)
 
 	r.NoRoute(func(c *gin.Context) {
 		c.HTML(http.StatusNotFound, "404.html", gin.H{"error": "404"})
@@ -293,21 +302,17 @@ func addVideoHandler(c *gin.Context) {
 		req.TitleID = 0
 	}
 
-	// Check if video already exists
 	var id int64
 	err := db.QueryRow("SELECT id FROM videos WHERE uri = $1", req.URI).Scan(&id)
 	if err == nil {
-		// Video exists, return its ID
 		c.JSON(http.StatusOK, gin.H{"id": id, "existed": true})
 		return
 	} else if err != sql.ErrNoRows {
-		// Unexpected database error
 		log.Printf("Check video query error for URI %s: %v", req.URI, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error: " + err.Error()})
 		return
 	}
 
-	// Video does not exist, insert it
 	err = db.QueryRow("INSERT INTO videos (title_id, uri) VALUES ($1, $2) RETURNING id", req.TitleID, req.URI).Scan(&id)
 	if err != nil {
 		log.Printf("Failed to add video to DB: %v", err)
@@ -484,7 +489,6 @@ func addBreaksHandler(c *gin.Context) {
 		return
 	}
 
-	// Start a transaction
 	tx, err := db.Begin()
 	if err != nil {
 		log.Printf("Failed to start transaction: %v", err)
@@ -492,7 +496,6 @@ func addBreaksHandler(c *gin.Context) {
 		return
 	}
 
-	// Insert all breakpoints
 	for _, breakPoint := range req {
 		if breakPoint.ID == 0 {
 			tx.Rollback()
@@ -508,7 +511,6 @@ func addBreaksHandler(c *gin.Context) {
 		}
 	}
 
-	// Commit transaction
 	if err := tx.Commit(); err != nil {
 		log.Printf("Failed to commit transaction: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit transaction: " + err.Error()})
@@ -516,6 +518,134 @@ func addBreaksHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+func repairVideoHandler(c *gin.Context) {
+	var req RepairVideoReq
+	if err := c.BindJSON(&req); err != nil {
+		log.Printf("BindJSON error for repair-video: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body: " + err.Error()})
+		return
+	}
+
+	if req.ID == 0 {
+		log.Printf("Invalid request: video ID is empty")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Must provide video ID"})
+		return
+	}
+
+	var uri string
+	err := db.QueryRow("SELECT uri FROM videos WHERE id = $1", req.ID).Scan(&uri)
+	if err == sql.ErrNoRows {
+		log.Printf("No video found for ID %d", req.ID)
+		c.JSON(http.StatusNotFound, gin.H{"error": "Video not found"})
+		return
+	} else if err != nil {
+		log.Printf("Video query error for ID %d: %v", req.ID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error: " + err.Error()})
+		return
+	}
+
+	fullPath := filepath.Join(videoBaseDir, uri)
+	fullPath = filepath.Clean(fullPath)
+	log.Printf("Checking file: %s", fullPath)
+	if _, err := os.Stat(fullPath); err != nil {
+		log.Printf("File not found: %s, error: %v", fullPath, err)
+		c.JSON(http.StatusNotFound, gin.H{"error": "File not found: " + fullPath})
+		return
+	}
+
+	absRepairPath, err := filepath.Abs(repairVideoPath)
+	if err != nil {
+		log.Printf("Failed to resolve absolute path for %s: %v", repairVideoPath, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Cannot resolve repair video executable path"})
+		return
+	}
+	log.Printf("Resolved repair executable path: %s", absRepairPath)
+	if _, err := os.Stat(absRepairPath); err != nil {
+		log.Printf("Repair executable not found at %s: %v", absRepairPath, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Repair executable not found at " + absRepairPath})
+		return
+	}
+
+	log.Printf("Running repair on %s", fullPath)
+	cmd := exec.Command(absRepairPath, fullPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("Repair failed: %v, output: %s", err, string(output))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Video repair failed: " + string(output)})
+		return
+	}
+
+	log.Printf("Repair output: %s", string(output))
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+func fixAudioHandler(c *gin.Context) {
+	var req RepairVideoReq
+	if err := c.BindJSON(&req); err != nil {
+		log.Printf("BindJSON error for fix-audio: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body: " + err.Error()})
+		return
+	}
+
+	if req.ID == 0 {
+		log.Printf("Invalid request: video ID is empty")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Must provide video ID"})
+		return
+	}
+
+	var uri string
+	err := db.QueryRow("SELECT uri FROM videos WHERE id = $1", req.ID).Scan(&uri)
+	if err == sql.ErrNoRows {
+		log.Printf("No video found for ID %d", req.ID)
+		c.JSON(http.StatusNotFound, gin.H{"error": "Video not found"})
+		return
+	} else if err != nil {
+		log.Printf("Video query error for ID %d: %v", req.ID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error: " + err.Error()})
+		return
+	}
+
+	fullPath := filepath.Join(videoBaseDir, uri)
+	fullPath = filepath.Clean(fullPath)
+	log.Printf("Checking file: %s", fullPath)
+	if _, err := os.Stat(fullPath); err != nil {
+		log.Printf("File not found: %s, error: %v", fullPath, err)
+		c.JSON(http.StatusNotFound, gin.H{"error": "File not found: " + fullPath})
+		return
+	}
+
+	tempDir := "./temp_videos"
+	if err := os.MkdirAll(tempDir, os.ModePerm); err != nil {
+		log.Printf("Failed to create temp directory %s: %v", tempDir, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create temp directory: " + err.Error()})
+		return
+	}
+
+	tempFileName := fmt.Sprintf("%d_fixed_audio.mp4", req.ID)
+	tempPath := filepath.Join(tempDir, tempFileName)
+
+	// Check if temp file already exists to avoid re-processing
+	if _, err := os.Stat(tempPath); err == nil {
+		log.Printf("Temp file already exists: %s", tempPath)
+		tempURI := "/temp_videos/" + tempFileName
+		c.JSON(http.StatusOK, gin.H{"temp_uri": tempURI})
+		return
+	}
+
+	log.Printf("Running FFmpeg to fix audio on %s", fullPath)
+	cmd := exec.Command("ffmpeg", "-i", fullPath, "-c:v", "copy", "-c:a", "aac", tempPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("FFmpeg failed: %v, output: %s", err, string(output))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fix audio: " + string(output)})
+		return
+	}
+
+	log.Printf("FFmpeg output: %s", string(output))
+	tempURI := "/temp_videos/" + tempFileName
+	c.JSON(http.StatusOK, gin.H{"temp_uri": tempURI})
 }
 
 func updateAdBreaksHandler(c *gin.Context) {
