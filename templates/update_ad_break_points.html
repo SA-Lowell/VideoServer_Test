@@ -43,10 +43,10 @@
     <meta charset="UTF-8">
     <title>Admin - Update Ad Break Points</title>
     <style>
-        #video-player { width: 640px; height: 360px; }
-        #breaks-list { margin-top: 20px; }
-        #selected-breaks-list { margin-top: 20px; }
-        #existing-breaks-list { margin-top: 20px; }
+        .video-player { width: 640px; height: 360px; }
+        .breaks-list { margin-top: 20px; }
+        .selected-breaks-list { margin-top: 20px; }
+        .existing-breaks-list { margin-top: 20px; }
         .break-item { margin-bottom: 10px; }
         #folder-browser, #file-browser { 
             border: 1px solid #ccc; 
@@ -69,14 +69,20 @@
         .breadcrumb-item::after { content: '/'; margin-left: 5px; }
         .breadcrumb-item:last-child::after { content: ''; }
         .detector-buttons { margin-top: 10px; }
-        #detection-status { margin-top: 10px; color: #333; font-weight: bold; display: none; }
-        #detection-status.active { display: block; }
-        #breaks-select { width: 300px; }
-        #selected-breaks-list .break-item button { margin-left: 10px; }
-        #existing-breaks-list .break-item button { margin-left: 10px; }
-        #save-breaks-button { margin-top: 10px; }
-        #seek-controls { margin-top: 10px; }
-        #seek-seconds { width: 60px; }
+        .detection-status { margin-top: 10px; color: #333; font-weight: bold; display: none; }
+        .detection-status.active { display: block; }
+        .breaks-select { width: 300px; }
+        .selected-breaks-list .break-item button { margin-left: 10px; }
+        .existing-breaks-list .break-item button { margin-left: 10px; }
+        .save-breaks-button { margin-top: 10px; }
+        .seek-controls { margin-top: 10px; }
+        .seek-seconds { width: 60px; }
+        .video-section { margin-bottom: 20px; border: 1px solid #ccc; padding: 10px; display: none; }
+        .video-section.active { display: block; }
+        .pagination-controls { margin-bottom: 10px; }
+        .pagination-controls button { margin-right: 10px; }
+        .pagination-controls span { margin-right: 10px; }
+        #selected-videos-container:empty + .pagination-controls { display: none; }
     </style>
 </head>
 <body>
@@ -91,7 +97,7 @@
                 {{range .Videos}}
                 <li>
                     Video ID: {{.ID}}, URI: {{.URI}}
-                    <button onclick="selectVideo({{.ID}}, '{{.URI}}', true, [{{range $index, $meta := .Metadata}}{{if eq $meta.TypeName "break_point"}}{{if $index}}, {{end}}{{$meta.Value}}{{end}}{{end}}])">Select from DB</button>
+                    <button onclick="selectVideo({{.ID}}, '{{.URI}}', [{{range $index, $meta := .Metadata}}{{if eq $meta.TypeName "break_point"}}{{if $index}}, {{end}}{{$meta.Value}}{{end}}{{end}}])">Select from DB</button>
                     <ul>
                         {{range .Metadata}}
                         <li>Metadata: {{.TypeName}} - {{.Value}}</li>
@@ -116,41 +122,20 @@
     <div id="file-browser"></div>
     <button onclick="navigateTo('')">Back to Root</button>
 
-    <h2>Selected Video</h2>
-    <div id="selected-info"></div>
-    <video id="video-player" controls></video>
-    <div id="seek-controls">
-        <input type="number" id="seek-seconds" value="10" min="0"> seconds
-        <button id="seek-backward-button">Seek Backward</button>
-        <button id="seek-forward-button">Seek Forward</button>
+    <h2>Selected Videos</h2>
+    <button id="clear-all-button">Clear All Selected Videos</button>
+    <div class="pagination-controls">
+        <button id="prev-button" disabled>Previous</button>
+        <span id="pagination-info"></span>
+        <button id="next-button" disabled>Next</button>
     </div>
-    <div class="detector-buttons">
-        <button id="detect-fade-button" disabled>Detect Fade-to-Black Ad Breaks</button>
-        <button id="detect-hard-cut-button" disabled>Detect Hard-Cut Ad Breaks</button>
-    </div>
-    <div id="detection-status">Detecting ad breaks, please wait...</div>
-
-    <h2>Existing Break Points</h2>
-    <div id="existing-breaks-list"></div>
-
-    <h2>Detected Breaks</h2>
-    <div id="breaks-list">
-        <select id="breaks-select" size="5"></select>
-        <button id="preview-break-button" disabled>Preview Selected Break</button>
-        <button id="add-break-button" disabled>Add Selected Break</button>
-    </div>
-
-    <h2>Selected Breaks to Save</h2>
-    <div id="selected-breaks-list"></div>
-    <button id="save-breaks-button" disabled>Save Breakpoints</button>
+    <div id="selected-videos-container"></div>
 
     <script>
-        let selectedID = null;
-        let selectedURI = null;
+        let videosData = {};
         let currentPath = '';
-        let detectedBreaks = [];
-        let selectedBreaks = [];
-        let existingBreaks = [];
+        let currentVideoIndex = -1;
+        let videoIds = [];
 
         // Convert seconds to HH:MM:SS.dddd format
         function formatTime(seconds) {
@@ -161,26 +146,101 @@
             return formatted;
         }
 
-        function selectVideo(id, uri, fromDB, metadataBreaks = []) {
-            selectedID = id;
-            selectedURI = uri;
-            document.getElementById('selected-info').innerHTML = `Selected Video ID: ${id}, URI: ${uri}`;
-            const video = document.getElementById('video-player');
+        function selectVideo(id, uri, metadataBreaks = []) {
+            if (videosData[id]) {
+                alert('Video already selected');
+                return;
+            }
+            videosData[id] = {
+                detectedBreaks: [],
+                selectedBreaks: [],
+                existingBreaks: metadataBreaks.map(parseFloat).filter(time => !isNaN(time)).sort((a, b) => a - b),
+                uri: uri
+            };
+            videoIds.push(id);
+            createSection(id, uri);
+            updatePagination();
+            if (currentVideoIndex === -1) {
+                currentVideoIndex = 0;
+                showVideoSection(id);
+            }
+        }
+
+        function createSection(id, uri) {
+            const container = document.getElementById('selected-videos-container');
+            const sectionHtml = `
+                <div class="video-section" id="video-section-${id}">
+                    <div>Video ID: ${id}, URI: ${uri} <button id="remove-button-${id}">Remove</button></div>
+                    <video class="video-player" id="video-player-${id}" controls></video>
+                    <div class="seek-controls" id="seek-controls-${id}">
+                        <input type="number" class="seek-seconds" id="seek-seconds-${id}" value="10" min="0"> seconds
+                        <button id="seek-backward-button-${id}">Seek Backward</button>
+                        <button id="seek-forward-button-${id}">Seek Forward</button>
+                    </div>
+                    <div class="detector-buttons">
+                        <button id="detect-fade-button-${id}">Detect Fade-to-Black Ad Breaks</button>
+                        <button id="detect-hard-cut-button-${id}">Detect Hard-Cut Ad Breaks</button>
+                    </div>
+                    <div class="detection-status" id="detection-status-${id}">Detecting ad breaks, please wait...</div>
+                    <h3>Existing Break Points</h3>
+                    <div class="existing-breaks-list" id="existing-breaks-list-${id}"></div>
+                    <h3>Detected Breaks</h3>
+                    <div class="breaks-list" id="breaks-list-${id}">
+                        <select class="breaks-select" id="breaks-select-${id}" size="5"></select>
+                        <button id="preview-break-button-${id}" disabled>Preview Selected Break</button>
+                        <button id="add-break-button-${id}" disabled>Add Selected Break</button>
+                    </div>
+                    <h3>Selected Breaks to Save</h3>
+                    <div class="selected-breaks-list" id="selected-breaks-list-${id}"></div>
+                    <button class="save-breaks-button" id="save-breaks-button-${id}" disabled>Save Breakpoints</button>
+                </div>
+            `;
+            container.insertAdjacentHTML('beforeend', sectionHtml);
+            attachListeners(id);
+            updateBreaksSelect(id);
+            updateSelectedBreaksList(id);
+            updateExistingBreaksList(id);
+            const video = document.getElementById(`video-player-${id}`);
             video.src = `/videos/${uri}`;
             video.load();
-            document.getElementById('detect-fade-button').disabled = false;
-            document.getElementById('detect-hard-cut-button').disabled = false;
-            document.getElementById('add-break-button').disabled = true;
-            document.getElementById('preview-break-button').disabled = true;
-            document.getElementById('save-breaks-button').disabled = true;
-            detectedBreaks = [];
-            selectedBreaks = [];
-            // Load existing break points from metadata
-            existingBreaks = metadataBreaks.map(parseFloat).filter(time => !isNaN(time));
-            existingBreaks.sort((a, b) => a - b);
-            updateBreaksSelect();
-            updateSelectedBreaksList();
-            updateExistingBreaksList();
+        }
+
+        function attachListeners(id) {
+            document.getElementById(`detect-fade-button-${id}`).addEventListener('click', () => detectBreaks(id, 'fade'));
+            document.getElementById(`detect-hard-cut-button-${id}`).addEventListener('click', () => detectBreaks(id, 'hard-cut'));
+            document.getElementById(`add-break-button-${id}`).addEventListener('click', () => addSelectedBreak(id));
+            document.getElementById(`preview-break-button-${id}`).addEventListener('click', () => previewSelectedBreak(id));
+            document.getElementById(`save-breaks-button-${id}`).addEventListener('click', () => saveBreaks(id));
+            document.getElementById(`seek-backward-button-${id}`).addEventListener('click', () => seekBackward(id));
+            document.getElementById(`seek-forward-button-${id}`).addEventListener('click', () => seekForward(id));
+            document.getElementById(`remove-button-${id}`).addEventListener('click', () => removeSection(id));
+        }
+
+        function updatePagination() {
+            const prevButton = document.getElementById('prev-button');
+            const nextButton = document.getElementById('next-button');
+            const paginationInfo = document.getElementById('pagination-info');
+            if (videoIds.length === 0) {
+                prevButton.disabled = true;
+                nextButton.disabled = true;
+                paginationInfo.textContent = '';
+                currentVideoIndex = -1;
+                return;
+            }
+            prevButton.disabled = currentVideoIndex <= 0;
+            nextButton.disabled = currentVideoIndex >= videoIds.length - 1;
+            paginationInfo.textContent = `Video ${currentVideoIndex + 1} of ${videoIds.length}`;
+            showVideoSection(videoIds[currentVideoIndex]);
+        }
+
+        function showVideoSection(id) {
+            document.querySelectorAll('.video-section').forEach(section => {
+                section.classList.remove('active');
+            });
+            const section = document.getElementById(`video-section-${id}`);
+            if (section) {
+                section.classList.add('active');
+            }
         }
 
         function loadContents(path) {
@@ -219,8 +279,7 @@
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({ uri: item.path, title_id: 0 })
                                 }).then(res => res.json()).then(addData => {
-                                    // Fetch metadata for the video
-                                    fetchMetadata(addData.id, item.path, addData.existed);
+                                    fetchMetadata(addData.id, item.path);
                                 }).catch(err => console.error(err));
                             };
                             fileBrowser.appendChild(div);
@@ -259,7 +318,7 @@
             loadContents(path);
         }
 
-        function fetchMetadata(id, path, existed) {
+        function fetchMetadata(id, path) {
             fetch(`/get-video-metadata/${id}`)
                 .then(res => {
                     if (!res.ok) {
@@ -269,24 +328,24 @@
                 })
                 .then(data => {
                     const metadataBreaks = data.Metadata.filter(m => m.TypeName === 'break_point').map(m => parseFloat(m.Value));
-                    selectVideo(id, path, existed, metadataBreaks);
+                    selectVideo(id, path, metadataBreaks);
                 })
                 .catch(err => {
                     console.error('Error fetching metadata:', err);
-                    selectVideo(id, path, existed, []);
+                    selectVideo(id, path, []);
                 });
         }
 
-        function detectBreaks(detectorType) {
-            const statusDiv = document.getElementById('detection-status');
-            const fadeButton = document.getElementById('detect-fade-button');
-            const hardCutButton = document.getElementById('detect-hard-cut-button');
+        function detectBreaks(id, detectorType) {
+            const statusDiv = document.getElementById(`detection-status-${id}`);
+            const fadeButton = document.getElementById(`detect-fade-button-${id}`);
+            const hardCutButton = document.getElementById(`detect-hard-cut-button-${id}`);
             
             statusDiv.classList.add('active');
             fadeButton.disabled = true;
             hardCutButton.disabled = true;
 
-            const body = selectedID ? { id: selectedID, detector: detectorType } : { uri: selectedURI, detector: detectorType };
+            const body = { id: id, detector: detectorType };
             fetch('/detect-breaks', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -300,11 +359,11 @@
                 statusDiv.classList.remove('active');
                 fadeButton.disabled = false;
                 hardCutButton.disabled = false;
-                detectedBreaks = data.breaks;
-                updateBreaksSelect();
-                const hasBreaks = detectedBreaks.length > 0;
-                document.getElementById('add-break-button').disabled = !hasBreaks;
-                document.getElementById('preview-break-button').disabled = !hasBreaks;
+                videosData[id].detectedBreaks = data.breaks || [];
+                updateBreaksSelect(id);
+                const hasBreaks = videosData[id].detectedBreaks.length > 0;
+                document.getElementById(`add-break-button-${id}`).disabled = !hasBreaks;
+                document.getElementById(`preview-break-button-${id}`).disabled = !hasBreaks;
             }).catch(err => {
                 statusDiv.classList.remove('active');
                 fadeButton.disabled = false;
@@ -314,10 +373,10 @@
             });
         }
 
-        function updateBreaksSelect() {
-            const select = document.getElementById('breaks-select');
+        function updateBreaksSelect(id) {
+            const select = document.getElementById(`breaks-select-${id}`);
             select.innerHTML = '';
-            detectedBreaks.forEach((b, index) => {
+            videosData[id].detectedBreaks.forEach((b, index) => {
                 const option = document.createElement('option');
                 option.value = index;
                 option.text = `Start: ${formatTime(b.start)}, Mid: ${formatTime(b.mid)}, End: ${formatTime(b.end)}`;
@@ -325,77 +384,69 @@
             });
         }
 
-        function updateSelectedBreaksList() {
-            const list = document.getElementById('selected-breaks-list');
+        function updateSelectedBreaksList(id) {
+            const list = document.getElementById(`selected-breaks-list-${id}`);
             list.innerHTML = '';
-            selectedBreaks.forEach((b, index) => {
+            videosData[id].selectedBreaks.forEach((b, idx) => {
                 const div = document.createElement('div');
                 div.className = 'break-item';
                 div.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(b.mid)}, End: ${formatTime(b.end)}`;
                 const removeBtn = document.createElement('button');
                 removeBtn.textContent = 'Remove';
                 removeBtn.onclick = () => {
-                    selectedBreaks.splice(index, 1);
-                    updateSelectedBreaksList();
-                    document.getElementById('save-breaks-button').disabled = selectedBreaks.length === 0;
+                    videosData[id].selectedBreaks.splice(idx, 1);
+                    updateSelectedBreaksList(id);
+                    document.getElementById(`save-breaks-button-${id}`).disabled = videosData[id].selectedBreaks.length === 0;
                 };
                 const previewBtn = document.createElement('button');
                 previewBtn.textContent = 'Preview Break';
-                previewBtn.onclick = () => previewBreak(b.mid);
+                previewBtn.onclick = () => previewBreak(id, b.mid);
                 div.appendChild(removeBtn);
                 div.appendChild(previewBtn);
                 list.appendChild(div);
             });
         }
 
-        function updateExistingBreaksList() {
-            const list = document.getElementById('existing-breaks-list');
+        function updateExistingBreaksList(id) {
+            const list = document.getElementById(`existing-breaks-list-${id}`);
             list.innerHTML = '';
-            existingBreaks.forEach((time, index) => {
+            videosData[id].existingBreaks.forEach((time) => {
                 const div = document.createElement('div');
                 div.className = 'break-item';
                 div.innerHTML = `Break Point: ${formatTime(time)}`;
                 const previewBtn = document.createElement('button');
                 previewBtn.textContent = 'Preview Break';
-                previewBtn.onclick = () => previewBreak(time);
+                previewBtn.onclick = () => previewBreak(id, time);
                 div.appendChild(previewBtn);
                 list.appendChild(div);
             });
         }
 
-        document.getElementById('detect-fade-button').addEventListener('click', () => {
-            detectBreaks('fade');
-        });
-
-        document.getElementById('detect-hard-cut-button').addEventListener('click', () => {
-            detectBreaks('hard-cut');
-        });
-
-        document.getElementById('add-break-button').addEventListener('click', () => {
-            const select = document.getElementById('breaks-select');
+        function addSelectedBreak(id) {
+            const select = document.getElementById(`breaks-select-${id}`);
             const selectedIndex = select.selectedIndex;
             if (selectedIndex >= 0) {
-                const breakPoint = detectedBreaks[selectedIndex];
-                if (!selectedBreaks.some(b => b.mid === breakPoint.mid)) {
-                    selectedBreaks.push(breakPoint);
-                    updateSelectedBreaksList();
-                    document.getElementById('save-breaks-button').disabled = false;
+                const breakPoint = videosData[id].detectedBreaks[selectedIndex];
+                if (!videosData[id].selectedBreaks.some(b => b.mid === breakPoint.mid)) {
+                    videosData[id].selectedBreaks.push(breakPoint);
+                    updateSelectedBreaksList(id);
+                    document.getElementById(`save-breaks-button-${id}`).disabled = false;
                 }
             }
-        });
+        }
 
-        document.getElementById('preview-break-button').addEventListener('click', () => {
-            const select = document.getElementById('breaks-select');
+        function previewSelectedBreak(id) {
+            const select = document.getElementById(`breaks-select-${id}`);
             const selectedIndex = select.selectedIndex;
             if (selectedIndex >= 0) {
-                const breakPoint = detectedBreaks[selectedIndex];
-                previewBreak(breakPoint.mid);
+                const breakPoint = videosData[id].detectedBreaks[selectedIndex];
+                previewBreak(id, breakPoint.mid);
             }
-        });
+        }
 
-        document.getElementById('save-breaks-button').addEventListener('click', () => {
-            if (selectedBreaks.length === 0) return;
-            const breaks = selectedBreaks.map(b => ({ id: selectedID, time: b.mid }));
+        function saveBreaks(id) {
+            if (videosData[id].selectedBreaks.length === 0) return;
+            const breaks = videosData[id].selectedBreaks.map(b => ({ id: id, time: b.mid }));
             fetch('/add-breaks', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -403,42 +454,41 @@
             }).then(res => res.json()).then(data => {
                 if (data.success) {
                     alert('Breakpoints saved successfully');
-                    // Add new breaks to existing breaks
-                    existingBreaks.push(...selectedBreaks.map(b => b.mid));
-                    existingBreaks.sort((a, b) => a - b);
-                    updateExistingBreaksList();
-                    selectedBreaks = [];
-                    updateSelectedBreaksList();
-                    document.getElementById('save-breaks-button').disabled = true;
+                    videosData[id].existingBreaks.push(...videosData[id].selectedBreaks.map(b => b.mid));
+                    videosData[id].existingBreaks.sort((a, b) => a - b);
+                    updateExistingBreaksList(id);
+                    videosData[id].selectedBreaks = [];
+                    updateSelectedBreaksList(id);
+                    document.getElementById(`save-breaks-button-${id}`).disabled = true;
                 }
             }).catch(err => {
                 console.error(err);
                 alert('Error saving breakpoints: ' + err.message);
             });
-        });
+        }
 
-        document.getElementById('seek-backward-button').addEventListener('click', () => {
-            const video = document.getElementById('video-player');
+        function seekBackward(id) {
+            const video = document.getElementById(`video-player-${id}`);
             if (isNaN(video.duration)) {
                 alert('Video not loaded yet. Please wait.');
-                return
+                return;
             }
-            const seconds = parseFloat(document.getElementById('seek-seconds').value) || 0;
+            const seconds = parseFloat(document.getElementById(`seek-seconds-${id}`).value) || 0;
             video.currentTime = Math.max(0, video.currentTime - seconds);
-        });
+        }
 
-        document.getElementById('seek-forward-button').addEventListener('click', () => {
-            const video = document.getElementById('video-player');
+        function seekForward(id) {
+            const video = document.getElementById(`video-player-${id}`);
             if (isNaN(video.duration)) {
                 alert('Video not loaded yet. Please wait.');
-                return
+                return;
             }
-            const seconds = parseFloat(document.getElementById('seek-seconds').value) || 0;
+            const seconds = parseFloat(document.getElementById(`seek-seconds-${id}`).value) || 0;
             video.currentTime = Math.min(video.duration, video.currentTime + seconds);
-        });
+        }
 
-        function previewBreak(time) {
-            const video = document.getElementById('video-player');
+        function previewBreak(id, time) {
+            const video = document.getElementById(`video-player-${id}`);
             if (isNaN(video.duration)) {
                 alert('Video not loaded yet. Please wait.');
                 return;
@@ -446,6 +496,47 @@
             video.currentTime = time;
             video.play();
         }
+
+        function removeSection(id) {
+            document.getElementById(`video-section-${id}`).remove();
+            delete videosData[id];
+            videoIds = videoIds.filter(vid => vid !== id);
+            if (videoIds.length === 0) {
+                currentVideoIndex = -1;
+            } else if (currentVideoIndex >= videoIds.length) {
+                currentVideoIndex = videoIds.length - 1;
+            } else if (videoIds[currentVideoIndex] !== id) {
+                // If the removed video wasn't the current one, keep the index
+                // Adjust index if the removed video was before the current one
+                const removedIndex = videoIds.indexOf(id);
+                if (removedIndex < currentVideoIndex) {
+                    currentVideoIndex--;
+                }
+            }
+            updatePagination();
+        }
+
+        document.getElementById('clear-all-button').addEventListener('click', () => {
+            document.getElementById('selected-videos-container').innerHTML = '';
+            videosData = {};
+            videoIds = [];
+            currentVideoIndex = -1;
+            updatePagination();
+        });
+
+        document.getElementById('prev-button').addEventListener('click', () => {
+            if (currentVideoIndex > 0) {
+                currentVideoIndex--;
+                updatePagination();
+            }
+        });
+
+        document.getElementById('next-button').addEventListener('click', () => {
+            if (currentVideoIndex < videoIds.length - 1) {
+                currentVideoIndex++;
+                updatePagination();
+            }
+        });
 
         loadContents('');
     </script>
