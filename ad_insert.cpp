@@ -653,14 +653,14 @@ bool extractSegment(const std::string& inputPath, const std::string& outputPath,
 
 	if(reencodeEpisode)
 	{
-		std::string scaleFilter = "scale=" + std::to_string(targetWidth) + ":" + std::to_string(targetHeight) + ":force_original_aspect_ratio=decrease,pad=" + std::to_string(targetWidth) + ":" + std::to_string(targetHeight) + ":(ow-iw)/2:(oh-ih)/2,setsar=" + sarStr;
+		std::string scaleFilter = "scale=" + std::to_string(targetWidth) + ":" + std::to_string(targetHeight) + ":force_original_aspect_ratio=decrease,pad=" + std::to_string(targetWidth) + ":" + std::to_string(targetHeight) + ":(ow-iw)/2:(oh-ih)/2,setsar=" + sarStr + ",format=yuv420p";
 
 		args += "-vf \"" + scaleFilter + "\" ";
 
 		if(!epAudioFilter.empty())args += "-af \"" + epAudioFilter + "\" ";
 
 		args += "-r " + std::to_string(targetFPS) + " -c:v " + targetVCodec + " -preset veryfast -crf 23 -b:v " + targetVBitRate + " -c:a aac -b:a " + targetABitRate + " ";
-		args += "-profile:v baseline -level 3.0 ";
+		args += "-profile:v baseline -level 4.0 ";
 	}
 	else
 	{
@@ -944,6 +944,10 @@ bool insertBreak(const std::string& episodePath, const std::string& tempDir, con
 
 				std::cout << "DEBUG: Ad scale filter: '" << adScaleFilter << "'" << std::endl;
 			}
+			else
+			{
+				adArgs += "-vf \"format=yuv420p\" ";
+			}
 
 			std::string adAudioFilter = buildAudioFilter(info.sampleRate, info.channels, targetSampleRate, targetChannels);
 
@@ -955,7 +959,7 @@ bool insertBreak(const std::string& episodePath, const std::string& tempDir, con
 			}
 
 			adArgs += "-r " + std::to_string(targetFPS) + " -c:v libx264 -preset ultrafast -crf 23 -b:v " + targetVBitRate + " -c:a aac -b:a " + targetABitRate + " ";
-			adArgs += "-profile:v baseline -level 3.0 ";
+			adArgs += "-profile:v baseline -level 4.0 ";
 			adArgs += "-x264-params keyint=1:min-keyint=1:scenecut=-1 ";//Force IDR every frame
 			adArgs += "-avoid_negative_ts make_zero \"" + adTemp + "\"";
 			std::string adFullCmd = "ffmpeg " + adArgs;

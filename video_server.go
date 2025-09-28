@@ -1379,63 +1379,178 @@ func indexHandler(c *gin.Context) {
 	c.String(200, html)
 }
 
+// updateVideoDurations checks videos with NULL duration in the database,
+// calculates their duration using ffprobe, and updates the database.
+func updateVideoDurations(db *sql.DB) error {
+    // Ensure videoBaseDir is set
+    if videoBaseDir == "" {
+        return fmt.Errorf("videoBaseDir is not set, cannot process video files")
+    }
+
+    // Query videos with NULL duration
+    rows, err := db.Query(`SELECT id, uri FROM videos WHERE duration IS NULL`)
+    if err != nil {
+        return fmt.Errorf("failed to query videos with NULL duration: %v", err)
+    }
+    defer rows.Close()
+
+    var videoIDs []int64
+    var uris []string
+    for rows.Next() {
+        var id int64
+        var uri string
+        if err := rows.Scan(&id, &uri); err != nil {
+            log.Printf("Failed to scan video ID and URI: %v", err)
+            continue
+        }
+        videoIDs = append(videoIDs, id)
+        uris = append(uris, uri)
+    }
+    if err := rows.Err(); err != nil {
+        return fmt.Errorf("error iterating videos: %v", err)
+    }
+
+    if len(videoIDs) == 0 {
+        log.Println("No videos with NULL duration found")
+        return nil
+    }
+
+    log.Printf("Found %d videos with NULL duration, calculating durations", len(videoIDs))
+
+    // Process each video concurrently with a limit to avoid overwhelming the system
+    const maxConcurrent = 5
+    semaphore := make(chan struct{}, maxConcurrent)
+    var wg sync.WaitGroup
+    var mu sync.Mutex
+    var errors []error
+
+    for i, videoID := range videoIDs {
+        wg.Add(1)
+        semaphore <- struct{}{} // Acquire semaphore
+        go func(id int64, uri string) {
+            defer wg.Done()
+            defer func() { <-semaphore }() // Release semaphore
+
+            fullPath := filepath.Join(videoBaseDir, uri)
+            if _, err := os.Stat(fullPath); err != nil {
+                mu.Lock()
+                errors = append(errors, fmt.Errorf("video %d file not found at %s: %v", id, fullPath, err))
+                mu.Unlock()
+                return
+            }
+
+            // Run ffprobe to get duration
+            cmd := exec.Command(
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                fullPath,
+            )
+            output, err := cmd.Output()
+            if err != nil {
+                mu.Lock()
+                errors = append(errors, fmt.Errorf("ffprobe failed for video %d (%s): %v", id, fullPath, err))
+                mu.Unlock()
+                return
+            }
+
+            durationStr := strings.TrimSpace(string(output))
+            duration, err := strconv.ParseFloat(durationStr, 64)
+            if err != nil {
+                mu.Lock()
+                errors = append(errors, fmt.Errorf("failed to parse duration for video %d (%s): %v", id, fullPath, err))
+                mu.Unlock()
+                return
+            }
+
+            // Update duration in the database
+            _, err = db.Exec(`UPDATE videos SET duration = $1 WHERE id = $2`, duration, id)
+            if err != nil {
+                mu.Lock()
+                errors = append(errors, fmt.Errorf("failed to update duration for video %d (%s): %v", id, fullPath, err))
+                mu.Unlock()
+                return
+            }
+
+            log.Printf("Updated duration for video %d (%s) to %.2f seconds", id, fullPath, duration)
+        }(videoID, uris[i])
+    }
+
+    wg.Wait()
+
+    if len(errors) > 0 {
+        return fmt.Errorf("encountered %d errors during duration updates: %v", len(errors), errors)
+    }
+
+    log.Printf("Successfully updated durations for %d videos", len(videoIDs))
+    return nil
+}
+
 func main() {
-	rand.Seed(time.Now().UnixNano())
-	if err := os.MkdirAll(HlsDir, 0755); err != nil {
-		log.Fatal(err)
-	}
-	db, err := sql.Open("postgres", dbConnString)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer db.Close()
-	if err := db.Ping(); err != nil {
-		log.Fatal("DB ping failed: ", err)
-	}
-	log.Println("Connected to PostgreSQL DB")
+    rand.Seed(time.Now().UnixNano())
+    if err := os.MkdirAll(HlsDir, 0755); err != nil {
+        log.Fatal(err)
+    }
+    db, err := sql.Open("postgres", dbConnString)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
+    if err := db.Ping(); err != nil {
+        log.Fatal("DB ping failed: ", err)
+    }
+    log.Println("Connected to PostgreSQL DB")
 
-	videoBaseDir = os.Getenv("VIDEO_BASE_DIR")
-	if videoBaseDir == "" {
-		videoBaseDir = DefaultVideoBaseDir
-	}
-	log.Printf("Using video base directory: %s", videoBaseDir)
+    // Set videoBaseDir before updating durations
+    videoBaseDir = os.Getenv("VIDEO_BASE_DIR")
+    if videoBaseDir == "" {
+        videoBaseDir = DefaultVideoBaseDir
+    }
+    log.Printf("Using video base directory: %s", videoBaseDir)
 
-	adRows, err := db.Query(`
-		SELECT v.uri 
-		FROM videos v 
-		JOIN video_tags vt ON v.id = vt.video_id 
-		WHERE vt.tag_id = 4`)
-	if err != nil {
-		log.Fatalf("Failed to query commercials: %v", err)
-	}
-	defer adRows.Close()
-	for adRows.Next() {
-		var uri string
-		if err := adRows.Scan(&uri); err != nil {
-			log.Printf("Failed to scan ad URI: %v", err)
-			continue
-		}
-		fullAdPath := filepath.Join(videoBaseDir, uri)
-		if _, err := os.Stat(fullAdPath); err == nil {
-			adFullPaths = append(adFullPaths, fullAdPath)
-		} else {
-			log.Printf("Ad file not found: %s", fullAdPath)
-		}
-	}
-	if err := adRows.Err(); err != nil {
-		log.Fatalf("Error iterating ads: %v", err)
-	}
-	log.Printf("Loaded %d commercials", len(adFullPaths))
+    // Update video durations before starting the server
+    if err := updateVideoDurations(db); err != nil {
+        log.Printf("Failed to update video durations: %v", err)
+        // Proceed despite errors, as per original behavior
+    }
 
-	discoverStations(db)
-	for _, st := range stations {
-		go sender(st, db)
-	}
-	r := gin.Default()
-	r.Use(cors.Default())
-	r.POST("/signal", signalingHandler)
-	r.GET("/", indexHandler)
-	r.GET("/hls/*path", func(c *gin.Context) { c.String(404, "Use WebRTC") })
-	log.Printf("WebRTC TV server on %s. Stations: %v", Port, stations)
-	log.Fatal(r.Run(Port))
+    adRows, err := db.Query(`
+        SELECT v.uri 
+        FROM videos v 
+        JOIN video_tags vt ON v.id = vt.video_id 
+        WHERE vt.tag_id = 4`)
+    if err != nil {
+        log.Fatalf("Failed to query commercials: %v", err)
+    }
+    defer adRows.Close()
+    for adRows.Next() {
+        var uri string
+        if err := adRows.Scan(&uri); err != nil {
+            log.Printf("Failed to scan ad URI: %v", err)
+            continue
+        }
+        fullAdPath := filepath.Join(videoBaseDir, uri)
+        if _, err := os.Stat(fullAdPath); err == nil {
+            adFullPaths = append(adFullPaths, fullAdPath)
+        } else {
+            log.Printf("Ad file not found: %s", fullAdPath)
+        }
+    }
+    if err := adRows.Err(); err != nil {
+        log.Fatalf("Error iterating ads: %v", err)
+    }
+    log.Printf("Loaded %d commercials", len(adFullPaths))
+
+    discoverStations(db)
+    for _, st := range stations {
+        go sender(st, db)
+    }
+    r := gin.Default()
+    r.Use(cors.Default())
+    r.POST("/signal", signalingHandler)
+    r.GET("/", indexHandler)
+    r.GET("/hls/*path", func(c *gin.Context) { c.String(404, "Use WebRTC") })
+    log.Printf("WebRTC TV server on %s. Stations: %v", Port, stations)
+    log.Fatal(r.Run(Port))
 }
