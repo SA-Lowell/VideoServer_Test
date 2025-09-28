@@ -1,0 +1,1 @@
+g++ -std=c++17 -O3 -march=native -o fixmkv fixmkv.cpp -lstdc++fs
