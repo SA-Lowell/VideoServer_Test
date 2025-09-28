@@ -30,7 +30,7 @@ struct ProbeStream
 	std::string sampleRate;
 	std::string bitRate;
 	int channels = 0;
-	std::string rFrameRate = "30/1";//e.g., "30000/1001"
+	std::string rFrameRate = "30/1"; //e.g., "30000/1001"
 };
 
 struct ProbeFormat
@@ -556,7 +556,7 @@ bool probeVideo(const std::string& filePath, int& width, int& height, int& sarNu
 				sarNum = 1;
 				sarDen = 1;
 			}
-			}
+		}
 		else if(!hasAudio && (stream.channels > 0 || !stream.sampleRate.empty()))
 		{
 			std::cout << "DEBUG: Found audio stream" << std::endl;
@@ -660,7 +660,7 @@ bool extractSegment(const std::string& inputPath, const std::string& outputPath,
 		if(!epAudioFilter.empty())args += "-af \"" + epAudioFilter + "\" ";
 
 		args += "-r " + std::to_string(targetFPS) + " -c:v " + targetVCodec + " -preset veryfast -crf 23 -b:v " + targetVBitRate + " -c:a aac -b:a " + targetABitRate + " ";
-		args += "-profile:v baseline -level 4.0 ";
+		args += "-profile:v baseline -level 5.2 ";
 	}
 	else
 	{
@@ -939,7 +939,7 @@ bool insertBreak(const std::string& episodePath, const std::string& tempDir, con
 
 			if(info.height != targetHeight || info.width != targetWidth)
 			{
-				adScaleFilter = "scale=" + std::to_string(targetWidth) + ":" + std::to_string(targetHeight) + ":force_original_aspect_ratio=decrease,pad=" + std::to_string(targetWidth) + ":" + std::to_string(targetHeight) + ":(ow-iw)/2:(oh-ih)/2,setsar=" + sarStr;
+				adScaleFilter = "scale=" + std::to_string(targetWidth) + ":" + std::to_string(targetHeight) + ":force_original_aspect_ratio=decrease,pad=" + std::to_string(targetWidth) + ":" + std::to_string(targetHeight) + ":(ow-iw)/2:(oh-ih)/2,setsar=" + sarStr + ",format=yuv420p";
 				adArgs += "-vf \"" + adScaleFilter + "\" ";
 
 				std::cout << "DEBUG: Ad scale filter: '" << adScaleFilter << "'" << std::endl;
@@ -959,7 +959,7 @@ bool insertBreak(const std::string& episodePath, const std::string& tempDir, con
 			}
 
 			adArgs += "-r " + std::to_string(targetFPS) + " -c:v libx264 -preset ultrafast -crf 23 -b:v " + targetVBitRate + " -c:a aac -b:a " + targetABitRate + " ";
-			adArgs += "-profile:v baseline -level 4.0 ";
+			adArgs += "-profile:v baseline -level 5.2 ";
 			adArgs += "-x264-params keyint=1:min-keyint=1:scenecut=-1 ";//Force IDR every frame
 			adArgs += "-avoid_negative_ts make_zero \"" + adTemp + "\"";
 			std::string adFullCmd = "ffmpeg " + adArgs;
