@@ -47,66 +47,82 @@ bool check_ffmpeg() {
     return true;
 }
 
-bool check_nvenc_support() {
-    std::string cmd = "ffmpeg -encoders > tmp_encoders.txt 2>&1";
-    int ret = std::system(cmd.c_str());
-    if (ret != 0) {
-        log_message("Error: Failed to check encoder support. Assuming no NVENC.");
-        return false;
-    }
-    std::ifstream encoders_file("tmp_encoders.txt");
-    std::string line;
-    bool nvenc_supported = false;
-    while (std::getline(encoders_file, line)) {
-        if (line.find("h264_nvenc") != std::string::npos) {
-            nvenc_supported = true;
-            break;
-        }
-    }
-    encoders_file.close();
-    std::remove("tmp_encoders.txt");
-    if (!nvenc_supported) {
-        log_message("NVENC not supported. Falling back to libx264.");
-    }
-    return nvenc_supported;
+std::string sanitize_filename(const std::string& filename) {
+    std::string safe = filename;
+    std::replace(safe.begin(), safe.end(), '\'', '_');
+    std::replace(safe.begin(), safe.end(), ' ', '_');
+    return safe;
 }
 
 std::string escape_path(const std::string& path) {
 #ifdef _WIN32
-    return "\"" + path + "\"";
+    return "\"" + path + "\""; // Simply wrap the path in double quotes
 #else
     std::string escaped = path;
-    return "\"" + escaped + "\"";
+    std::string result;
+    result.reserve(escaped.size() + 2);
+    result += "\"";
+    for (char c : escaped) {
+        if (c == '\'') {
+            result += "'\\''"; // Escape single quotes for Unix-like systems
+        } else {
+            result += c;
+        }
+    }
+    result += "\"";
+    return result;
 #endif
 }
 
-void process_file(const std::string& input_path) {
-    std::string output_path = "tmp_video_output_directory/" + fs::path(input_path).stem().string() + ".mkv";
-
-    // Choose encoder
-    std::string video_encoder = "h264_nvenc";
-    int crf_value = 20;
-
-    bool use_nvenc = check_nvenc_support();
-    if (!use_nvenc) {
-        video_encoder = "libx264";
-        crf_value = 18;
+bool is_scaling_needed(const std::string& input_path) {
+    std::string safe_filename = sanitize_filename(fs::path(input_path).filename().string());
+    std::string cmd = "ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of default=noprint_wrappers=1:nokey=1 " + escape_path(input_path) + " > tmp_resolution_" + safe_filename + ".txt 2>&1";
+    int ret = std::system(cmd.c_str());
+    if (ret != 0) {
+        log_message("Failed to get resolution for " + input_path + ". Assuming scaling is needed.");
+        return true;
     }
+    std::ifstream res_file("tmp_resolution_" + safe_filename + ".txt");
+    if (!res_file.is_open()) {
+        log_message("Failed to open resolution file for " + input_path + ". Assuming scaling is needed.");
+        return true;
+    }
+    std::string width_str, height_str;
+    std::getline(res_file, width_str);
+    std::getline(res_file, height_str);
+    res_file.close();
+    std::remove(("tmp_resolution_" + safe_filename + ".txt").c_str());
+    try {
+        int width = std::stoi(width_str);
+        int height = std::stoi(height_str);
+        if (width <= 1280 && height <= 720) {
+            log_message("Input resolution is " + width_str + "x" + height_str + "; skipping scaling.");
+            return false;
+        }
+        log_message("Input resolution is " + width_str + "x" + height_str + "; scaling to 1280x720.");
+        return true;
+    } catch (...) {
+        log_message("Invalid resolution for " + input_path + ". Assuming scaling is needed.");
+        return true;
+    }
+}
 
+void process_file(const std::string& input_path, double duration = 0.0) {
+    std::string output_path = "tmp_video_output_directory/" + fs::path(input_path).stem().string() + (duration > 0 ? "_test.mkv" : ".mkv");
+    std::string video_encoder = "libx264";
+    int crf_value = 24;
     log_message("Using CRF " + std::to_string(crf_value) + " with " + video_encoder + " for " + input_path);
-
-    // Assume scaling to 720p (simplified due to ffprobe issues)
-    std::string video_filter = "-vf \"scale=1280:720,setsar=1:1\"";
-
-    // Encoding command
-    std::string preset = use_nvenc ? "-preset p7" : "-preset fast";
-    std::string log_file_name = "tmp_video_output_directory/ffmpeg_log_" + fs::path(input_path).filename().string() + ".txt";
-    std::string cmd_crf = "ffmpeg -y -i " + escape_path(input_path) + " -c:v " + video_encoder + " -crf " + std::to_string(crf_value) + " " + preset + " " + video_filter + " -pix_fmt yuv420p -c:a copy -map 0 -map_metadata -1 -f matroska " + escape_path(output_path) + " > " + escape_path(log_file_name) + " 2>&1";
+    std::string video_filter = is_scaling_needed(input_path) ? "-vf \"scale=1280:720,setsar=1:1\"" : "";
+    std::string preset = "-preset veryslow";
+    std::string duration_str = (duration > 0) ? "-t " + std::to_string(duration) + " " : "";
+    std::string safe_filename = sanitize_filename(fs::path(input_path).filename().string());
+    std::string cmd_crf = "ffmpeg -y -i " + escape_path(input_path) + " " + duration_str + "-c:v " + video_encoder + " -crf " + std::to_string(crf_value) + " " + preset + " -profile:v main -pix_fmt yuv420p " + video_filter + " -c:a copy -map 0 -map_metadata -1 -f matroska " + escape_path(output_path) + " > tmp_video_output_directory/ffmpeg_log_" + safe_filename + (duration > 0 ? "_test.txt" : ".txt") + " 2>&1";
 
     log_message("Running encoding for " + input_path + " with command: " + cmd_crf);
     int ret = std::system(cmd_crf.c_str());
     if (ret != 0) {
-        std::ifstream log_file(log_file_name);
+        log_message("Failed to execute command: " + cmd_crf);
+        std::ifstream log_file("tmp_video_output_directory/ffmpeg_log_" + safe_filename + (duration > 0 ? "_test.txt" : ".txt"));
         std::stringstream log_content;
         std::string line;
         while (std::getline(log_file, line)) {
@@ -114,13 +130,11 @@ void process_file(const std::string& input_path) {
         }
         log_file.close();
         log_message("FFmpeg error output:\n" + log_content.str());
-        log_message("Failed to convert " + input_path + ". Check " + log_file_name);
+        log_message("Failed to convert " + input_path + ". Check tmp_video_output_directory/ffmpeg_log_" + safe_filename + (duration > 0 ? "_test.txt" : ".txt"));
         return;
     }
 
     log_message("Successfully converted " + input_path + " to " + output_path);
-
-    // Log file sizes
     double input_size = get_file_size(input_path);
     double output_size = get_file_size(output_path);
     log_message("Input file size for " + input_path + ": " + std::to_string(input_size) + " MB");
@@ -130,34 +144,45 @@ void process_file(const std::string& input_path) {
 }
 
 int main(int argc, char* argv[]) {
-    // Check for FFmpeg
     if (!check_ffmpeg()) {
         return 1;
     }
 
-    // Check for command-line arguments
     if (argc < 2) {
-        log_message("Usage: " + std::string(argv[0]) + " <input1.mkv> [<input2.mkv> ...]");
+        log_message("Usage: " + std::string(argv[0]) + " <input1.mkv> [<input2.mkv> ...] [-t duration_in_seconds]");
         return 1;
     }
 
-    // Create output directory
     fs::create_directory("tmp_video_output_directory");
     log_message("Starting conversion for " + std::to_string(argc - 1) + " files");
 
-    // Collect input files
+    double duration = 0.0;
     std::vector<std::string> input_files;
     for (int i = 1; i < argc; ++i) {
-        fs::path input_path = argv[i];
-        if (!fs::exists(input_path)) {
-            log_message("Error: " + input_path.string() + " does not exist.");
-            continue;
+        std::string arg = argv[i];
+        if (arg == "-t" && i + 1 < argc) {
+            try {
+                duration = std::stod(argv[++i]);
+                if (duration <= 0) {
+                    log_message("Error: Duration must be positive. Using full file.");
+                    duration = 0.0;
+                }
+            } catch (...) {
+                log_message("Error: Invalid duration. Using full file.");
+                duration = 0.0;
+            }
+        } else {
+            fs::path input_path = arg;
+            if (!fs::exists(input_path)) {
+                log_message("Error: " + input_path.string() + " does not exist.");
+                continue;
+            }
+            if (input_path.extension() != ".mkv") {
+                log_message("Error: " + input_path.string() + " is not an .mkv file.");
+                continue;
+            }
+            input_files.push_back(input_path.string());
         }
-        if (input_path.extension() != ".mkv") {
-            log_message("Error: " + input_path.string() + " is not an .mkv file.");
-            continue;
-        }
-        input_files.push_back(input_path.string());
     }
 
     if (input_files.empty()) {
@@ -165,11 +190,11 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Set max parallel jobs
+    log_message("Using duration of " + std::to_string(duration) + " seconds (0 means full file).");
+
     const size_t max_parallel_jobs = std::min<size_t>(2, std::thread::hardware_concurrency() / 2);
     log_message("Running up to " + std::to_string(max_parallel_jobs) + " parallel jobs");
 
-    // Process files in parallel
     std::vector<std::thread> threads;
     std::queue<std::string> file_queue;
     for (const auto& file : input_files) {
@@ -180,7 +205,7 @@ int main(int argc, char* argv[]) {
         while (!file_queue.empty() && threads.size() < max_parallel_jobs) {
             std::string file = file_queue.front();
             file_queue.pop();
-            threads.emplace_back(process_file, file);
+            threads.emplace_back(process_file, file, duration);
         }
 
         for (auto& t : threads) {
