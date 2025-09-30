@@ -1,298 +1,296 @@
-<!DOCTYPE html>
-<html lang="en">
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WebRTC Video Receiver</title>
     <style>
-        #videoContainer {
-            position: relative;
-            width: 640px;
-            height: 480px;
-            background-color: black;
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f0f0f0;
         }
         video {
-            width: 100%;
-            height: 100%;
+            width: 640px;
+            height: 360px;
+            background-color: black;
         }
-        #staticCanvas {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: 10;
-            display: none;
+        input, button {
+            margin: 5px;
+            padding: 5px;
+        }
+        #log {
+            white-space: pre-wrap;
+            background-color: #fff;
+            border: 1px solid #ccc;
+            padding: 10px;
+            max-height: 400px;
+            overflow-y: auto;
         }
     </style>
 </head>
 <body>
     <h1>WebRTC Video Receiver</h1>
-    <div id="videoContainer">
-        <video id="remoteVideo" autoplay playsinline controls></video>
-        <canvas id="staticCanvas" width="640" height="480"></canvas>
+    <video id="video" autoplay playsinline controls></video>
+    <div>
+        <button onclick="togglePlayPause()">Play/Pause</button>
+        <input type="text" id="serverUrl" placeholder="Server URL (e.g., http://192.168.0.60:8081/signal)" value="http://192.168.0.60:8081/signal">
+        <input type="text" id="station" placeholder="Station (e.g., channel1, channel2, channel3)" value="Bob's Burgers">
+        <button onclick="startConnection()">Send Offer to Server</button>
+        <button onclick="restartICE()">Restart ICE</button>
     </div>
-    <button id="startButton">Start Connection</button>
-    <label for="serverUrl">Go Server URL (e.g., http://192.168.0.60:8081/signal):</label>
-    <input id="serverUrl" type="text" value="http://192.168.0.60:8081/signal" style="width: 300px;">
-    <label for="station">Station (e.g., channel1, channel2, channel3):</label>
-    <input id="station" type="text" value="channel1" style="width: 150px;">
-    <button id="sendOfferButton" disabled>Send Offer to Server</button>
-    <button id="restartIceButton" disabled>Restart ICE</button>
     <pre id="log"></pre>
-
     <script>
-        // Utility to log messages to the console and the page
+        let pc = null;
+        let audioContext = null;
+        let staticAudioNode = null;
+        const videoElement = document.getElementById('video');
+        const logElement = document.getElementById('log');
+
         function log(message) {
-            console.log(message);
-            const logElement = document.getElementById('log');
-            logElement.textContent += message + '\n';
+            const timestamp = new Date().toISOString();
+            logElement.textContent += `[${timestamp}] ${message}\n`;
+            logElement.scrollTop = logElement.scrollHeight;
         }
 
-        // Configuration for ICE servers
-        const configuration = {
-            iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-                { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-            ]
-        };
+        async function getStatsPeriodically() {
+            if (!pc) return;
+            try {
+                const stats = await pc.getStats();
+                stats.forEach(report => {
+                    if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+                        log(`Audio inbound: packetsReceived=${report.packetsReceived}, ` +
+                            `bytesReceived=${report.bytesReceived}, packetsLost=${report.packetsLost}, ` +
+                            `jitter=${report.jitter}, audioLevel=${report.audioLevel || 0}, ` +
+                            `totalAudioEnergy=${report.totalAudioEnergy || 0}, ` +
+                            `totalSamplesReceived=${report.totalSamplesReceived || 0}`);
+                    }
+                    if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                        log(`Video inbound: packetsReceived=${report.packetsReceived}, ` +
+                            `bytesReceived=${report.bytesReceived}, packetsLost=${report.packetsLost}, ` +
+                            `jitter=${report.jitter}, frameRate=${report.framesPerSecond || 0}`);
+                    }
+                    if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+                        log(`Active candidate pair: localType=${report.localCandidateId}, ` +
+                            `remoteType=${report.remoteCandidateId}, bytesSent=${report.bytesSent}, ` +
+                            `bytesReceived=${report.bytesReceived}`);
+                    }
+                });
+            } catch (err) {
+                log(`Error getting stats: ${err}`);
+            }
+            setTimeout(getStatsPeriodically, 2000);
+        }
 
-        // Variables
-        let pc = null;
-        let remoteStream = null;
-        let offer = null;
-        let candidates = [];
-
-        // Static effect variables
-        const staticCanvas = document.getElementById('staticCanvas');
-        const staticCtx = staticCanvas.getContext('2d');
-        let staticInterval;
-        let staticTime = 0;
-
-        // Audio variables for static noise
-        let audioCtx;
-        let noiseNode;
-        let gainNode;
-
-        function startStatic() {
-            staticCanvas.style.display = 'block';
-            staticInterval = setInterval(makeStaticNoise, 50);
+        function createTVStaticEffect() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 640;
+            canvas.height = 360;
+            const ctx = canvas.getContext('2d');
+            videoElement.srcObject = canvas.captureStream(30);
             log('Starting TV static effect');
 
-            // Start audio
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            noiseNode = audioCtx.createScriptProcessor(4096, 1, 1);
-            noiseNode.onaudioprocess = function(e) {
-                const output = e.outputBuffer.getChannelData(0);
-                for (let i = 0; i < output.length; i++) {
-                    output[i] = Math.random() * 2 - 1; // White noise
+            function drawStatic() {
+                const imageData = ctx.createImageData(canvas.width, canvas.height);
+                for (let i = 0; i < imageData.data.length; i += 4) {
+                    const noise = Math.random() * 255;
+                    imageData.data[i] = noise;
+                    imageData.data[i + 1] = noise;
+                    imageData.data[i + 2] = noise;
+                    imageData.data[i + 3] = 255;
                 }
-            };
-            gainNode = audioCtx.createGain();
-            gainNode.gain.value = 0.05; // Lower volume to avoid being too loud
-            noiseNode.connect(gainNode);
-            gainNode.connect(audioCtx.destination);
+                ctx.putImageData(imageData, 0, 0);
+                requestAnimationFrame(drawStatic);
+            }
+            drawStatic();
+        }
+
+        function startStaticAudio() {
+            if (!audioContext || audioContext.state === 'closed') {
+                audioContext = new AudioContext();
+            }
+            const bufferSize = audioContext.sampleRate * 2;
+            const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+            const data = buffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) {
+                data[i] = Math.random() * 2 - 1;
+            }
+            const source = audioContext.createBufferSource();
+            source.buffer = buffer;
+            source.loop = true;
+            const gainNode = audioContext.createGain();
+            gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+            source.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            source.start();
             log('Starting static audio');
+            staticAudioNode = source;
         }
 
-        function stopStatic() {
-            clearInterval(staticInterval);
-            staticCanvas.style.display = 'none';
-            log('Stopping TV static effect');
-
-            // Stop audio with fade out
-            if (audioCtx && gainNode) {
-                try {
-                    gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.5); // Fade to 0 over 0.5 seconds
-                } catch (error) {
-                    log('Error during audio fade: ' + error);
-                }
-                setTimeout(() => {
-                    if (noiseNode) noiseNode.disconnect();
-                    if (gainNode) gainNode.disconnect();
-                    if (audioCtx) {
-                        audioCtx.close().then(() => {
-                            log('AudioContext closed');
-                        }).catch(error => {
-                            log('Error closing AudioContext: ' + error);
-                        });
-                        audioCtx = null;
-                    }
-                    log('Stopping static audio');
-                }, 500);
+        function stopStaticAudio() {
+            if (staticAudioNode) {
+                staticAudioNode.stop();
+                staticAudioNode = null;
+                log('Stopping static audio');
             }
         }
 
-        function makeStaticNoise() {
-            const width = staticCanvas.width;
-            const height = staticCanvas.height;
-            const imgd = staticCtx.createImageData(width, height);
-            const pix = imgd.data;
-
-            for (let i = 0, n = pix.length; i < n; i += 4) {
-                const c = 7 + Math.sin(i / 50000 + staticTime / 7);
-                const gray = 40 * Math.random() * c;
-                pix[i] = pix[i + 1] = pix[i + 2] = gray;
-                pix[i + 3] = 255; // alpha
+        function togglePlayPause() {
+            if (videoElement.paused) {
+                videoElement.play().then(() => {
+                    log('Video playback resumed');
+                }).catch(err => {
+                    log(`Video playback error: ${err}`);
+                });
+            } else {
+                videoElement.pause();
+                log('Video playback paused');
             }
-
-            staticCtx.putImageData(imgd, 0, 0);
-            staticTime = (staticTime + 1) % height;
         }
 
-        // Function to create the local offer (recvonly video and audio)
-        async function createOffer() {
-            pc = new RTCPeerConnection(configuration);
+        async function startConnection() {
+            if (pc) {
+                pc.close();
+                log('Closed existing connection to switch channels');
+            }
 
-            // Event listeners for debugging
-            pc.oniceconnectionstatechange = () => {
-                log('ICE connection state: ' + pc.iceConnectionState);
-                if (pc.iceConnectionState === 'disconnected') {
-                    stopStatic();
-                    log('ICE disconnected - attempting automatic restart in 5 seconds...');
-                    setTimeout(restartIce, 5000);
-                }
-                if (pc.iceConnectionState === 'failed') {
-                    stopStatic();
-                    log('ICE failed - manual restart may be needed.');
-                    document.getElementById('restartIceButton').disabled = false;
-                }
-                if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-                    const videoElement = document.getElementById('remoteVideo');
-                    videoElement.srcObject = remoteStream;
-                    log('ICE connected - assigned stream to video element.');
-                }
-            };
+            createTVStaticEffect();
+            startStaticAudio();
 
-            pc.onconnectionstatechange = () => {
-                log('Peer connection state: ' + pc.connectionState);
-            };
+            pc = new RTCPeerConnection({
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            });
 
-            pc.onicecandidate = (event) => {
+            pc.onicecandidate = event => {
                 if (event.candidate) {
-                    log('New ICE candidate: ' + JSON.stringify(event.candidate));
-                    candidates.push(event.candidate);
+                    log(`New ICE candidate: ${JSON.stringify(event.candidate)}`);
                 } else {
                     log('All ICE candidates gathered (end-of-candidates)');
                 }
             };
 
-            pc.ontrack = (event) => {
-                log('Track received: ' + event.track.kind + ' ' + event.track.readyState);
-                if (!remoteStream) {
-                    remoteStream = new MediaStream();
+            pc.oniceconnectionstatechange = () => {
+                log(`ICE connection state: ${pc.iceConnectionState}`);
+                if (pc.iceConnectionState === 'connected') {
+                    log('ICE connected - assigned stream to video element.');
+                    setTimeout(getStatsPeriodically, 1000);
                 }
-                remoteStream.addTrack(event.track);
-                event.track.onmute = () => log('Track muted - possible black screen or no media flow');
-                event.track.onunmute = () => log('Track unmuted - media flowing');
             };
 
-            // Create offer
-            offer = await pc.createOffer({
-                offerToReceiveVideo: true,
-                offerToReceiveAudio: true
-            });
-            await pc.setLocalDescription(offer);
-            log('Local Offer SDP: ' + offer.sdp);
-        }
-
-        // Function to send offer to Go server via fetch
-        async function sendOfferToServer() {
-            stopStatic(); // Stop any existing static first to prevent multiples/orphans
-            startStatic(); // Then start new static
-
-            if (pc) {
-                pc.close();
-                pc = null;
-                offer = null;
-                candidates = [];
-                if (remoteStream) {
-                    remoteStream.getTracks().forEach(track => track.stop());
-                    remoteStream = null;
+            pc.ontrack = event => {
+                const track = event.track;
+                log(`Track received: kind=${track.kind}, id=${track.id}, readyState=${track.readyState}, enabled=${track.enabled}, muted=${track.muted}`);
+                if (track.kind === 'video') {
+                    videoElement.srcObject = event.streams[0];
+                    stopStaticAudio();
+                    log('Stopping TV static effect');
+                    log('Video started playing');
                 }
-                document.getElementById('remoteVideo').srcObject = null;
-                document.getElementById('restartIceButton').disabled = true;
-                log('Closed existing connection to switch channels');
-            }
-
-            await createOffer();
-
-            const serverUrlInput = document.getElementById('serverUrl').value;
-            const station = document.getElementById('station').value;
-            let serverUrl = serverUrlInput;
-            if (station && station !== 'default') {
-                const separator = serverUrlInput.includes('?') ? '&' : '?';
-                serverUrl += separator + 'station=' + encodeURIComponent(station);
-            }
-
-            try {
-                const response = await fetch(serverUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ sdp: offer.sdp, type: offer.type })
-                });
-                if (!response.ok) {
-                    throw new Error('HTTP error: ' + response.status);
-                }
-                const answerJson = await response.json();
-                const answer = new RTCSessionDescription(answerJson);
-                await pc.setRemoteDescription(answer);
-                log('Remote Answer SDP set: ' + answer.sdp);
-                document.getElementById('restartIceButton').disabled = false;
-            } catch (error) {
-                log('Error sending offer: ' + error);
-                stopStatic();
-            }
-        }
-
-        // Function for ICE restart
-        async function restartIce() {
-            log('Restarting connection...');
-            await sendOfferToServer();
-        }
-
-        // Periodically get stats for debugging
-        function startStatsLogging() {
-            setInterval(async () => {
-                if (!pc) return;
-                try {
-                    const stats = await pc.getStats();
-                    stats.forEach(report => {
-                        if (report.type === 'inbound-rtp' && report.kind === 'video') {
-                            log('Video inbound: packetsReceived=' + (report.packetsReceived || 0) + ', bytesReceived=' + (report.bytesReceived || 0) + ', packetsLost=' + (report.packetsLost || 0) + ', jitter=' + (report.jitter || 0) + ', frameRate=' + (report.frameRate || 0));
-                        }
-                        if (report.type === 'inbound-rtp' && report.kind === 'audio') {
-                            log('Audio inbound: packetsReceived=' + (report.packetsReceived || 0) + ', bytesReceived=' + (report.bytesReceived || 0) + ', packetsLost=' + (report.packetsLost || 0) + ', jitter=' + (report.jitter || 0));
-                        }
-                        if (report.type === 'candidate-pair' && report.state === 'succeeded') {
-                            log('Active candidate pair: localType=' + report.localCandidateId + ', remoteType=' + report.remoteCandidateId + ', bytesSent=' + report.bytesSent + ', bytesReceived=' + report.bytesReceived);
-                        }
+                if (track.kind === 'audio') {
+                    const stream = new MediaStream([track]);
+                    videoElement.srcObject = event.streams[0]; // Ensure audio and video in same stream
+                    videoElement.play().then(() => {
+                        log('Audio and video playback started');
+                    }).catch(err => {
+                        log(`Audio and video playback error: ${err}`);
                     });
-                } catch (error) {
-                    log('getStats error: ' + error);
+                    track.onmute = () => {
+                        log(`Track muted: kind=${track.kind}, id=${track.id} - possible silence or no media flow`);
+                    };
+                    track.onunmute = () => {
+                        log(`Track unmuted: kind=${track.kind}, id=${track.id} - media flowing`);
+                    };
+                    track.onended = () => {
+                        log(`Track ended: kind=${track.kind}, id=${track.id}`);
+                    };
                 }
-            }, 5000);
+            };
+
+            pc.onconnectionstatechange = () => {
+                log(`Peer connection state: ${pc.connectionState}`);
+            };
+
+            const audioTransceiver = pc.addTransceiver('audio', { direction: 'recvonly' });
+            const videoTransceiver = pc.addTransceiver('video', { direction: 'recvonly' });
+
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            log(`Local Offer SDP:\n${offer.sdp}`);
+
+            const serverUrl = document.getElementById('serverUrl').value;
+            const station = document.getElementById('station').value;
+            const response = await fetch(`${serverUrl}?station=${encodeURIComponent(station)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(offer)
+            });
+
+            if (response.ok) {
+                const answer = await response.json();
+                log(`Remote Answer SDP:\n${answer.sdp}`);
+                await pc.setRemoteDescription(answer);
+            } else {
+                log(`Error sending offer: ${response.statusText}`);
+            }
         }
 
-        // Setup video playing event to stop static
-        const videoElement = document.getElementById('remoteVideo');
-        videoElement.onplaying = () => {
-            stopStatic();
-            log('Video started playing - static effect stopped');
-        };
-
-        // Button handlers
-        document.getElementById('startButton').addEventListener('click', async () => {
-            await createOffer();
-            startStatsLogging();
-            document.getElementById('sendOfferButton').disabled = false;
-            log('Connection started. Enter server URL and station, then click "Send Offer to Server".');
-        });
-
-        document.getElementById('sendOfferButton').addEventListener('click', sendOfferToServer);
-
-        document.getElementById('restartIceButton').addEventListener('click', restartIce);
+        async function restartICE() {
+            if (!pc) return;
+            const offer = await pc.createOffer({ iceRestart: true });
+            await pc.setLocalDescription(offer);
+            log(`Restart ICE Offer SDP:\n${offer.sdp}`);
+            const serverUrl = document.getElementById('serverUrl').value;
+            const station = document.getElementById('station').value;
+            const response = await fetch(`${serverUrl}?station=${encodeURIComponent(station)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(offer)
+            });
+            if (response.ok) {
+                const answer = await response.json();
+                log(`Remote Answer SDP:\n${answer.sdp}`);
+                await pc.setRemoteDescription(answer);
+            } else {
+                log(`Error restarting ICE: ${response.statusText}`);
+            }
+        }
     </script>
 </body>
 </html>
