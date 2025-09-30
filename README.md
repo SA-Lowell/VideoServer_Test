@@ -1,3 +1,7 @@
+Start Postgres server:
+	set PGDATA=C:\Program Files\PostgreSQL\17\data
+	pg_ctl start
+
 To compile:
 g++ -std=c++17 -O3 -march=native -o ad_insert ad_insert.cpp
 g++ -std=c++17 -O3 -march=native -o generate_hls generate_hls.cpp

@@ -298,7 +298,7 @@ int main(int argc, char* argv[])
     }
     double video_duration = std::stod(duration_output);
     if(!no_format) std::cout << "Video duration: " << std::fixed << std::setprecision(3) << video_duration << std::endl;
-    std::string silence_cmd = "ffmpeg -i \"" + video + "\" -af silencedetect=noise=-45dB:d=0.1 -f null - 2>&1";
+    std::string silence_cmd = "ffmpeg -i \"" + video + "\" -af silencedetect=noise=-40dB:d=0.1 -f null - 2>&1";
     std::string silence_output = exec(silence_cmd);
     std::vector<Period> silences = parseSilence(silence_output, start_time);
     std::string black_cmd = "ffmpeg -i \"" + video + "\" -vf blackdetect=d=0.1:pic_th=0.98:pix_th=0.12 -f null - 2>&1";
