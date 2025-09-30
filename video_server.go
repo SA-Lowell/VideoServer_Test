@@ -1705,276 +1705,63 @@ func updateVideoDurations(db *sql.DB) error {
 }
 
 func main() {
-    db, err := sql.Open("postgres", "postgres://user:password@localhost:5432/webrtctv?sslmode=disable")
-    if err != nil {
-        log.Fatalf("Failed to connect to DB: %v", err)
-    }
-    defer db.Close()
-    log.Println("Connected to PostgreSQL DB")
-
-    videoBaseDir = os.Getenv("VIDEO_BASE_DIR")
-    if videoBaseDir == "" {
-        videoBaseDir = "Z:/Videos"
-    }
-    log.Printf("Using video base directory: %s", videoBaseDir)
-
-    rows, err := db.Query("SELECT id, uri FROM videos WHERE duration IS NULL")
-    if err != nil {
-        log.Fatalf("Failed to query videos with NULL duration: %v", err)
-    }
-    defer rows.Close()
-    var vidsToUpdate []struct {
-        ID  int64
-        URI string
-    }
-    for rows.Next() {
-        var id int64
-        var uri string
-        if err := rows.Scan(&id, &uri); err != nil {
-            log.Printf("Failed to scan video row: %v", err)
-            continue
-        }
-        vidsToUpdate = append(vidsToUpdate, struct {
-            ID  int64
-            URI string
-        }{ID: id, URI: uri})
-    }
-    if len(vidsToUpdate) == 0 {
-        log.Println("No videos with NULL duration found")
-    }
-    for _, vid := range vidsToUpdate {
-        duration, err := getVideoDuration(filepath.Join(videoBaseDir, vid.URI))
-        if err != nil {
-            log.Printf("Failed to get duration for video %d: %v", vid.ID, err)
-            continue
-        }
-        _, err = db.Exec("UPDATE videos SET duration = $1 WHERE id = $2", duration, vid.ID)
-        if err != nil {
-            log.Printf("Failed to update duration for video %d: %v", vid.ID, err)
-        }
-    }
-
-    commercialRows, err := db.Query("SELECT id, uri, duration FROM commercials")
-    if err != nil {
-        log.Fatalf("Failed to load commercials: %v", err)
-    }
-    defer commercialRows.Close()
-    var commercials []Commercial
-    for commercialRows.Next() {
-        var c Commercial
-        if err := commercialRows.Scan(&c.ID, &c.URI, &c.Duration); err != nil {
-            log.Printf("Failed to scan commercial: %v", err)
-            continue
-        }
-        commercials = append(commercials, c)
-    }
-    log.Printf("Loaded %d commercials", len(commercials))
-
-    stationRows, err := db.Query(`
-        SELECT s.name, COALESCE(ARRAY_AGG(vp.video_id) FILTER (WHERE vp.video_id IS NOT NULL), '{}') AS video_ids
-        FROM stations s
-        LEFT JOIN video_playlists vp ON vp.station_id = s.id
-        GROUP BY s.name
-    `)
-    if err != nil {
-        log.Fatalf("Failed to load stations: %v", err)
-    }
-    defer stationRows.Close()
-    stations := make(map[string]*Station)
-    for stationRows.Next() {
-        var name string
-        var videoIDs []int64
-        if err := stationRows.Scan(&name, pq.Array(&videoIDs)); err != nil {
-            log.Printf("Failed to scan station: %v", err)
-            continue
-        }
-        if len(videoIDs) == 0 {
-            log.Printf("No videos found for station %s", name)
-            continue
-        }
-        elapsed, loops := calculateElapsedTime(name, db)
-        log.Printf("Station %s: Elapsed %f seconds, %d loops, remaining %f seconds", name, elapsed, loops, float64(len(videoIDs))*DefaultDuration-float64(loops)*DefaultLoopDuration-elapsed)
-        currentIndex := int(elapsed / DefaultDuration)
-        if currentIndex >= len(videoIDs) {
-            currentIndex = currentIndex % len(videoIDs)
-            loops++
-        }
-        currentVideo := videoIDs[currentIndex]
-        offset := elapsed - float64(currentIndex)*DefaultDuration
-        log.Printf("Station %s: Initialized at video %d (index %d) with offset %f seconds", name, currentVideo, currentIndex, offset)
-        st := &Station{
-            name:         name,
-            videoQueue:   videoIDs,
-            currentIndex: currentIndex,
-            currentVideo: currentVideo,
-            currentOffset: offset,
-            segmentList:  []string{},
-            viewers:      0,
-            stopProcessing: make(chan struct{}),
-            fpsCache:     sync.Map{},
-            durationCache: sync.Map{},
-            mu:           sync.Mutex{},
-        }
-        stations[name] = st
-        go func(s *Station) {
-            for {
-                select {
-                case <-s.stopProcessing:
-                    return
-                default:
-                    s.mu.Lock()
-                    if s.viewers == 0 {
-                        s.mu.Unlock()
-                        time.Sleep(time.Second)
-                        continue
-                    }
-                    offset := s.currentOffset
-                    videoID := s.currentVideo
-                    s.mu.Unlock()
-                    segments, spsPPS, fmtpLine, err := processVideo(s, videoID, db, offset, DefaultDuration)
-                    if err != nil {
-                        log.Printf("Station %s: Failed to process video %d: %v", s.name, videoID, err)
-                        time.Sleep(time.Second)
-                        continue
-                    }
-                    s.mu.Lock()
-                    s.segmentList = append(s.segmentList, segments...)
-                    if s.spsPPS == nil {
-                        s.spsPPS = spsPPS
-                        s.fmtpLine = fmtpLine
-                    }
-                    s.mu.Unlock()
-                }
-            }
-        }(st)
-        go sender(st, db)
-    }
-    log.Printf("Discovered %d stations from DB: %v", len(stations), stations)
-
-    r := gin.Default()
-    r.POST("/signal", func(c *gin.Context) {
-        stationName := c.Query("station")
-        st, exists := stations[stationName]
-        if !exists {
-            c.JSON(http.StatusBadRequest, gin.H{"error": "station not found"})
-            return
-        }
-        var offer webrtc.SessionDescription
-        if err := c.ShouldBindJSON(&offer); err != nil {
-            c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-            return
-        }
-        log.Printf("Signaling for station %s", stationName)
-        peerConnection, err := webrtc.NewPeerConnection(webrtc.Configuration{
-            ICEServers: []webrtc.ICEServer{{URLs: []string{"stun:stun.l.google.com:19302"}}},
-        })
-        if err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-            return
-        }
-        st.mu.Lock()
-        st.viewers++
-        st.mu.Unlock()
-        defer func() {
-            st.mu.Lock()
-            st.viewers--
-            if st.viewers == 0 {
-                close(st.stopProcessing)
-                st.stopProcessing = make(chan struct{})
-            }
-            st.mu.Unlock()
-        }()
-        spsPPS, fmtpLine := st.spsPPS, st.fmtpLine
-        videoTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{
-            MimeType:  webrtc.MimeTypeH264,
-            ClockRate: 90000,
-            SDP:       fmt.Sprintf("a=fmtp:103 %s", fmtpLine),
-        }, "video", "pion")
-        if err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-            return
-        }
-        audioTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{
-            MimeType:    webrtc.MimeTypeOpus,
-            ClockRate:   48000,
-            Channels:    2,
-            SDPFmtpLine: "minptime=10;useinbandfec=1",
-        }, "audio", "pion")
-        if err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-            return
-        }
-        log.Printf("Station %s: Created audio track with SSRC %d", stationName, audioTrack.SSRC())
-        log.Printf("Station %s: Created video track with SSRC %d", stationName, videoTrack.SSRC())
-        st.mu.Lock()
-        st.trackVideo = videoTrack
-        st.trackAudio = audioTrack
-        st.mu.Unlock()
-        log.Printf("Station %s: Tracks added", stationName)
-        rtpVideo, err := peerConnection.AddTrack(videoTrack)
-        if err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-            return
-        }
-        rtpAudio, err := peerConnection.AddTrack(audioTrack)
-        if err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-            return
-        }
-        go func() {
-            rtcpBuf := make([]byte, 1500)
-            for {
-                if _, _, rtcpErr := rtpVideo.Read(rtcpBuf); rtcpErr != nil {
-                    return
-                }
-            }
-        }()
-        go func() {
-            rtcpBuf := make([]byte, 1500)
-            for {
-                if _, _, rtcpErr := rtpAudio.Read(rtcpBuf); rtcpErr != nil {
-                    return
-                }
-            }
-        }()
-        peerConnection.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
-            log.Printf("Station %s: ICE state: %s", stationName, state.String())
-            if state == webrtc.ICEConnectionStateDisconnected || state == webrtc.ICEConnectionStateFailed {
-                st.mu.Lock()
-                st.viewers--
-                if st.viewers == 0 {
-                    close(st.stopProcessing)
-                    st.stopProcessing = make(chan struct{})
-                }
-                st.mu.Unlock()
-                peerConnection.Close()
-            }
-        })
-        peerConnection.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-            log.Printf("Station %s: PC state: %s", stationName, state.String())
-        })
-        if err := peerConnection.SetRemoteDescription(offer); err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-            return
-        }
-        answer, err := peerConnection.CreateAnswer(nil)
-        if err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-            return
-        }
-        if err := peerConnection.SetLocalDescription(answer); err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-            return
-        }
-        log.Printf("Station %s: SDP Answer: %s", stationName, answer.SDP)
-        c.JSON(http.StatusOK, answer)
-    })
-    r.GET("/", indexHandler)
-    r.GET("/hls/*path", func(c *gin.Context) {
-        c.File(filepath.Join(HlsDir, c.Param("path")))
-    })
-    log.Printf("WebRTC TV server on :8081. Stations: %v", stations)
-    if err := r.Run(":8081"); err != nil {
-        log.Fatalf("Failed to start server: %v", err)
-    }
+	rand.Seed(time.Now().UnixNano())
+	if err := os.MkdirAll(HlsDir, 0755); err != nil {
+		log.Fatal(err)
+	}
+	db, err := sql.Open("postgres", dbConnString)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		log.Fatal("DB ping failed: ", err)
+	}
+	log.Println("Connected to PostgreSQL DB")
+	videoBaseDir = os.Getenv("VIDEO_BASE_DIR")
+	if videoBaseDir == "" {
+		videoBaseDir = DefaultVideoBaseDir
+	}
+	log.Printf("Using video base directory: %s", videoBaseDir)
+	if err := updateVideoDurations(db); err != nil {
+		log.Printf("Failed to update video durations: %v", err)
+	}
+	adRows, err := db.Query(
+		"SELECT v.uri FROM videos v JOIN video_tags vt ON v.id = vt.video_id WHERE vt.tag_id = 4")
+	if err != nil {
+		log.Fatalf("Failed to query commercials: %v", err)
+	}
+	defer adRows.Close()
+	for adRows.Next() {
+		var uri string
+		if err := adRows.Scan(&uri); err != nil {
+			log.Printf("Failed to scan ad URI: %v", err)
+			continue
+		}
+		fullAdPath := filepath.Join(videoBaseDir, uri)
+		if _, err := os.Stat(fullAdPath); err == nil {
+			adFullPaths = append(adFullPaths, fullAdPath)
+		} else {
+			log.Printf("Ad file not found: %s", fullAdPath)
+		}
+	}
+	if err := adRows.Err(); err != nil {
+		log.Fatalf("Error iterating ads: %v", err)
+	}
+	log.Printf("Loaded %d commercials", len(adFullPaths))
+	discoverStations(db)
+	for _, st := range stations {
+		go sender(st, db)
+	}
+	r := gin.Default()
+	r.Use(cors.Default())
+	r.POST("/signal", func(c *gin.Context) {
+		signalingHandler(db, c)
+	})
+	r.GET("/", indexHandler)
+	r.GET("/hls/*path", func(c *gin.Context) {
+		c.String(404, "Use WebRTC")
+	})
+	log.Printf("WebRTC TV server on %s. Stations: %v", Port, stations)
+	log.Fatal(r.Run(Port))
 }
