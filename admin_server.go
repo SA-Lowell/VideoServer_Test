@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	videoBaseDir = "Z:/Videos"
+	videoBaseDir                    = "Z:/Videos"
 	adBreakFadeToBlackDetectorPath  = "./ad_break_fade_to_black_detector.exe"
 	adBreakHardCutDetectorPath      = "./ad_break_hard_cut_detector.exe"
 	repairVideoPath                 = "./repair_video.exe"
@@ -60,6 +60,12 @@ type AddBreakReq struct {
 
 type RepairVideoReq struct {
 	ID int64 `json:"id"`
+}
+
+type Station struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	UnixStart int64  `json:"unix_start"`
 }
 
 var db *sql.DB
@@ -120,6 +126,27 @@ func main() {
 	r.POST("/add-breaks", addBreaksHandler)
 	r.POST("/repair-video", repairVideoHandler)
 	r.POST("/fix-audio", fixAudioHandler)
+
+	r.GET("/manage-titles", manageTitlesHandler)
+	r.GET("/manage-channels", manageChannelsHandler)
+	r.GET("/manage-title-videos", manageTitleVideosHandler)
+	r.GET("/manage-channel-videos", manageChannelVideosHandler)
+
+	r.GET("/api/titles", apiTitlesHandler)
+	r.POST("/api/titles", apiCreateTitleHandler)
+	r.PUT("/api/titles/:id", apiUpdateTitleHandler)
+	r.DELETE("/api/titles/:id", apiDeleteTitleHandler)
+
+	r.GET("/api/stations", apiStationsHandler)
+	r.POST("/api/stations", apiCreateStationHandler)
+	r.PUT("/api/stations/:id", apiUpdateStationHandler)
+	r.DELETE("/api/stations/:id", apiDeleteStationHandler)
+
+	r.GET("/api/videos", apiVideosHandler)
+	r.POST("/api/assign-video-title/:vid/:tid", apiAssignVideoToTitleHandler)
+	r.DELETE("/api/assign-video-title/:vid", apiRemoveVideoFromTitleHandler)
+	r.POST("/api/assign-video-station", apiAssignVideoToStationHandler)
+	r.DELETE("/api/assign-video-station/:sid/:vid", apiRemoveVideoFromStationHandler)
 
 	r.NoRoute(func(c *gin.Context) {
 		c.HTML(http.StatusNotFound, "404.html", gin.H{"error": "404"})
@@ -626,7 +653,6 @@ func fixAudioHandler(c *gin.Context) {
 	tempFileName := fmt.Sprintf("%d_fixed_audio.mp4", req.ID)
 	tempPath := filepath.Join(tempDir, tempFileName)
 
-	// Check if temp file already exists to avoid re-processing
 	if _, err := os.Stat(tempPath); err == nil {
 		log.Printf("Temp file already exists: %s", tempPath)
 		tempURI := "/temp_videos/" + tempFileName
@@ -650,10 +676,10 @@ func fixAudioHandler(c *gin.Context) {
 
 func updateAdBreaksHandler(c *gin.Context) {
 	rows, err := db.Query(`
-        SELECT t.id, t.name, t.description
-        FROM titles t
-        ORDER BY t.name
-    `)
+		SELECT t.id, t.name, t.description
+		FROM titles t
+		ORDER BY t.name
+	`)
 	if err != nil {
 		log.Printf("Query error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -671,11 +697,11 @@ func updateAdBreaksHandler(c *gin.Context) {
 		}
 
 		tmrows, err := db.Query(`
-            SELECT mt.name, tm.value::text
-            FROM title_metadata tm
-            JOIN metadata_types mt ON tm.metadata_type_id = mt.id
-            WHERE tm.title_id = $1
-        `, t.ID)
+			SELECT mt.name, tm.value::text
+			FROM title_metadata tm
+			JOIN metadata_types mt ON tm.metadata_type_id = mt.id
+			WHERE tm.title_id = $1
+		`, t.ID)
 		if err != nil {
 			log.Printf("Title metadata query error: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -694,11 +720,11 @@ func updateAdBreaksHandler(c *gin.Context) {
 		}
 
 		vrows, err := db.Query(`
-            SELECT v.id, v.uri
-            FROM videos v
-            WHERE v.title_id = $1
-            ORDER BY v.id
-        `, t.ID)
+			SELECT v.id, v.uri
+			FROM videos v
+			WHERE v.title_id = $1
+			ORDER BY v.id
+		`, t.ID)
 		if err != nil {
 			log.Printf("Videos query error: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -715,11 +741,11 @@ func updateAdBreaksHandler(c *gin.Context) {
 			}
 
 			mrows, err := db.Query(`
-                SELECT mt.name, vm.value::text
-                FROM video_metadata vm
-                JOIN metadata_types mt ON vm.metadata_type_id = mt.id
-                WHERE vm.video_id = $1
-            `, v.ID)
+				SELECT mt.name, vm.value::text
+				FROM video_metadata vm
+				JOIN metadata_types mt ON vm.metadata_type_id = mt.id
+				WHERE vm.video_id = $1
+			`, v.ID)
 			if err != nil {
 				log.Printf("Video metadata query error: %v", err)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -738,11 +764,11 @@ func updateAdBreaksHandler(c *gin.Context) {
 			}
 
 			trows, err := db.Query(`
-                SELECT tg.name
-                FROM video_tags vt
-                JOIN tags tg ON vt.tag_id = tg.id
-                WHERE vt.video_id = $1
-            `, v.ID)
+				SELECT tg.name
+				FROM video_tags vt
+				JOIN tags tg ON vt.tag_id = tg.id
+				WHERE vt.video_id = $1
+			`, v.ID)
 			if err != nil {
 				log.Printf("Tags query error: %v", err)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -771,4 +797,360 @@ func updateAdBreaksHandler(c *gin.Context) {
 	}
 
 	c.HTML(http.StatusOK, "update_ad_break_points.html", gin.H{"Titles": titles})
+}
+
+func manageTitlesHandler(c *gin.Context) {
+	c.HTML(http.StatusOK, "manage_titles.html", gin.H{})
+}
+
+func manageChannelsHandler(c *gin.Context) {
+	c.HTML(http.StatusOK, "manage_channels.html", gin.H{})
+}
+
+func manageTitleVideosHandler(c *gin.Context) {
+	c.HTML(http.StatusOK, "manage_title_videos.html", gin.H{})
+}
+
+func manageChannelVideosHandler(c *gin.Context) {
+	c.HTML(http.StatusOK, "manage_channel_videos.html", gin.H{})
+}
+
+func apiTitlesHandler(c *gin.Context) {
+	search := strings.TrimSpace(c.Query("search"))
+	limitStr := c.Query("limit")
+	offsetStr := c.Query("offset")
+
+	limit := 10
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil {
+			limit = l
+		}
+	}
+	offset := 0
+	if offsetStr != "" {
+		if o, err := strconv.Atoi(offsetStr); err == nil {
+			offset = o
+		}
+	}
+
+	query := `SELECT id, name, description FROM titles`
+	args := []interface{}{}
+	if search != "" {
+		query += ` WHERE name ILIKE $1`
+		args = append(args, "%"+search+"%")
+	}
+	query += ` ORDER BY name LIMIT $` + strconv.Itoa(len(args)+1) + ` OFFSET $` + strconv.Itoa(len(args)+2)
+	args = append(args, limit, offset)
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	var titles []Title
+	for rows.Next() {
+		var t Title
+		if err := rows.Scan(&t.ID, &t.Name, &t.Description); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		titles = append(titles, t)
+	}
+
+	c.JSON(http.StatusOK, titles)
+}
+
+func apiCreateTitleHandler(c *gin.Context) {
+	var t Title
+	if err := c.BindJSON(&t); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	err := db.QueryRow(`INSERT INTO titles (name, description) VALUES ($1, $2) RETURNING id`, t.Name, t.Description).Scan(&t.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, t)
+}
+
+func apiUpdateTitleHandler(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
+		return
+	}
+	var t Title
+	if err := c.BindJSON(&t); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	_, err = db.Exec(`UPDATE titles SET name = $1, description = $2 WHERE id = $3`, t.Name, t.Description, id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	t.ID = id
+	c.JSON(http.StatusOK, t)
+}
+
+func apiDeleteTitleHandler(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
+		return
+	}
+	_, err = db.Exec(`DELETE FROM titles WHERE id = $1`, id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+func apiStationsHandler(c *gin.Context) {
+	search := strings.TrimSpace(c.Query("search"))
+	limitStr := c.Query("limit")
+	offsetStr := c.Query("offset")
+
+	limit := 10
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil {
+			limit = l
+		}
+	}
+	offset := 0
+	if offsetStr != "" {
+		if o, err := strconv.Atoi(offsetStr); err == nil {
+			offset = o
+		}
+	}
+
+	query := `SELECT id, name, unix_start FROM stations`
+	args := []interface{}{}
+	if search != "" {
+		query += ` WHERE name ILIKE $1`
+		args = append(args, "%"+search+"%")
+	}
+	query += ` ORDER BY name LIMIT $` + strconv.Itoa(len(args)+1) + ` OFFSET $` + strconv.Itoa(len(args)+2)
+	args = append(args, limit, offset)
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	var stations []Station
+	for rows.Next() {
+		var s Station
+		if err := rows.Scan(&s.ID, &s.Name, &s.UnixStart); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		stations = append(stations, s)
+	}
+
+	c.JSON(http.StatusOK, stations)
+}
+
+func apiCreateStationHandler(c *gin.Context) {
+	var s Station
+	if err := c.BindJSON(&s); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	err := db.QueryRow(`INSERT INTO stations (name, unix_start) VALUES ($1, $2) RETURNING id`, s.Name, s.UnixStart).Scan(&s.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, s)
+}
+
+func apiUpdateStationHandler(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
+		return
+	}
+	var s Station
+	if err := c.BindJSON(&s); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	_, err = db.Exec(`UPDATE stations SET name = $1, unix_start = $2 WHERE id = $3`, s.Name, s.UnixStart, id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	s.ID = id
+	c.JSON(http.StatusOK, s)
+}
+
+func apiDeleteStationHandler(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
+		return
+	}
+	_, err = db.Exec(`DELETE FROM stations WHERE id = $1`, id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+func apiVideosHandler(c *gin.Context) {
+    search := strings.TrimSpace(c.Query("search"))
+    titleIDStr := c.Query("title_id")
+    stationIDStr := c.Query("station_id")
+    limitStr := c.Query("limit")
+    offsetStr := c.Query("offset")
+    limit := 10
+    if limitStr != "" {
+        if l, err := strconv.Atoi(limitStr); err == nil {
+            limit = l
+        }
+    }
+    offset := 0
+    if offsetStr != "" {
+        if o, err := strconv.Atoi(offsetStr); err == nil {
+            offset = o
+        }
+    }
+    query := `SELECT v.id, v.uri FROM videos v`
+    args := []interface{}{}
+    whereClauses := []string{}
+    if titleIDStr != "" {
+        titleID, err := strconv.ParseInt(titleIDStr, 10, 64)
+        if err == nil {
+            whereClauses = append(whereClauses, `v.title_id = $`+strconv.Itoa(len(args)+1))
+            args = append(args, titleID)
+        }
+    }
+    if stationIDStr != "" {
+        stationID, err := strconv.ParseInt(stationIDStr, 10, 64)
+        if err == nil {
+            query += ` JOIN station_videos sv ON v.id = sv.video_id`
+            whereClauses = append(whereClauses, `sv.station_id = $`+strconv.Itoa(len(args)+1))
+            args = append(args, stationID)
+        }
+    } else {
+        // Ensure all videos are included when no station_id is provided
+        // No additional join or filter needed
+    }
+    if search != "" {
+        whereClauses = append(whereClauses, `v.uri ILIKE $`+strconv.Itoa(len(args)+1))
+        args = append(args, "%"+search+"%")
+    }
+    if len(whereClauses) > 0 {
+        query += ` WHERE ` + strings.Join(whereClauses, " AND ")
+    }
+    query += ` ORDER BY v.uri LIMIT $` + strconv.Itoa(len(args)+1) + ` OFFSET $` + strconv.Itoa(len(args)+2)
+    args = append(args, limit, offset)
+    log.Printf("Executing query: %s with args: %v", query, args)
+    rows, err := db.Query(query, args...)
+    if err != nil {
+        log.Printf("Query execution error: %v", err)
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+    defer rows.Close()
+    var videos []Video
+    for rows.Next() {
+        var v Video
+        if err := rows.Scan(&v.ID, &v.URI); err != nil {
+            log.Printf("Scan error: %v", err)
+            c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+            return
+        }
+        log.Printf("Fetched video: ID=%d, URI=%s", v.ID, v.URI)
+        videos = append(videos, v)
+    }
+    log.Printf("Returning %d videos", len(videos))
+    c.JSON(http.StatusOK, videos)
+}
+
+func apiAssignVideoToTitleHandler(c *gin.Context) {
+	vidStr := c.Param("vid")
+	tidStr := c.Param("tid")
+	vid, err := strconv.ParseInt(vidStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid video ID"})
+		return
+	}
+	tid, err := strconv.ParseInt(tidStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid title ID"})
+		return
+	}
+	_, err = db.Exec(`UPDATE videos SET title_id = $1 WHERE id = $2`, tid, vid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+func apiRemoveVideoFromTitleHandler(c *gin.Context) {
+	vidStr := c.Param("vid")
+	vid, err := strconv.ParseInt(vidStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid video ID"})
+		return
+	}
+	_, err = db.Exec(`UPDATE videos SET title_id = 0 WHERE id = $1`, vid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+func apiAssignVideoToStationHandler(c *gin.Context) {
+	type AssignReq struct {
+		StationID int64 `json:"station_id"`
+		VideoID   int64 `json:"video_id"`
+	}
+	var req AssignReq
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	_, err := db.Exec(`INSERT INTO station_videos (station_id, video_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, req.StationID, req.VideoID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+func apiRemoveVideoFromStationHandler(c *gin.Context) {
+	sidStr := c.Param("sid")
+	vidStr := c.Param("vid")
+	sid, err := strconv.ParseInt(sidStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid station ID"})
+		return
+	}
+	vid, err := strconv.ParseInt(vidStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid video ID"})
+		return
+	}
+	_, err = db.Exec(`DELETE FROM station_videos WHERE station_id = $1 AND video_id = $2`, sid, vid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
 }

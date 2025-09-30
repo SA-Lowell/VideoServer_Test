@@ -1,0 +1,189 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Manage Title Videos</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="/public_html/admin.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .form-container, .search-container { margin-bottom: 20px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .pagination { margin-top: 20px; }
+        .pagination button { margin: 0 5px; }
+    </style>
+</head>
+<body>
+    <h1>Manage Title Videos</h1>
+    <div class="form-container">
+        <h2>Assign Video to Title</h2>
+        <label>Title: <select id="title-select"></select></label><br>
+        <label>Video Search: <input type="text" id="video-search" oninput="searchVideos(0)"></label><br>
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>URI</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody id="video-table-body"></tbody>
+        </table>
+        <div class="pagination">
+            <button onclick="searchVideos(currentVideoPage - 1)" id="video-prev-page" disabled>Previous</button>
+            <span id="video-page-info"></span>
+            <button onclick="searchVideos(currentVideoPage + 1)" id="video-next-page">Next</button>
+        </div>
+    </div>
+    <div class="search-container">
+        <h2>Videos for Title</h2>
+        <label>Title Search: <input type="text" id="title-search" oninput="searchTitles(0)"></label><br>
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>URI</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody id="title-video-table-body"></tbody>
+        </table>
+        <div class="pagination">
+            <button onclick="loadTitleVideos(currentTitlePage - 1)" id="title-prev-page" disabled>Previous</button>
+            <span id="title-page-info"></span>
+            <button onclick="loadTitleVideos(currentTitlePage + 1)" id="title-next-page">Next</button>
+        </div>
+    </div>
+    <script>
+        let currentVideoPage = 0;
+        let currentTitlePage = 0;
+        const limit = 10;
+        let selectedTitleId = 0;
+
+        function loadTitles() {
+            $.get('/api/titles', function(data) {
+                $('#title-select').empty().append('<option value="">Select a Title</option>');
+                data.forEach(title => {
+                    $('#title-select').append(`<option value="${title.id}">${title.name}</option>`);
+                });
+            });
+        }
+
+        function searchVideos(page) {
+            currentVideoPage = page < 0 ? 0 : page;
+            const search = $('#video-search').val();
+            $.get('/api/videos', { search, limit, offset: currentVideoPage * limit }, function(data) {
+                $('#video-table-body').empty();
+                data.forEach(video => {
+                    $('#video-table-body').append(`
+                        <tr>
+                            <td>${video.id}</td>
+                            <td>${video.uri}</td>
+                            <td><button onclick="assignVideo(${video.id})">Assign</button></td>
+                        </tr>
+                    `);
+                });
+                $('#video-prev-page').prop('disabled', currentVideoPage === 0);
+                $('#video-next-page').prop('disabled', data.length < limit);
+                $('#video-page-info').text(`Page ${currentVideoPage + 1}`);
+            });
+        }
+
+        function searchTitles(page) {
+            currentTitlePage = page < 0 ? 0 : page;
+            const search = $('#title-search').val();
+            $.get('/api/titles', { search, limit, offset: currentTitlePage * limit }, function(data) {
+                if (data.length > 0) {
+                    selectedTitleId = data[0].id;
+                    loadTitleVideos(0);
+                }
+            });
+        }
+
+        function loadTitleVideos(page) {
+            currentTitlePage = page < 0 ? 0 : page;
+            if (!selectedTitleId) return;
+            $.get('/api/videos', { title_id: selectedTitleId, limit, offset: currentTitlePage * limit }, function(data) {
+                $('#title-video-table-body').empty();
+                data.forEach(video => {
+                    $('#title-video-table-body').append(`
+                        <tr>
+                            <td>${video.id}</td>
+                            <td>${video.uri}</td>
+                            <td><button onclick="removeVideo(${video.id})">Remove</button></td>
+                        </tr>
+                    `);
+                });
+                $('#title-prev-page').prop('disabled', currentTitlePage === 0);
+                $('#title-next-page').prop('disabled', data.length < limit);
+                $('#title-page-info').text(`Page ${currentTitlePage + 1}`);
+            });
+        }
+
+        function assignVideo(videoId) {
+            const titleId = $('#title-select').val();
+            if (!titleId) {
+                alert('Please select a title');
+                return;
+            }
+            $.post(`/api/assign-video-title/${videoId}/${titleId}`, {}, function() {
+                loadTitleVideos(currentTitlePage);
+            }).fail(function(xhr) { alert('Error: ' + xhr.responseJSON.error); });
+        }
+
+        function removeVideo(videoId) {
+            if (confirm('Are you sure you want to remove this video from the title?')) {
+                $.ajax({ url: `/api/assign-video-title/${videoId}`, type: 'DELETE', success: function() { loadTitleVideos(currentTitlePage); }, error: function(xhr) { alert('Error: ' + xhr.responseJSON.error); } });
+            }
+        }
+
+        $(document).ready(function() {
+            loadTitles();
+            searchVideos(0);
+            searchTitles(0);
+        });
+    </script>
+</body>
+</html>

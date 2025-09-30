@@ -1,0 +1,301 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Manage Channel Videos</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .section { margin-bottom: 20px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .pagination { margin-top: 20px; }
+        .pagination button { margin: 0 5px; }
+        .error { color: red; }
+    </style>
+</head>
+<body>
+    <h1>Manage Videos in Channels</h1>
+    
+    <div class="section">
+        <h2>Select Channel</h2>
+        <label>Search Channels: <input type="text" id="channel-search" oninput="loadChannels()"></label>
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Name</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="channel-table-body"></tbody>
+        </table>
+        <div id="channel-error" class="error"></div>
+    </div>
+    
+    <div class="section" id="video-management" style="display: none;">
+        <h2>Videos in Channel: <span id="selected-channel-name"></span> (ID: <span id="selected-channel-id"></span>)</h2>
+        
+        <div class="subsection">
+            <h3>Assigned Videos</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>URI</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="assigned-videos-body"></tbody>
+            </table>
+            <div class="pagination">
+                <button onclick="loadAssignedVideos(currentAssignedPage - 1)" id="assigned-prev" disabled>Previous</button>
+                <span id="assigned-page-info"></span>
+                <button onclick="loadAssignedVideos(currentAssignedPage + 1)" id="assigned-next">Next</button>
+            </div>
+            <div id="assigned-error" class="error"></div>
+        </div>
+        
+        <div class="subsection">
+            <h3>Add Videos (Search Available Videos)</h3>
+            <label>Search Videos: <input type="text" id="video-search" oninput="loadAvailableVideos(0)"></label>
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>URI</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="available-videos-body"></tbody>
+            </table>
+            <div class="pagination">
+                <button onclick="loadAvailableVideos(currentAvailablePage - 1)" id="available-prev" disabled>Previous</button>
+                <span id="available-page-info"></span>
+                <button onclick="loadAvailableVideos(currentAvailablePage + 1)" id="available-next">Next</button>
+            </div>
+            <div id="available-error" class="error"></div>
+        </div>
+    </div>
+    
+    <script>
+        let selectedChannelId = null;
+        let currentAssignedPage = 0;
+        let currentAvailablePage = 0;
+        const limit = 10;
+        
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/&/g, '&amp;')
+                     .replace(/</g, '&lt;')
+                     .replace(/>/g, '&gt;')
+                     .replace(/"/g, '&quot;')
+                     .replace(/'/g, '&#39;');
+        }
+        
+        function escapeJsString(str) {
+            if (!str) return '';
+            return str.replace(/\\/g, '\\\\')
+                     .replace(/'/g, "\\'")
+                     .replace(/"/g, '\\"')
+                     .replace(/\n/g, '\\n')
+                     .replace(/\r/g, '\\r');
+        }
+        
+        function loadChannels() {
+            const search = $('#channel-search').val();
+            $('#channel-error').text('');
+            $.get('/api/stations', { search, limit: 100 }, function(data) {
+                $('#channel-table-body').empty();
+                if (!Array.isArray(data) || data.length === 0) {
+                    $('#channel-error').text('No channels found.');
+                    return;
+                }
+                data.forEach(channel => {
+                    const row = $(`
+                        <tr>
+                            <td>${channel.id || 'N/A'}</td>
+                            <td>${escapeHtml(channel.name || 'Unnamed')}</td>
+                            <td><button class="select-channel-btn" data-id="${channel.id || 0}" data-name="${escapeJsString(channel.name || '')}">Select</button></td>
+                        </tr>
+                    `);
+                    $('#channel-table-body').append(row);
+                });
+                $('.select-channel-btn').off('click').on('click', function() {
+                    const id = $(this).data('id');
+                    const name = $(this).data('name');
+                    selectChannel(id, name);
+                });
+            }).fail(function(xhr) {
+                $('#channel-error').text('Error loading channels: ' + (xhr.responseJSON?.error || 'Unknown error'));
+                console.error('API /api/stations failed:', xhr.responseText);
+            });
+        }
+        
+        function selectChannel(id, name) {
+            selectedChannelId = id;
+            $('#selected-channel-name').text(name || 'Unnamed');
+            $('#selected-channel-id').text(id || 'N/A');
+            $('#video-management').show();
+            loadAssignedVideos(0);
+            loadAvailableVideos(0);
+        }
+        
+function loadAssignedVideos(page) {
+    if (!selectedChannelId) return;
+    currentAssignedPage = page < 0 ? 0 : page;
+    $('#assigned-error').text('');
+    $.get('/api/videos', { station_id: selectedChannelId, limit, offset: currentAssignedPage * limit }, function(data) {
+        $('#assigned-videos-body').empty();
+        console.log('Raw API response for assigned videos:', data); // Debug log
+        if (!Array.isArray(data) || data.length === 0) {
+            $('#assigned-error').text('No videos assigned to this channel.');
+            return;
+        }
+        data.forEach(video => {
+            console.log('Processing video:', video); // Log each video object
+            $('#assigned-videos-body').append(`
+                <tr>
+                    <td>${video.ID || 'N/A'}</td> <!-- Changed from video.id to video.ID -->
+                    <td>${escapeHtml(video.URI || 'No URI')}</td> <!-- Changed from video.uri to video.URI -->
+                    <td><button onclick="removeVideoFromChannel(${video.ID || 0})">Remove</button></td>
+                </tr>
+            `);
+        });
+        $('#assigned-prev').prop('disabled', currentAssignedPage === 0);
+        $('#assigned-next').prop('disabled', data.length < limit);
+        $('#assigned-page-info').text(`Page ${currentAssignedPage + 1}`);
+    }).fail(function(xhr) {
+        $('#assigned-error').text('Error loading assigned videos: ' + (xhr.responseJSON?.error || 'Unknown error'));
+        console.error('API /api/videos (assigned) failed:', xhr.responseText);
+    });
+}
+        
+function loadAvailableVideos(page) {
+    currentAvailablePage = page < 0 ? 0 : page;
+    const search = $('#video-search').val();
+    $('#available-error').text('');
+    console.log('Loading available videos, search:', search, 'page:', currentAvailablePage, 'selectedChannelId:', selectedChannelId);
+    if (!selectedChannelId) {
+        $('#available-error').text('No channel selected.');
+        console.error('No channel selected for available videos.');
+        return;
+    }
+    $.get('/api/videos', { search, limit, offset: currentAvailablePage * limit }, function(allVideos) {
+        console.log('All videos response:', allVideos);
+        if (!Array.isArray(allVideos)) {
+            $('#available-error').text('Invalid response for all videos.');
+            console.error('API /api/videos (all) failed:', allVideos);
+            return;
+        }
+        $.get('/api/videos', { station_id: selectedChannelId }, function(assignedVideos) {
+            console.log('Assigned videos response:', assignedVideos);
+            // Treat null as empty array if no videos are assigned
+            assignedVideos = Array.isArray(assignedVideos) ? assignedVideos : [];
+            if (assignedVideos.length === 0) {
+                console.warn('No assigned videos returned, proceeding with empty set.');
+            }
+            const assignedIds = new Set(assignedVideos.map(v => v.ID));
+            console.log('Assigned IDs set:', Array.from(assignedIds));
+            const available = allVideos.filter(v => !assignedIds.has(v.ID));
+            console.log('Available videos after filtering:', available);
+            $('#available-videos-body').empty();
+            if (available.length === 0) {
+                $('#available-error').text('No available videos to add.');
+                return;
+            }
+            available.forEach(video => {
+                $('#available-videos-body').append(`
+                    <tr>
+                        <td>${video.ID || 'N/A'}</td>
+                        <td>${escapeHtml(video.URI || 'No URI')}</td>
+                        <td><button onclick="addVideoToChannel(${video.ID || 0})">Add</button></td>
+                    </tr>
+                `);
+            });
+            $('#available-prev').prop('disabled', currentAvailablePage === 0);
+            $('#available-next').prop('disabled', available.length < limit);
+            $('#available-page-info').text(`Page ${currentAvailablePage + 1}`);
+        }).fail(function(xhr) {
+            $('#available-error').text('Error filtering available videos: ' + (xhr.responseJSON?.error || 'Unknown error'));
+            console.error('API /api/videos (assigned) failed:', xhr.responseText, 'Status:', xhr.status);
+        });
+    }).fail(function(xhr) {
+        $('#available-error').text('Error loading available videos: ' + (xhr.responseJSON?.error || 'Unknown error'));
+        console.error('API /api/videos (all) failed:', xhr.responseText, 'Status:', xhr.status);
+    });
+}
+        
+function addVideoToChannel(videoId) {
+    if (!selectedChannelId) return;
+    $.post('/api/assign-video-station', JSON.stringify({ station_id: selectedChannelId, video_id: videoId }), function() {
+        loadAssignedVideos(currentAssignedPage);
+        loadAvailableVideos(currentAvailablePage);
+    }, 'json').fail(function(xhr) {
+        alert('Error adding video: ' + (xhr.responseJSON?.error || 'Unknown error'));
+        console.error('API /api/assign-video-station failed:', xhr.responseText);
+    });
+}
+
+function removeVideoFromChannel(videoId) {
+    if (!selectedChannelId) return;
+    if (confirm('Are you sure you want to remove this video from the channel?')) {
+        $.ajax({
+            url: `/api/assign-video-station/${selectedChannelId}/${videoId}`,
+            type: 'DELETE',
+            success: function() {
+                loadAssignedVideos(currentAssignedPage);
+                loadAvailableVideos(currentAvailablePage);
+            },
+            error: function(xhr) {
+                alert('Error removing video: ' + (xhr.responseJSON?.error || 'Unknown error'));
+                console.error('API /api/assign-video-station DELETE failed:', xhr.responseText);
+            }
+        });
+    }
+}
+        
+        $(document).ready(function() { loadChannels(); });
+    </script>
+</body>
+</html>

@@ -1,0 +1,158 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Manage Channels</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="/public_html/admin.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .form-container, .search-container { margin-bottom: 20px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .pagination { margin-top: 20px; }
+        .pagination button { margin: 0 5px; }
+    </style>
+</head>
+<body>
+    <h1>Manage Channels</h1>
+    <div class="form-container">
+        <h2>Add/Edit Channel</h2>
+        <input type="hidden" id="channel-id">
+        <label>Name: <input type="text" id="channel-name"></label><br>
+        <label>Unix Start: <input type="number" id="channel-unix-start"></label><br>
+        <button onclick="saveChannel()">Save Channel</button>
+        <button onclick="clearChannelForm()">Clear</button>
+    </div>
+    <div class="search-container">
+        <label>Search: <input type="text" id="channel-search" oninput="searchChannels(0)"></label>
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Unix Start</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody id="channel-table-body"></tbody>
+    </table>
+    <div class="pagination">
+        <button onclick="searchChannels(currentPage - 1)" id="prev-page" disabled>Previous</button>
+        <span id="page-info"></span>
+        <button onclick="searchChannels(currentPage + 1)" id="next-page">Next</button>
+    </div>
+    <script>
+        let currentPage = 0;
+        const limit = 10;
+
+        // Utility function to escape JavaScript string literals
+        function escapeJsString(str) {
+            if (!str) return '';
+            return str.replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+        }
+
+        function searchChannels(page) {
+            currentPage = page < 0 ? 0 : page;
+            const search = $('#channel-search').val();
+            $.get('/api/stations', { search, limit, offset: currentPage * limit }, function(data) {
+                $('#channel-table-body').empty();
+                data.forEach(channel => {
+                    $('#channel-table-body').append(`
+                        <tr>
+                            <td>${channel.id}</td>
+                            <td>${channel.name}</td>
+                            <td>${channel.unix_start}</td>
+                            <td>
+                                <button onclick="editChannel(${channel.id}, '${escapeJsString(channel.name)}', ${channel.unix_start})">Edit</button>
+                                <button onclick="deleteChannel(${channel.id})">Delete</button>
+                            </td>
+                        </tr>
+                    `);
+                });
+                $('#prev-page').prop('disabled', currentPage === 0);
+                $('#next-page').prop('disabled', data.length < limit);
+                $('#page-info').text(`Page ${currentPage + 1}`);
+            });
+        }
+
+        function saveChannel() {
+            const id = $('#channel-id').val();
+            const channel = { name: $('#channel-name').val(), unix_start: parseInt($('#channel-unix-start').val()) };
+            if (id) {
+                $.ajax({ url: `/api/stations/${id}`, type: 'PUT', data: JSON.stringify(channel), contentType: 'application/json', success: function() {
+                    clearChannelForm();
+                    searchChannels(currentPage);
+                }, error: function(xhr) { alert('Error: ' + xhr.responseJSON.error); } });
+            } else {
+                $.post('/api/stations', JSON.stringify(channel), function(data) {
+                    clearChannelForm();
+                    searchChannels(currentPage);
+                }, 'json').fail(function(xhr) { alert('Error: ' + xhr.responseJSON.error); });
+            }
+        }
+
+        function editChannel(id, name, unixStart) {
+            $('#channel-id').val(id);
+            $('#channel-name').val(name);
+            $('#channel-unix-start').val(unixStart);
+        }
+
+        function deleteChannel(id) {
+            if (confirm('Are you sure you want to delete this channel?')) {
+                $.ajax({ url: `/api/stations/${id}`, type: 'DELETE', success: function() { searchChannels(currentPage); }, error: function(xhr) { alert('Error: ' + xhr.responseJSON.error); } });
+            }
+        }
+
+        function clearChannelForm() {
+            $('#channel-id').val('');
+            $('#channel-name').val('');
+            $('#channel-unix-start').val('');
+        }
+
+        $(document).ready(function() { searchChannels(0); });
+    </script>
+</body>
+</html>
