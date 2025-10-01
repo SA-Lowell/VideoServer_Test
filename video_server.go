@@ -15,11 +15,10 @@ import (
     "strings"
     "sync"
     "time"
-
     _ "github.com/lib/pq"
     "github.com/gin-contrib/cors"
     "github.com/gin-gonic/gin"
-    "github.com/pion/rtp" // Added for RTP packet logging
+    "github.com/pion/rtp"
     "github.com/pion/webrtc/v3"
     "github.com/pion/webrtc/v3/pkg/media"
     "github.com/pion/webrtc/v3/pkg/media/oggreader"
@@ -222,7 +221,21 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
     fullSegPath := filepath.Join(HlsDir, segName)
     opusName := baseName + ".opus"
     opusPath := filepath.Join(HlsDir, opusName)
-
+    // Log input audio properties
+    cmdProbe := exec.Command(
+        "ffprobe",
+        "-v", "error",
+        "-select_streams", "a:0",
+        "-show_entries", "stream=sample_rate,channels",
+        "-of", "default=noprint_wrappers=1",
+        fullEpisodePath,
+    )
+    outputProbe, err := cmdProbe.Output()
+    if err == nil {
+        log.Printf("Station %s: Input audio for %s: %s", st.name, fullEpisodePath, strings.TrimSpace(string(outputProbe)))
+    } else {
+        log.Printf("Station %s: Failed to probe input audio for %s: %v", st.name, fullEpisodePath, err)
+    }
     args := []string{
         "-y",
         "-ss", fmt.Sprintf("%.3f", startTime),
@@ -230,18 +243,17 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         "-t", fmt.Sprintf("%.3f", adjustedChunkDur),
         "-map", "0:a:0",
         "-c:a", "libopus",
-        "-b:a", "64k",
+        "-b:a", "192k",
+        "-ar", "48000",
+        "-ac", "2",
         "-frame_duration", "20",
-        "-page_duration", "20000", // Ensure 20ms Ogg pages
+        "-page_duration", "20000",
         "-application", "audio",
         "-avoid_negative_ts", "make_zero",
         "-fflags", "+genpts",
-        "-ac", "2",
         "-f", "opus",
-        "-strict", "-2",
         opusPath,
     }
-
     cmdAudio := exec.Command("ffmpeg", args...)
     log.Printf("Station %s: Running ffmpeg audio command: %v", st.name, cmdAudio.Args)
     outputAudio, err := cmdAudio.CombinedOutput()
@@ -272,15 +284,14 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
     if err != nil || len(audioData) == 0 {
         return nil, nil, "", fmt.Errorf("audio file %s is empty or unreadable: %v", opusPath, err)
     }
-    log.Printf("Station %s: Read audio file %s, size: %d bytes, first 16 bytes: %x", st.name, opusPath, len(audioData), audioData[:min(16, len(audioData))])
+    log.Printf("Station %s: Read audio file %s, size: %d bytes", st.name, opusPath, len(audioData))
     reader := bytes.NewReader(audioData)
     ogg, _, err := oggreader.NewWith(reader)
     if err != nil {
         return nil, nil, "", fmt.Errorf("failed to create ogg reader for %s: %v", opusPath, err)
     }
     var audioPackets [][]byte
-    var packetDurations []int
-    var pageSizes []int // Track page sizes
+    var pageSizes []int
     for {
         payload, _, err := ogg.ParseNextPage()
         if err == io.EOF {
@@ -290,7 +301,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             log.Printf("Station %s: Failed to parse ogg page for %s: %v", st.name, opusPath, err)
             continue
         }
-        pageSizes = append(pageSizes, len(payload)) // Log page size
+        pageSizes = append(pageSizes, len(payload))
         if len(payload) < 1 {
             log.Printf("Station %s: Empty ogg payload for %s, skipping", st.name, opusPath)
             continue
@@ -299,18 +310,14 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             log.Printf("Station %s: Skipping header packet: %s", st.name, string(payload[:8]))
             continue
         }
-        frameDurationMs := 20 // Fixed duration as per FFmpeg -frame_duration 20
         audioPackets = append(audioPackets, payload)
-        packetDurations = append(packetDurations, frameDurationMs)
-        log.Printf("Station %s: Extracted audio packet %d, size: %d, duration: %dms", st.name, len(audioPackets)-1, len(payload), frameDurationMs)
+        log.Printf("Station %s: Extracted audio packet %d, size: %d", st.name, len(audioPackets)-1, len(payload))
     }
-    log.Printf("Station %s: Ogg page sizes: %v", st.name, pageSizes) // Log all page sizes
+    log.Printf("Station %s: Ogg page sizes: %v", st.name, pageSizes)
     if len(audioPackets) == 0 {
         log.Printf("Station %s: No valid audio packets extracted from %s", st.name, opusPath)
         return nil, nil, "", fmt.Errorf("no valid audio packets extracted from %s", opusPath)
     }
-    log.Printf("Station %s: Extracted %d audio packets, total duration: %dms", st.name, len(audioPackets), len(audioPackets)*20)
-
     args = []string{
         "-y",
         "-ss", fmt.Sprintf("%.3f", startTime),
@@ -769,14 +776,26 @@ func sender(st *Station, db *sql.DB) {
                 boundChecked := false
                 audioTimestamp := uint32(0)
                 const sampleRate = 48000
-                const frameDurationMs = 20 // Fixed 20ms per packet, matching FFmpeg -frame_duration 20
                 log.Printf("Station %s: Starting audio transmission for %s, %d packets", st.name, audioPath, len(packets))
                 for i, pkt := range packets {
                     if len(pkt) < 1 {
                         log.Printf("Station %s: Empty audio packet %d, skipping", st.name, i)
                         continue
                     }
-                    samples := (frameDurationMs * sampleRate) / 1000 // 960 samples for 20ms at 48kHz
+                    toc := pkt[0]
+                    config := (toc >> 3) & 0x1F
+                    baseFrameDurationMs := 20
+                    switch config {
+                    case 0, 1, 2, 3, 16, 17, 18, 19:
+                        baseFrameDurationMs = 10
+                    case 4, 5, 6, 7, 20, 21, 22, 23:
+                        baseFrameDurationMs = 20
+                    case 8, 9, 10, 11:
+                        baseFrameDurationMs = 40
+                    case 12, 13, 14, 15:
+                        baseFrameDurationMs = 60
+                    }
+                    samples := (baseFrameDurationMs * sampleRate) / 1000
                     if !boundChecked {
                         if err := st.trackAudio.WriteSample(testSample); err != nil {
                             log.Printf("Station %s: Audio track not bound for sample %d: %v", st.name, i, err)
@@ -784,21 +803,20 @@ func sender(st *Station, db *sql.DB) {
                         }
                         boundChecked = true
                     }
-                    // Create RTP packet for logging
                     rtpPkt := &rtp.Packet{
                         Header: rtp.Header{
-                            Version:        2,
-                            PayloadType:    111, // Opus
-                            SequenceNumber: uint16(i), // Simple sequence for debugging
-                            Timestamp:      audioTimestamp,
-                            SSRC:           2822942833, // From latest SDP
+                            Version: 2,
+                            PayloadType: 111,
+                            SequenceNumber: uint16(i),
+                            Timestamp: audioTimestamp,
+                            SSRC: 2822942833,
                         },
                         Payload: pkt,
                     }
-                    log.Printf("Station %s: Sending RTP audio packet: seq=%d, ts=%d, size=%d", st.name, rtpPkt.Header.SequenceNumber, rtpPkt.Header.Timestamp, len(rtpPkt.Payload))
+                    log.Printf("Station %s: Sending RTP audio packet: seq=%d, ts=%d, size=%d, duration=%dms", st.name, rtpPkt.Header.SequenceNumber, rtpPkt.Header.Timestamp, len(rtpPkt.Payload), baseFrameDurationMs)
                     sample := media.Sample{
-                        Data:            pkt,
-                        Duration:        time.Duration(frameDurationMs) * time.Millisecond,
+                        Data: pkt,
+                        Duration: time.Duration(baseFrameDurationMs) * time.Millisecond,
                         PacketTimestamp: audioTimestamp,
                     }
                     if err := st.trackAudio.WriteSample(sample); err != nil {
@@ -806,8 +824,6 @@ func sender(st *Station, db *sql.DB) {
                         if strings.Contains(err.Error(), "not bound") {
                             break
                         }
-                    } else {
-                        log.Printf("Station %s: Sent audio sample %d, size: %d, duration: %dms, timestamp: %d samples", st.name, i, len(pkt), frameDurationMs, audioTimestamp)
                     }
                     audioTimestamp += uint32(samples)
                     targetTime := audioStart.Add(time.Duration(audioTimestamp*1000/sampleRate) * time.Millisecond)
@@ -865,8 +881,8 @@ func sender(st *Station, db *sql.DB) {
                         boundChecked = true
                     }
                     sample := media.Sample{
-                        Data:            sampleData,
-                        Duration:        frameDuration,
+                        Data: sampleData,
+                        Duration: frameDuration,
                         PacketTimestamp: videoTimestamp,
                     }
                     if err := st.trackVideo.WriteSample(sample); err != nil {
@@ -875,7 +891,6 @@ func sender(st *Station, db *sql.DB) {
                             return
                         }
                     }
-                    log.Printf("Station %s: Sent video sample, size: %d, timestamp: %d samples", st.name, len(sampleData), videoTimestamp)
                     segmentSamples++
                     videoTimestamp += uint32((frameDuration * videoClockRate) / time.Second)
                     currentFrame = [][]byte{nalu}
@@ -907,8 +922,8 @@ func sender(st *Station, db *sql.DB) {
                                 boundChecked = true
                             }
                             sample := media.Sample{
-                                Data:            sampleData,
-                                Duration:        frameDuration,
+                                Data: sampleData,
+                                Duration: frameDuration,
                                 PacketTimestamp: videoTimestamp,
                             }
                             if err := st.trackVideo.WriteSample(sample); err != nil {
@@ -917,7 +932,6 @@ func sender(st *Station, db *sql.DB) {
                                     return
                                 }
                             }
-                            log.Printf("Station %s: Sent video sample, size: %d, timestamp: %d samples", st.name, len(sampleData), videoTimestamp)
                             segmentSamples++
                             videoTimestamp += uint32((frameDuration * videoClockRate) / time.Second)
                             currentFrame = [][]byte{}
@@ -950,8 +964,8 @@ func sender(st *Station, db *sql.DB) {
                     boundChecked = true
                 }
                 sample := media.Sample{
-                    Data:            sampleData,
-                    Duration:        frameDuration,
+                    Data: sampleData,
+                    Duration: frameDuration,
                     PacketTimestamp: videoTimestamp,
                 }
                 if err := st.trackVideo.WriteSample(sample); err != nil {
@@ -960,7 +974,6 @@ func sender(st *Station, db *sql.DB) {
                         return
                     }
                 }
-                log.Printf("Station %s: Sent video sample, size: %d, timestamp: %d samples", st.name, len(sampleData), videoTimestamp)
                 segmentSamples++
             }
             log.Printf("Station %s: Sent %d video frames for %s", st.name, segmentSamples, segPath)
@@ -1083,6 +1096,7 @@ func parseRawOpusPackets(data []byte) ([][]byte, error) {
         case 28, 29, 30, 31:
             baseFrameDurationMs = 5
         default:
+            log.Printf("Warning: Unknown Opus config %d at position %d, assuming 20ms", config, packetStart)
             baseFrameDurationMs = 20
         }
         if code == 0 {
@@ -1223,10 +1237,6 @@ func parseRawOpusPackets(data []byte) ([][]byte, error) {
             log.Printf("Invalid Opus code %d at position %d, skipping packet", code, packetStart)
             continue
         }
-        if i+frameLength > len(data) {
-            log.Printf("Warning: incomplete frame data at position %d, expected %d bytes, remaining %d bytes", i, frameLength, len(data)-i)
-            continue
-        }
         totalDurationMs := numFrames * baseFrameDurationMs
         if totalDurationMs > 200 {
             log.Printf("Warning: excessive duration %dms for packet at position %d, skipping", totalDurationMs, packetStart)
@@ -1241,213 +1251,213 @@ func parseRawOpusPackets(data []byte) ([][]byte, error) {
 }
 
 func signalingHandler(db *sql.DB, c *gin.Context) {
-	stationName := c.Query("station")
-	if stationName == "" {
-		stationName = DefaultStation
-	}
-	st, ok := stations[stationName]
-	if !ok {
-		c.JSON(400, gin.H{"error": "Invalid station"})
-		return
-	}
-	log.Printf("Signaling for station %s", stationName)
-	var msg struct {
-		Type string `json:"type"`
-		SDP  string `json:"sdp,omitempty"`
-	}
-	if err := c.BindJSON(&msg); err != nil {
-		log.Printf("JSON bind error: %v", err)
-		c.JSON(400, gin.H{"error": err.Error()})
-		return
-	}
-	m := &webrtc.MediaEngine{}
-	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: webrtc.RTPCodecCapability{
-			MimeType:     webrtc.MimeTypeH264,
-			ClockRate:    90000,
-			SDPFmtpLine:  st.fmtpLine,
-			RTCPFeedback: []webrtc.RTCPFeedback{{"goog-remb", ""}, {"ccm", "fir"}, {"nack", ""}, {"nack", "pli"}},
-		},
-		PayloadType: 96,
-	}, webrtc.RTPCodecTypeVideo); err != nil {
-		log.Printf("RegisterCodec video error: %v", err)
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
-	}
-	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: webrtc.RTPCodecCapability{
-			MimeType:    webrtc.MimeTypeOpus,
-			ClockRate:   48000,
-			Channels:    2,
-			SDPFmtpLine: "minptime=10;useinbandfec=1;stereo=1",
-		},
-		PayloadType: 111,
-	}, webrtc.RTPCodecTypeAudio); err != nil {
-		log.Printf("RegisterCodec audio error: %v", err)
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
-	}
-	s := webrtc.SettingEngine{}
-	s.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4, webrtc.NetworkTypeTCP4})
-	api := webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithSettingEngine(s))
-	pc, err := api.NewPeerConnection(webrtc.Configuration{
-		ICEServers: []webrtc.ICEServer{
-			{URLs: []string{"stun:stun.l.google.com:19302"}},
-			{URLs: []string{"turn:openrelay.metered.ca:80"}, Username: "openrelayproject", Credential: "openrelayproject"},
-			{URLs: []string{"turn:openrelay.metered.ca:443"}, Username: "openrelayproject", Credential: "openrelayproject"},
-		},
-	})
-	if err != nil {
-		log.Printf("NewPeerConnection error: %v", err)
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
-	}
-	st.mu.Lock()
-	st.viewers++
-	if !st.processing {
-		st.processing = true
-		if err := os.MkdirAll(HlsDir, 0755); err != nil {
-			log.Printf("Station %s: Failed to create webrtc_segments directory: %v", st.name, err)
-			st.viewers--
-			st.mu.Unlock()
-			c.JSON(500, gin.H{"error": "Failed to create webrtc_segments directory"})
-			pc.Close()
-			return
-		}
-		segments, spsPPS, fmtpLine, err := processVideo(st, st.currentVideo, db, st.currentOffset, ChunkDuration)
-		if err != nil {
-			log.Printf("Station %s: Failed to process initial chunk for video %d: %v", st.name, st.currentVideo, err)
-			st.viewers--
-			st.mu.Unlock()
-			c.JSON(500, gin.H{"error": "Failed to process initial video chunk"})
-			pc.Close()
-			return
-		}
-		st.segmentList = segments
-		st.spsPPS = spsPPS
-		st.fmtpLine = fmtpLine
-		audioPath := strings.Replace(segments[0], ".h264", ".opus", 1)
-		if _, err := os.Stat(audioPath); os.IsNotExist(err) {
-			log.Printf("Station %s: Audio file %s not found", st.name, audioPath)
-			st.viewers--
-			st.mu.Unlock()
-			c.JSON(500, gin.H{"error": "Failed to process initial audio chunk"})
-			pc.Close()
-			return
-		}
-		st.lastQueuedStart = st.currentOffset
-		nextStartTime := st.currentOffset + ChunkDuration
-		var dur sql.NullFloat64
-		err = db.QueryRow(`SELECT duration FROM videos WHERE id = $1`, st.currentVideo).Scan(&dur)
-		if err == nil && dur.Valid && nextStartTime >= dur.Float64 {
-			nextStartTime = dur.Float64 - st.currentOffset
-		}
-		segments, spsPPS, fmtpLine, err = processVideo(st, st.currentVideo, db, nextStartTime, ChunkDuration)
-		if err != nil {
-			log.Printf("Station %s: Failed to process second initial chunk for video %d: %v", st.name, st.currentVideo, err)
-		} else {
-			st.segmentList = append(st.segmentList, segments...)
-			if len(st.spsPPS) == 0 {
-				st.spsPPS = spsPPS
-				st.fmtpLine = fmtpLine
-			}
-			st.lastQueuedStart = nextStartTime
-		}
-		go manageProcessing(st, db)
-	}
-	st.mu.Unlock()
-	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
-		log.Printf("Station %s: ICE state: %s", stationName, state.String())
-	})
-	if msg.Type == "offer" {
-		offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: msg.SDP}
-		if err := pc.SetRemoteDescription(offer); err != nil {
-			log.Printf("SetRemoteDescription error: %v", err)
-			st.mu.Lock()
-			st.viewers--
-			if st.viewers == 0 {
-				close(st.stopProcessing)
-				st.stopProcessing = make(chan struct{})
-			}
-			st.mu.Unlock()
-			c.JSON(500, gin.H{"error": err.Error()})
-			pc.Close()
-			return
-		}
-		if _, err = pc.AddTrack(st.trackVideo); err != nil {
-			log.Printf("AddTrack video error: %v", err)
-			st.mu.Lock()
-			st.viewers--
-			if st.viewers == 0 {
-				close(st.stopProcessing)
-				st.stopProcessing = make(chan struct{})
-			}
-			st.mu.Unlock()
-			c.JSON(500, gin.H{"error": err.Error()})
-			pc.Close()
-			return
-		}
-		if _, err = pc.AddTrack(st.trackAudio); err != nil {
-			log.Printf("AddTrack audio error: %v", err)
-			st.mu.Lock()
-			st.viewers--
-			if st.viewers == 0 {
-				close(st.stopProcessing)
-				st.stopProcessing = make(chan struct{})
-			}
-			st.mu.Unlock()
-			c.JSON(500, gin.H{"error": err.Error()})
-			pc.Close()
-			return
-		}
-		log.Printf("Station %s: Tracks added", stationName)
-		answer, err := pc.CreateAnswer(nil)
-		if err != nil {
-			log.Printf("CreateAnswer error: %v", err)
-			st.mu.Lock()
-			st.viewers--
-			if st.viewers == 0 {
-				close(st.stopProcessing)
-				st.stopProcessing = make(chan struct{})
-			}
-			st.mu.Unlock()
-			c.JSON(500, gin.H{"error": err.Error()})
-			pc.Close()
-			return
-		}
-		gatherComplete := webrtc.GatheringCompletePromise(pc)
-		if err := pc.SetLocalDescription(answer); err != nil {
-			log.Printf("SetLocalDescription error: %v", err)
-			st.mu.Lock()
-			st.viewers--
-			if st.viewers == 0 {
-				close(st.stopProcessing)
-				st.stopProcessing = make(chan struct{})
-			}
-			st.mu.Unlock()
-			c.JSON(500, gin.H{"error": err.Error()})
-			pc.Close()
-			return
-		}
-		<-gatherComplete
-		log.Printf("Station %s: SDP Answer: %s", stationName, pc.LocalDescription().SDP)
-		c.JSON(200, gin.H{"type": "answer", "sdp": pc.LocalDescription().SDP})
-	}
-	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
-		log.Printf("Station %s: PC state: %s", stationName, s.String())
-		if s == webrtc.PeerConnectionStateFailed || s == webrtc.PeerConnectionStateDisconnected {
-			st.mu.Lock()
-			st.viewers--
-			if st.viewers == 0 {
-				close(st.stopProcessing)
-				st.stopProcessing = make(chan struct{})
-			}
-			st.mu.Unlock()
-			if err := pc.Close(); err != nil {
-				log.Printf("Failed to close PC: %v", err)
-			}
-		}
-	})
+    stationName := c.Query("station")
+    if stationName == "" {
+        stationName = DefaultStation
+    }
+    st, ok := stations[stationName]
+    if !ok {
+        c.JSON(400, gin.H{"error": "Invalid station"})
+        return
+    }
+    log.Printf("Signaling for station %s", stationName)
+    var msg struct {
+        Type string `json:"type"`
+        SDP  string `json:"sdp,omitempty"`
+    }
+    if err := c.BindJSON(&msg); err != nil {
+        log.Printf("JSON bind error: %v", err)
+        c.JSON(400, gin.H{"error": err.Error()})
+        return
+    }
+    m := &webrtc.MediaEngine{}
+    if err := m.RegisterCodec(webrtc.RTPCodecParameters{
+        RTPCodecCapability: webrtc.RTPCodecCapability{
+            MimeType:     webrtc.MimeTypeH264,
+            ClockRate:    90000,
+            SDPFmtpLine:  st.fmtpLine,
+            RTCPFeedback: []webrtc.RTCPFeedback{{"goog-remb", ""}, {"ccm", "fir"}, {"nack", ""}, {"nack", "pli"}},
+        },
+        PayloadType: 96,
+    }, webrtc.RTPCodecTypeVideo); err != nil {
+        log.Printf("RegisterCodec video error: %v", err)
+        c.JSON(500, gin.H{"error": err.Error()})
+        return
+    }
+    if err := m.RegisterCodec(webrtc.RTPCodecParameters{
+        RTPCodecCapability: webrtc.RTPCodecCapability{
+            MimeType:    webrtc.MimeTypeOpus,
+            ClockRate:   48000,
+            Channels:    2,
+            SDPFmtpLine: "minptime=10;useinbandfec=1;stereo=1", // Added stereo=1
+        },
+        PayloadType: 111,
+    }, webrtc.RTPCodecTypeAudio); err != nil {
+        log.Printf("RegisterCodec audio error: %v", err)
+        c.JSON(500, gin.H{"error": err.Error()})
+        return
+    }
+    s := webrtc.SettingEngine{}
+    s.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4, webrtc.NetworkTypeTCP4})
+    api := webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithSettingEngine(s))
+    pc, err := api.NewPeerConnection(webrtc.Configuration{
+        ICEServers: []webrtc.ICEServer{
+            {URLs: []string{"stun:stun.l.google.com:19302"}},
+            {URLs: []string{"turn:openrelay.metered.ca:80"}, Username: "openrelayproject", Credential: "openrelayproject"},
+            {URLs: []string{"turn:openrelay.metered.ca:443"}, Username: "openrelayproject", Credential: "openrelayproject"},
+        },
+    })
+    if err != nil {
+        log.Printf("NewPeerConnection error: %v", err)
+        c.JSON(500, gin.H{"error": err.Error()})
+        return
+    }
+    st.mu.Lock()
+    st.viewers++
+    if !st.processing {
+        st.processing = true
+        if err := os.MkdirAll(HlsDir, 0755); err != nil {
+            log.Printf("Station %s: Failed to create webrtc_segments directory: %v", st.name, err)
+            st.viewers--
+            st.mu.Unlock()
+            c.JSON(500, gin.H{"error": "Failed to create webrtc_segments directory"})
+            pc.Close()
+            return
+        }
+        segments, spsPPS, fmtpLine, err := processVideo(st, st.currentVideo, db, st.currentOffset, ChunkDuration)
+        if err != nil {
+            log.Printf("Station %s: Failed to process initial chunk for video %d: %v", st.name, st.currentVideo, err)
+            st.viewers--
+            st.mu.Unlock()
+            c.JSON(500, gin.H{"error": "Failed to process initial video chunk"})
+            pc.Close()
+            return
+        }
+        st.segmentList = segments
+        st.spsPPS = spsPPS
+        st.fmtpLine = fmtpLine
+        audioPath := strings.Replace(segments[0], ".h264", ".opus", 1)
+        if _, err := os.Stat(audioPath); os.IsNotExist(err) {
+            log.Printf("Station %s: Audio file %s not found", st.name, audioPath)
+            st.viewers--
+            st.mu.Unlock()
+            c.JSON(500, gin.H{"error": "Failed to process initial audio chunk"})
+            pc.Close()
+            return
+        }
+        st.lastQueuedStart = st.currentOffset
+        nextStartTime := st.currentOffset + ChunkDuration
+        var dur sql.NullFloat64
+        err = db.QueryRow(`SELECT duration FROM videos WHERE id = $1`, st.currentVideo).Scan(&dur)
+        if err == nil && dur.Valid && nextStartTime >= dur.Float64 {
+            nextStartTime = dur.Float64 - st.currentOffset
+        }
+        segments, spsPPS, fmtpLine, err = processVideo(st, st.currentVideo, db, nextStartTime, ChunkDuration)
+        if err != nil {
+            log.Printf("Station %s: Failed to process second initial chunk for video %d: %v", st.name, st.currentVideo, err)
+        } else {
+            st.segmentList = append(st.segmentList, segments...)
+            if len(st.spsPPS) == 0 {
+                st.spsPPS = spsPPS
+                st.fmtpLine = fmtpLine
+            }
+            st.lastQueuedStart = nextStartTime
+        }
+        go manageProcessing(st, db)
+    }
+    st.mu.Unlock()
+    pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
+        log.Printf("Station %s: ICE state: %s", stationName, state.String())
+    })
+    if msg.Type == "offer" {
+        offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: msg.SDP}
+        if err := pc.SetRemoteDescription(offer); err != nil {
+            log.Printf("SetRemoteDescription error: %v", err)
+            st.mu.Lock()
+            st.viewers--
+            if st.viewers == 0 {
+                close(st.stopProcessing)
+                st.stopProcessing = make(chan struct{})
+            }
+            st.mu.Unlock()
+            c.JSON(500, gin.H{"error": err.Error()})
+            pc.Close()
+            return
+        }
+        if _, err = pc.AddTrack(st.trackVideo); err != nil {
+            log.Printf("AddTrack video error: %v", err)
+            st.mu.Lock()
+            st.viewers--
+            if st.viewers == 0 {
+                close(st.stopProcessing)
+                st.stopProcessing = make(chan struct{})
+            }
+            st.mu.Unlock()
+            c.JSON(500, gin.H{"error": err.Error()})
+            pc.Close()
+            return
+        }
+        if _, err = pc.AddTrack(st.trackAudio); err != nil {
+            log.Printf("AddTrack audio error: %v", err)
+            st.mu.Lock()
+            st.viewers--
+            if st.viewers == 0 {
+                close(st.stopProcessing)
+                st.stopProcessing = make(chan struct{})
+            }
+            st.mu.Unlock()
+            c.JSON(500, gin.H{"error": err.Error()})
+            pc.Close()
+            return
+        }
+        log.Printf("Station %s: Tracks added", stationName)
+        answer, err := pc.CreateAnswer(nil)
+        if err != nil {
+            log.Printf("CreateAnswer error: %v", err)
+            st.mu.Lock()
+            st.viewers--
+            if st.viewers == 0 {
+                close(st.stopProcessing)
+                st.stopProcessing = make(chan struct{})
+            }
+            st.mu.Unlock()
+            c.JSON(500, gin.H{"error": err.Error()})
+            pc.Close()
+            return
+        }
+        gatherComplete := webrtc.GatheringCompletePromise(pc)
+        if err := pc.SetLocalDescription(answer); err != nil {
+            log.Printf("SetLocalDescription error: %v", err)
+            st.mu.Lock()
+            st.viewers--
+            if st.viewers == 0 {
+                close(st.stopProcessing)
+                st.stopProcessing = make(chan struct{})
+            }
+            st.mu.Unlock()
+            c.JSON(500, gin.H{"error": err.Error()})
+            pc.Close()
+            return
+        }
+        <-gatherComplete
+        log.Printf("Station %s: SDP Answer: %s", stationName, pc.LocalDescription().SDP)
+        c.JSON(200, gin.H{"type": "answer", "sdp": pc.LocalDescription().SDP})
+    }
+    pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
+        log.Printf("Station %s: PC state: %s", stationName, s.String())
+        if s == webrtc.PeerConnectionStateFailed || s == webrtc.PeerConnectionStateDisconnected {
+            st.mu.Lock()
+            st.viewers--
+            if st.viewers == 0 {
+                close(st.stopProcessing)
+                st.stopProcessing = make(chan struct{})
+            }
+            st.mu.Unlock()
+            if err := pc.Close(); err != nil {
+                log.Printf("Failed to close PC: %v", err)
+            }
+        }
+    })
 }
 
 func indexHandler(c *gin.Context) {
@@ -1515,12 +1525,13 @@ pc.ontrack = event => {
     
     if (track.kind === 'audio') {
         hasAudio = true;
-        const audioContext = new AudioContext();
+        const audioContext = new AudioContext({ sampleRate: 48000 }); // Explicit 48kHz
+        log('AudioContext created with sampleRate=' + audioContext.sampleRate);
         const source = audioContext.createMediaStreamSource(remoteStream);
         analyser = audioContext.createAnalyser();
         source.connect(analyser);
         analyser.connect(audioContext.destination);
-        log('Connected audio track to AudioContext for debugging');
+        log('Connected audio track to AudioContext, channels=' + source.channelCount);
         setInterval(() => {
             if (analyser) {
                 const data = new Float32Array(analyser.fftSize);
