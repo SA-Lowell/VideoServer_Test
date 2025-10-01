@@ -3,6 +3,7 @@ package main
 import (
     "bytes"
     "database/sql"
+    "encoding/json"
     "fmt"
     "io"
     "log"
@@ -11,177 +12,120 @@ import (
     "os"
     "os/exec"
     "path/filepath"
+    "sort"
     "strconv"
     "strings"
     "sync"
     "time"
+
     _ "github.com/lib/pq"
     "github.com/gin-contrib/cors"
     "github.com/gin-gonic/gin"
-    //"github.com/pion/rtp"
     "github.com/pion/webrtc/v3"
     "github.com/pion/webrtc/v3/pkg/media"
     "github.com/pion/webrtc/v3/pkg/media/oggreader"
 )
 
 const (
-	HlsDir              = "./webrtc_segments"
-	Port                = ":8081"
-	ClockRate           = 90000
-	AudioFrameMs        = 20
-	DefaultFPSNum       = 30000
-	DefaultFPSDen       = 1001
-	DefaultDur          = 0.0
-	DefaultStation      = "default"
-	AdInsertPath        = "./ad_insert.exe"
-	DefaultVideoBaseDir = "Z:/Videos"
-	DefaultTempPrefix   = "ad_insert_"
-	ChunkDuration       = 30.0 // Process 30-second chunks
-	BufferThreshold     = 60.0 // Start processing more chunks when buffer < 60s
+    HlsDir                      = "./webrtc_segments"
+    Port                        = ":8081"
+    ClockRate                   = 90000
+    AudioFrameMs                = 20
+    DefaultFPSNum               = 30000
+    DefaultFPSDen               = 1001
+    DefaultDur                  = 0.0
+    DefaultStation              = "default"
+    AdInsertPath                = "./ad_insert.exe"
+    DefaultVideoBaseDir         = "Z:/Videos"
+    DefaultTempPrefix           = "ad_insert_"
+    ChunkDuration               = 30.0  // Process 30-second chunks
+    BufferThreshold             = 60.0  // Start processing more chunks when buffer < 60s
 )
 
 const dbConnString = "user=postgres password=aaaaaaaaaa dbname=webrtc_tv sslmode=disable host=localhost port=5432"
 
 type fpsPair struct {
-	num int
-	den int
+    num int
+    den int
 }
 
-type PreprocessedVideo struct {
-	videoID   int64
-	segments  []string
-	spsPPS    [][]byte
-	fmtpLine  string
-	startTime float64 // Start time of this chunk in the video (seconds)
-	endTime   float64 // End time of this chunk
+type bufferedChunk struct {
+    segPath string
+    dur     float64
+    isAd    bool
+    videoID int64
+    fps     fpsPair
 }
-
-type Station struct {
-	name            string
-	segmentList     []string
-	spsPPS          [][]byte
-	fmtpLine        string
-	trackVideo      *webrtc.TrackLocalStaticSample
-	trackAudio      *webrtc.TrackLocalStaticSample
-	fpsCache        sync.Map
-	durationCache   sync.Map
-	videoQueue      []int64
-	currentVideo    int64
-	currentIndex    int
-	currentOffset   float64
-	viewers         int
-	processing      bool
-	stopProcessing  chan struct{}
-	mu              sync.Mutex
-	lastQueuedStart float64
-}
-
-var (
-	stations     = make(map[string]*Station)
-	mu           sync.Mutex
-	globalStart  = time.Now()
-	adFullPaths  []string
-	videoBaseDir string
-)
 
 type bitReader struct {
-	data []byte
-	pos  int
+    data []byte
+    pos  int
 }
 
 func newBitReader(data []byte) *bitReader {
-	return &bitReader{data: data, pos: 0}
+    return &bitReader{data: data, pos: 0}
 }
 
 func (br *bitReader) readBit() (uint, error) {
-	if br.pos/8 >= len(br.data) {
-		return 0, fmt.Errorf("EOF")
-	}
-	byteIdx := br.pos / 8
-	bitIdx := 7 - (br.pos % 8)
-	bit := uint((br.data[byteIdx] >> bitIdx) & 1)
-	br.pos++
-	return bit, nil
+    if br.pos/8 >= len(br.data) {
+        return 0, fmt.Errorf("EOF")
+    }
+    byteIdx := br.pos / 8
+    bitIdx := 7 - (br.pos % 8)
+    bit := uint((br.data[byteIdx] >> bitIdx) & 1)
+    br.pos++
+    return bit, nil
 }
 
 func (br *bitReader) readUe() (uint, error) {
-	leadingZeros := 0
-	for {
-		bit, err := br.readBit()
-		if err != nil {
-			return 0, err
-		}
-		if bit == 1 {
-			break
-		}
-		leadingZeros++
-	}
-	val := (uint(1) << leadingZeros) - 1
-	for i := 0; i < leadingZeros; i++ {
-		bit, err := br.readBit()
-		if err != nil {
-			return 0, err
-		}
-		val += bit << (leadingZeros - 1 - i)
-	}
-	return val, nil
+    leadingZeros := 0
+    for {
+        bit, err := br.readBit()
+        if err != nil {
+            return 0, err
+        }
+        if bit == 1 {
+            break
+        }
+        leadingZeros++
+    }
+    val := (uint(1) << leadingZeros) - 1
+    for i := 0; i < leadingZeros; i++ {
+        bit, err := br.readBit()
+        if err != nil {
+            return 0, err
+        }
+        val += bit << (leadingZeros - 1 - i)
+    }
+    return val, nil
 }
 
 func getFirstMbInSlice(nalu []byte) (uint, error) {
-	if len(nalu) < 2 {
-		return 0, fmt.Errorf("NALU too short")
-	}
-	ebsp := nalu[1:]
-	rbsp := make([]byte, 0, len(ebsp))
-	for i := 0; i < len(ebsp); {
-		if i+2 < len(ebsp) && ebsp[i] == 0 && ebsp[i+1] == 0 && ebsp[i+2] == 3 {
-			rbsp = append(rbsp, 0, 0)
-			i += 3
-		} else {
-			rbsp = append(rbsp, ebsp[i])
-			i++
-		}
-	}
-	br := newBitReader(rbsp)
-	return br.readUe()
+    if len(nalu) < 2 {
+        return 0, fmt.Errorf("NALU too short")
+    }
+    ebsp := nalu[1:]
+    rbsp := make([]byte, 0, len(ebsp))
+    for i := 0; i < len(ebsp); {
+        if i+2 < len(ebsp) && ebsp[i] == 0 && ebsp[i+1] == 0 && ebsp[i+2] == 3 {
+            rbsp = append(rbsp, 0, 0)
+            i += 3
+        } else {
+            rbsp = append(rbsp, ebsp[i])
+            i++
+        }
+    }
+    br := newBitReader(rbsp)
+    return br.readUe()
 }
 
 func sanitizeTrackID(name string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(name, " ", "_"), "'", "")
+    return strings.ReplaceAll(strings.ReplaceAll(name, " ", "_"), "'", "")
 }
 
-func getOpusHead(fullEpisodePath string) ([]byte, error) {
-	cmd := exec.Command(
-		"ffmpeg",
-		"-y",
-		"-i", fullEpisodePath,
-		"-t", "0.1",
-		"-c:a", "copy",
-		"-vn",
-		"-f", "data",
-		"-map", "0:a:0",
-		"pipe:",
-	)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		log.Printf("getOpusHead stderr: %s", stderr.String())
-		return nil, fmt.Errorf("failed to extract OpusHead: %v", err)
-	}
-	data := out.Bytes()
-	if len(data) < 19 || string(data[:8]) != "OpusHead" {
-		log.Printf("Invalid OpusHead, size: %d, first 8 bytes: %x", len(data), data[:min(8, len(data))])
-		return nil, fmt.Errorf("invalid OpusHead extracted")
-	}
-	log.Printf("Extracted OpusHead, size: %d bytes, first 19 bytes: %x", len(data), data[:min(19, len(data))])
-	return data, nil
-}
-
-func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur float64) ([]string, [][]byte, string, error) {
+func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur float64) ([]string, [][]byte, string, float64, fpsPair, error) {
     if db == nil {
-        return nil, nil, "", fmt.Errorf("database connection is nil")
+        return nil, nil, "", 0, fpsPair{}, fmt.Errorf("database connection is nil")
     }
     var segments []string
     var spsPPS [][]byte
@@ -189,11 +133,11 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
     var uri string
     err := db.QueryRow(`SELECT uri FROM videos WHERE id = $1`, videoID).Scan(&uri)
     if err != nil {
-        return nil, nil, "", fmt.Errorf("failed to get URI for video %d: %v", videoID, err)
+        return nil, nil, "", 0, fpsPair{}, fmt.Errorf("failed to get URI for video %d: %v", videoID, err)
     }
     fullEpisodePath := filepath.Join(videoBaseDir, uri)
     if _, err := os.Stat(fullEpisodePath); err != nil {
-        return nil, nil, "", fmt.Errorf("episode file not found: %s", fullEpisodePath)
+        return nil, nil, "", 0, fpsPair{}, fmt.Errorf("episode file not found: %s", fullEpisodePath)
     }
     var duration sql.NullFloat64
     err = db.QueryRow(`SELECT duration FROM videos WHERE id = $1`, videoID).Scan(&duration)
@@ -204,24 +148,24 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
     if duration.Valid && startTime+chunkDur > duration.Float64 {
         adjustedChunkDur = duration.Float64 - startTime
         if adjustedChunkDur <= 0 {
-            return nil, nil, "", fmt.Errorf("no remaining duration for video %d at start time %f", videoID, startTime)
+            return nil, nil, "", 0, fpsPair{}, fmt.Errorf("no remaining duration for video %d at start time %f", videoID, startTime)
         }
     }
     tempDir, err := os.MkdirTemp("", DefaultTempPrefix)
     if err != nil {
-        return nil, nil, "", fmt.Errorf("failed to create temp dir for video %d: %v", videoID, err)
+        return nil, nil, "", 0, fpsPair{}, fmt.Errorf("failed to create temp dir for video %d: %v", videoID, err)
     }
     defer os.RemoveAll(tempDir)
     if err := os.MkdirAll(HlsDir, 0755); err != nil {
-        return nil, nil, "", fmt.Errorf("failed to create webrtc_segments directory: %v", err)
+        return nil, nil, "", 0, fpsPair{}, fmt.Errorf("failed to create webrtc_segments directory: %v", err)
     }
     safeStationName := strings.ReplaceAll(st.name, " ", "_")
-    baseName := fmt.Sprintf("%s_vid%d_chunk_%f", safeStationName, videoID, startTime)
+    baseName := fmt.Sprintf("%s_vid%d_chunk_%.3f", safeStationName, videoID, startTime)
     segName := baseName + ".h264"
     fullSegPath := filepath.Join(HlsDir, segName)
     opusName := baseName + ".opus"
     opusPath := filepath.Join(HlsDir, opusName)
-    // Log input audio properties
+    // Process audio
     cmdProbe := exec.Command(
         "ffprobe",
         "-v", "error",
@@ -255,69 +199,18 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         opusPath,
     }
     cmdAudio := exec.Command("ffmpeg", args...)
-    //log.Printf("Station %s: Running ffmpeg audio command: %v", st.name, cmdAudio.Args)
     outputAudio, err := cmdAudio.CombinedOutput()
     if err != nil {
         log.Printf("Station %s: ffmpeg audio command failed: %v\nOutput: %s", st.name, err, string(outputAudio))
-        return nil, nil, "", fmt.Errorf("ffmpeg audio failed for video %d at %fs: %v", videoID, startTime, err)
+        return nil, nil, "", 0, fpsPair{}, fmt.Errorf("ffmpeg audio failed for video %d at %fs: %v", videoID, startTime, err)
     }
     log.Printf("Station %s: ffmpeg audio succeeded for %s", st.name, opusPath)
-    cmdDur := exec.Command(
-        "ffprobe",
-        "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        opusPath,
-    )
-    outputDur, err := cmdDur.Output()
-    if err == nil {
-        durStr := strings.TrimSpace(string(outputDur))
-        dur, _ := strconv.ParseFloat(durStr, 64)
-        log.Printf("Station %s: Opus file %s duration: %.2f s", st.name, opusPath, dur)
-        if dur < adjustedChunkDur*0.9 || dur > adjustedChunkDur*1.1 {
-            log.Printf("Station %s: Warning: Opus duration %.2fs does not match expected %.2fs", st.name, dur, adjustedChunkDur)
-        }
-    } else {
-        log.Printf("Station %s: ffprobe failed for %s: %v", st.name, opusPath, err)
-    }
     audioData, err := os.ReadFile(opusPath)
     if err != nil || len(audioData) == 0 {
-        return nil, nil, "", fmt.Errorf("audio file %s is empty or unreadable: %v", opusPath, err)
+        return nil, nil, "", 0, fpsPair{}, fmt.Errorf("audio file %s is empty or unreadable: %v", opusPath, err)
     }
     log.Printf("Station %s: Read audio file %s, size: %d bytes", st.name, opusPath, len(audioData))
-    reader := bytes.NewReader(audioData)
-    ogg, _, err := oggreader.NewWith(reader)
-    if err != nil {
-        return nil, nil, "", fmt.Errorf("failed to create ogg reader for %s: %v", opusPath, err)
-    }
-    var audioPackets [][]byte
-    var pageSizes []int
-    for {
-        payload, _, err := ogg.ParseNextPage()
-        if err == io.EOF {
-            break
-        }
-        if err != nil {
-            log.Printf("Station %s: Failed to parse ogg page for %s: %v", st.name, opusPath, err)
-            continue
-        }
-        pageSizes = append(pageSizes, len(payload))
-        if len(payload) < 1 {
-            log.Printf("Station %s: Empty ogg payload for %s, skipping", st.name, opusPath)
-            continue
-        }
-        if len(payload) >= 8 && (string(payload[:8]) == "OpusHead" || string(payload[:8]) == "OpusTags") {
-            log.Printf("Station %s: Skipping header packet: %s", st.name, string(payload[:8]))
-            continue
-        }
-        audioPackets = append(audioPackets, payload)
-        //log.Printf("Station %s: Extracted audio packet %d, size: %d", st.name, len(audioPackets)-1, len(payload))
-    }
-    //log.Printf("Station %s: Ogg page sizes: %v", st.name, pageSizes)
-    if len(audioPackets) == 0 {
-        log.Printf("Station %s: No valid audio packets extracted from %s", st.name, opusPath)
-        return nil, nil, "", fmt.Errorf("no valid audio packets extracted from %s", opusPath)
-    }
+    // Process video
     args = []string{
         "-y",
         "-ss", fmt.Sprintf("%.3f", startTime),
@@ -332,13 +225,13 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         fullSegPath,
     }
     cmdVideo := exec.Command("ffmpeg", args...)
-    //log.Printf("Station %s: Running ffmpeg video command: %v", st.name, cmdVideo.Args)
     outputVideo, err := cmdVideo.CombinedOutput()
     if err != nil {
         log.Printf("Station %s: ffmpeg video command failed: %v\nOutput: %s", st.name, err, string(outputVideo))
-        return nil, nil, "", fmt.Errorf("ffmpeg video failed for video %d at %fs: %v", videoID, startTime, err)
+        return nil, nil, "", 0, fpsPair{}, fmt.Errorf("ffmpeg video failed for video %d at %fs: %v", videoID, startTime, err)
     }
     segments = append(segments, fullSegPath)
+    // Get FPS
     fpsNum := DefaultFPSNum
     fpsDen := DefaultFPSDen
     cmdFPS := exec.Command(
@@ -374,17 +267,41 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
     } else {
         log.Printf("Station %s: ffprobe failed for original %s: %v", st.name, fullEpisodePath, err)
     }
-    st.fpsCache.Store(fullSegPath, fpsPair{num: fpsNum, den: fpsDen})
-    st.durationCache.Store(fullSegPath, adjustedChunkDur)
+    // Get actual duration
+    cmdDur := exec.Command(
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        fullSegPath,
+    )
+    outputDur, err := cmdDur.Output()
+    var actualDur float64
+    if err == nil {
+        durStr := strings.TrimSpace(string(outputDur))
+        actualDur, err = strconv.ParseFloat(durStr, 64)
+        if err != nil {
+            log.Printf("Station %s: Failed to parse duration for %s: %v, using adjustedChunkDur %.3f", st.name, fullSegPath, err, adjustedChunkDur)
+            actualDur = adjustedChunkDur
+        } else {
+            log.Printf("Station %s: Video segment %s duration: %.3f s", st.name, fullSegPath, actualDur)
+            if actualDur < adjustedChunkDur*0.9 || actualDur > adjustedChunkDur*1.1 {
+                log.Printf("Station %s: Warning: Video duration %.3fs does not match expected %.3fs", st.name, actualDur, adjustedChunkDur)
+            }
+        }
+    } else {
+        log.Printf("Station %s: ffprobe duration failed for %s: %v, using adjustedChunkDur %.3f", st.name, fullSegPath, err, adjustedChunkDur)
+        actualDur = adjustedChunkDur
+    }
     data, err := os.ReadFile(fullSegPath)
     if err != nil || len(data) == 0 {
         log.Printf("Station %s: Failed to read video segment %s: %v", st.name, fullSegPath, err)
-        return nil, nil, "", fmt.Errorf("failed to read video segment %s: %v", fullSegPath, err)
+        return nil, nil, "", 0, fpsPair{}, fmt.Errorf("failed to read video segment %s: %v", fullSegPath, err)
     }
     nalus := splitNALUs(data)
     if len(nalus) == 0 {
         log.Printf("Station %s: No NALUs found in segment %s", st.name, fullSegPath)
-        return nil, nil, "", fmt.Errorf("no NALUs found in segment %s", fullSegPath)
+        return nil, nil, "", 0, fpsPair{}, fmt.Errorf("no NALUs found in segment %s", fullSegPath)
     }
     hasIDR := false
     for _, nalu := range nalus {
@@ -421,207 +338,296 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         fmtpLine = "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"
     }
     log.Printf("Station %s: Processed segment %s with %d NALUs, %d SPS/PPS, fmtp: %s", st.name, fullSegPath, len(nalus), len(spsPPS), fmtpLine)
-    return segments, spsPPS, fmtpLine, nil
+    return segments, spsPPS, fmtpLine, actualDur, fpsPair{num: fpsNum, den: fpsDen}, nil
+}
+
+func getBreakPoints(videoID int64, db *sql.DB) ([]float64, error) {
+    rows, err := db.Query("SELECT value FROM video_metadata WHERE video_id = $1 AND metadata_type_id = 1", videoID)
+    if err != nil {
+        return nil, err
+    }
+    defer rows.Close()
+    var bps []float64
+    for rows.Next() {
+        var raw json.RawMessage
+        if err := rows.Scan(&raw); err != nil {
+            return nil, err
+        }
+        var bp float64
+        if err := json.Unmarshal(raw, &bp); err != nil {
+            return nil, err
+        }
+        bps = append(bps, bp)
+    }
+    if err := rows.Err(); err != nil {
+        return nil, err
+    }
+    sort.Float64s(bps)
+    return bps, nil
+}
+
+func getVideoDur(videoID int64, db *sql.DB) float64 {
+    var dur sql.NullFloat64
+    err := db.QueryRow("SELECT duration FROM videos WHERE id = $1", videoID).Scan(&dur)
+    if err != nil || !dur.Valid {
+        log.Printf("Failed to get duration for video %d: %v", videoID, err)
+        return 0
+    }
+    return dur.Float64
 }
 
 func manageProcessing(st *Station, db *sql.DB) {
-	for {
-		select {
-		case <-st.stopProcessing:
-			log.Printf("Station %s: Stopping processing due to no viewers", st.name)
-			st.mu.Lock()
-			st.processing = false
-			for _, seg := range st.segmentList {
-				os.Remove(seg)
-				os.Remove(strings.Replace(seg, ".h264", ".opus", 1))
-				os.Remove(strings.Replace(seg, ".h264", ".dur", 1))
-				st.fpsCache.Delete(seg)
-				st.durationCache.Delete(seg)
-			}
-			st.segmentList = nil
-			st.spsPPS = nil
-			st.fmtpLine = ""
-			st.lastQueuedStart = 0
-			st.mu.Unlock()
-			return
-		default:
-			st.mu.Lock()
-			if st.viewers == 0 || len(st.segmentList) == 0 {
-				st.mu.Unlock()
-				time.Sleep(time.Second)
-				continue
-			}
-			remainingDur := 0.0
-			for _, seg := range st.segmentList {
-				if val, ok := st.durationCache.Load(seg); ok {
-					remainingDur += val.(float64)
-				}
-			}
-			if remainingDur >= BufferThreshold {
-				st.mu.Unlock()
-				time.Sleep(time.Second)
-				continue
-			}
-			var currentVideoDur float64
-			var dur sql.NullFloat64
-			err := db.QueryRow(`SELECT duration FROM videos WHERE id = $1`, st.currentVideo).Scan(&dur)
-			if err != nil || !dur.Valid {
-				log.Printf("Station %s: Failed to get duration for video %d: %v", st.name, st.currentVideo, err)
-				currentVideoDur = 3600
-			} else {
-				currentVideoDur = dur.Float64
-			}
-			log.Printf("Station %s: Current offset: %f, Remaining duration: %f, Current video: %d", st.name, st.currentOffset, remainingDur, st.currentVideo)
-			nextStartTime := st.currentOffset + remainingDur
-			if nextStartTime == st.lastQueuedStart {
-				log.Printf("Station %s: Skipping duplicate chunk at %fs for video %d", st.name, nextStartTime, st.currentVideo)
-				st.mu.Unlock()
-				time.Sleep(time.Second)
-				continue
-			}
-			if nextStartTime >= currentVideoDur {
-				st.currentIndex++
-				if st.currentIndex >= len(st.videoQueue) {
-					st.currentIndex = 0
-				}
-				st.currentVideo = st.videoQueue[st.currentIndex]
-				st.currentOffset = 0
-				nextStartTime = 0
-				st.spsPPS = nil
-				st.fmtpLine = ""
-				log.Printf("Station %s: Advanced to video %d, reset offset and start time", st.name, st.currentVideo)
-			}
-			log.Printf("Station %s: Processing chunk for video %d at %fs", st.name, st.currentVideo, nextStartTime)
-			segments, spsPPS, fmtpLine, err := processVideo(st, st.currentVideo, db, nextStartTime, ChunkDuration)
-			if err != nil {
-				log.Printf("Station %s: Failed to process chunk for video %d at %fs: %v", st.name, st.currentVideo, nextStartTime, err)
-				st.mu.Unlock()
-				time.Sleep(5 * time.Second)
-				continue
-			}
-			st.segmentList = append(st.segmentList, segments...)
-			if len(st.spsPPS) == 0 {
-				st.spsPPS = spsPPS
-				st.fmtpLine = fmtpLine
-			}
-			st.lastQueuedStart = nextStartTime
-			log.Printf("Station %s: Queued chunk at %fs, lastQueuedStart to %f", st.name, nextStartTime, st.lastQueuedStart)
-			st.mu.Unlock()
-			time.Sleep(time.Second)
-		}
-	}
+    for {
+        select {
+        case <-st.stopProcessing:
+            log.Printf("Station %s: Stopping processing due to no viewers", st.name)
+            st.mu.Lock()
+            st.processing = false
+            for _, chunk := range st.segmentList {
+                os.Remove(chunk.segPath)
+                os.Remove(strings.Replace(chunk.segPath, ".h264", ".opus", 1))
+            }
+            st.segmentList = nil
+            st.spsPPS = nil
+            st.fmtpLine = ""
+            st.mu.Unlock()
+            return
+        default:
+            st.mu.Lock()
+            if st.viewers == 0 {
+                st.mu.Unlock()
+                time.Sleep(time.Second)
+                continue
+            }
+            remainingDur := 0.0
+            sumNonAd := 0.0
+            for _, chunk := range st.segmentList {
+                remainingDur += chunk.dur
+                if !chunk.isAd {
+                    sumNonAd += chunk.dur
+                }
+            }
+            log.Printf("Station %s: Remaining buffer %.3fs, non-ad %.3fs, current video %d, offset %.3f", st.name, remainingDur, sumNonAd, st.currentVideo, st.currentOffset)
+            for remainingDur < BufferThreshold {
+                videoDur := getVideoDur(st.currentVideo, db)
+                if videoDur <= 0 {
+                    log.Printf("Station %s: Invalid duration for video %d, advancing to next video", st.name, st.currentVideo)
+                    st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
+                    st.currentVideo = st.videoQueue[st.currentIndex]
+                    st.currentOffset = 0.0
+                    st.spsPPS = nil
+                    st.fmtpLine = ""
+                    sumNonAd = 0.0
+                    continue
+                }
+                nextStart := st.currentOffset + sumNonAd
+                if nextStart >= videoDur {
+                    log.Printf("Station %s: Reached end of video %d (%.3fs >= %.3fs), advancing", st.name, st.currentVideo, nextStart, videoDur)
+                    st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
+                    st.currentVideo = st.videoQueue[st.currentIndex]
+                    st.currentOffset = 0.0
+                    st.spsPPS = nil
+                    st.fmtpLine = ""
+                    sumNonAd = 0.0
+                    continue
+                }
+                breaks, err := getBreakPoints(st.currentVideo, db)
+                if err != nil {
+                    log.Printf("Station %s: Failed to get break points for video %d: %v", st.name, st.currentVideo, err)
+                    breaks = []float64{}
+                }
+                log.Printf("Station %s: Break points for video %d: %v", st.name, st.currentVideo, breaks)
+                var nextBreak float64 = math.MaxFloat64
+                for _, b := range breaks {
+                    if b > nextStart {
+                        nextBreak = b
+                        break
+                    }
+                }
+                chunkDur := ChunkDuration
+                chunkEnd := nextStart + chunkDur
+                if chunkEnd > videoDur {
+                    chunkEnd = videoDur
+                    chunkDur = videoDur - nextStart
+                }
+                if nextBreak < chunkEnd {
+                    chunkEnd = nextBreak
+                    chunkDur = nextBreak - nextStart
+                }
+                if chunkDur > 0 {
+                    segments, spsPPS, fmtpLine, actualDur, fps, err := processVideo(st, st.currentVideo, db, nextStart, chunkDur)
+                    if err != nil {
+                        log.Printf("Station %s: Failed to process episode chunk for video %d at %.3fs: %v", st.name, st.currentVideo, nextStart, err)
+                        st.mu.Unlock()
+                        time.Sleep(5 * time.Second)
+                        continue
+                    }
+                    if len(st.spsPPS) == 0 {
+                        st.spsPPS = spsPPS
+                        st.fmtpLine = fmtpLine
+                    }
+                    newChunk := bufferedChunk{
+                        segPath: segments[0],
+                        dur:     actualDur,
+                        isAd:    false,
+                        videoID: st.currentVideo,
+                        fps:     fps,
+                    }
+                    st.segmentList = append(st.segmentList, newChunk)
+                    remainingDur += actualDur
+                    sumNonAd += actualDur
+                    log.Printf("Station %s: Queued episode chunk for video %d at %.3fs, duration %.3fs", st.name, st.currentVideo, nextStart, actualDur)
+                }
+                if nextBreak == chunkEnd && len(breaks) > 0 {
+                    log.Printf("Station %s: Inserting ad break at %.3fs for video %d", st.name, nextBreak, st.currentVideo)
+                    for i := 0; i < 3; i++ {
+                        if len(adIDs) == 0 {
+                            log.Printf("Station %s: No ads available for break at %.3fs", st.name, nextBreak)
+                            break
+                        }
+                        adID := adIDs[rand.Intn(len(adIDs))]
+                        adDur := getVideoDur(adID, db)
+                        if adDur <= 0 {
+                            log.Printf("Station %s: Invalid duration for ad %d, skipping", st.name, adID)
+                            continue
+                        }
+                        segments, spsPPS, fmtpLine, actualDur, fps, err := processVideo(st, adID, db, 0, adDur)
+                        if err != nil {
+                            log.Printf("Station %s: Failed to process ad %d: %v", st.name, adID, err)
+                            continue
+                        }
+                        if len(st.spsPPS) == 0 {
+                            st.spsPPS = spsPPS
+                            st.fmtpLine = fmtpLine
+                        }
+                        adChunk := bufferedChunk{
+                            segPath: segments[0],
+                            dur:     actualDur,
+                            isAd:    true,
+                            videoID: adID,
+                            fps:     fps,
+                        }
+                        st.segmentList = append(st.segmentList, adChunk)
+                        remainingDur += actualDur
+                        log.Printf("Station %s: Queued ad %d with duration %.3fs at break %.3fs", st.name, adID, actualDur, nextBreak)
+                    }
+                }
+            }
+            st.mu.Unlock()
+            time.Sleep(time.Second)
+        }
+    }
 }
 
 func loadStation(stationName string, db *sql.DB) *Station {
-	st := &Station{
-		name:           stationName,
-		currentIndex:   0,
-		viewers:        0,
-		stopProcessing: make(chan struct{}),
-	}
-	var unixStart int64
-	err := db.QueryRow("SELECT unix_start FROM stations WHERE name = $1", stationName).Scan(&unixStart)
-	if err != nil {
-		log.Printf("Failed to get unix_start for station %s: %v", stationName, err)
-		return nil
-	}
-	rows, err := db.Query(
-		"SELECT sv.video_id FROM station_videos sv JOIN stations s ON sv.station_id = s.id WHERE s.name = $1 ORDER BY sv.id ASC",
-		stationName)
-	if err != nil {
-		log.Printf("Failed to query station_videos for station %s: %v", stationName, err)
-		return nil
-	}
-	defer rows.Close()
-	var videoIds []int64
-	for rows.Next() {
-		var vid int64
-		if err := rows.Scan(&vid); err != nil {
-			log.Printf("Failed to scan video_id for station %s: %v", stationName, err)
-			continue
-		}
-		videoIds = append(videoIds, vid)
-	}
-	if len(videoIds) == 0 {
-		log.Printf("No videos found for station %s", stationName)
-		return nil
-	}
-	st.videoQueue = videoIds
-	currentTime := time.Now().Unix()
-	elapsedSeconds := float64(currentTime - unixStart)
-	totalQueueDuration, err := getQueueDuration(videoIds, db)
-	if err != nil || totalQueueDuration <= 0 {
-		log.Printf("Failed to calculate queue duration for station %s: %v", stationName, err)
-		return nil
-	}
-	loops := int(elapsedSeconds / totalQueueDuration)
-	remainingSeconds := math.Mod(elapsedSeconds, totalQueueDuration)
-	log.Printf("Station %s: Elapsed %f seconds, %d loops, remaining %f seconds", stationName, elapsedSeconds, loops, remainingSeconds)
-	currentOffset := remainingSeconds
-	currentVideoIndex := 0
-	var currentVideoID int64
-	for i, vid := range videoIds {
-		var duration sql.NullFloat64
-		var hasCommercialTag bool
-		err = db.QueryRow(
-			"SELECT EXISTS (SELECT 1 FROM video_tags vt WHERE vt.video_id = $1 AND vt.tag_id = 4)",
-			vid).Scan(&hasCommercialTag)
-		if err != nil {
-			log.Printf("Failed to check commercial tag for video %d: %v", vid, err)
-			continue
-		}
-		if hasCommercialTag {
-			continue
-		}
-		err = db.QueryRow("SELECT duration FROM videos WHERE id = $1", vid).Scan(&duration)
-		if err != nil {
-			log.Printf("Failed to get duration for video %d: %v", vid, err)
-			continue
-		}
-		if duration.Valid && currentOffset >= duration.Float64 {
-			currentOffset -= duration.Float64
-			continue
-		}
-		if duration.Valid {
-			currentVideoIndex = i
-			currentVideoID = vid
-			break
-		}
-	}
-	if currentVideoID == 0 {
-		log.Printf("No valid non-ad video found for station %s, defaulting to first video", stationName)
-		currentVideoID = videoIds[0]
-		currentOffset = 0
-	}
-	st.currentVideo = currentVideoID
-	st.currentIndex = currentVideoIndex
-	st.currentOffset = currentOffset
-	st.trackVideo, err = webrtc.NewTrackLocalStaticSample(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264},
-		"video_"+sanitizeTrackID(stationName),
-		"pion",
-	)
-	if err != nil {
-		log.Printf("Station %s: Failed to create video track: %v", stationName, err)
-		return nil
-	}
-	st.trackAudio, err = webrtc.NewTrackLocalStaticSample(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
-		"audio_"+sanitizeTrackID(stationName),
-		"pion",
-	)
-	if err != nil {
-		log.Printf("Station %s: Failed to create audio track: %v", stationName, err)
-		return nil
-	}
-	log.Printf("Station %s: Initialized at video %d (index %d) with offset %f seconds", stationName, currentVideoID, currentVideoIndex, currentOffset)
-	return st
+    st := &Station{
+        name:           stationName,
+        currentIndex:   0,
+        viewers:        0,
+        stopProcessing: make(chan struct{}),
+    }
+    var unixStart int64
+    err := db.QueryRow("SELECT unix_start FROM stations WHERE name = $1", stationName).Scan(&unixStart)
+    if err != nil {
+        log.Printf("Failed to get unix_start for station %s: %v", stationName, err)
+        return nil
+    }
+    rows, err := db.Query(
+        "SELECT sv.video_id FROM station_videos sv JOIN stations s ON sv.station_id = s.id WHERE s.name = $1 ORDER BY sv.id ASC",
+        stationName)
+    if err != nil {
+        log.Printf("Failed to query station_videos for station %s: %v", stationName, err)
+        return nil
+    }
+    defer rows.Close()
+    var videoIds []int64
+    for rows.Next() {
+        var vid int64
+        if err := rows.Scan(&vid); err != nil {
+            log.Printf("Failed to scan video_id for station %s: %v", stationName, err)
+            continue
+        }
+        videoIds = append(videoIds, vid)
+    }
+    if len(videoIds) == 0 {
+        log.Printf("No videos found for station %s", stationName)
+        return nil
+    }
+    st.videoQueue = videoIds
+    currentTime := time.Now().Unix()
+    elapsedSeconds := float64(currentTime - unixStart)
+    totalQueueDuration, err := getQueueDuration(videoIds, db)
+    if err != nil || totalQueueDuration <= 0 {
+        log.Printf("Failed to calculate queue duration for station %s: %v", stationName, err)
+        return nil
+    }
+    loops := int(elapsedSeconds / totalQueueDuration)
+    remainingSeconds := math.Mod(elapsedSeconds, totalQueueDuration)
+    log.Printf("Station %s: Elapsed %f seconds, %d loops, remaining %f seconds", stationName, elapsedSeconds, loops, remainingSeconds)
+    currentOffset := remainingSeconds
+    currentVideoIndex := 0
+    var currentVideoID int64
+    for i, vid := range videoIds {
+        var hasCommercialTag bool
+        err = db.QueryRow(
+            "SELECT EXISTS (SELECT 1 FROM video_tags vt WHERE vt.video_id = $1 AND vt.tag_id = 4)",
+            vid).Scan(&hasCommercialTag)
+        if err != nil {
+            log.Printf("Failed to check commercial tag for video %d: %v", vid, err)
+            continue
+        }
+        if hasCommercialTag {
+            continue
+        }
+        var duration sql.NullFloat64
+        err = db.QueryRow("SELECT duration FROM videos WHERE id = $1", vid).Scan(&duration)
+        if err != nil {
+            log.Printf("Failed to get duration for video %d: %v", vid, err)
+            continue
+        }
+        if duration.Valid && currentOffset >= duration.Float64 {
+            currentOffset -= duration.Float64
+            continue
+        }
+        if duration.Valid {
+            currentVideoIndex = i
+            currentVideoID = vid
+            break
+        }
+    }
+    if currentVideoID == 0 {
+        log.Printf("No valid non-ad video found for station %s, defaulting to first video", stationName)
+        currentVideoID = videoIds[0]
+        currentOffset = 0
+    }
+    st.currentVideo = currentVideoID
+    st.currentIndex = currentVideoIndex
+    st.currentOffset = currentOffset
+    st.trackVideo, err = webrtc.NewTrackLocalStaticSample(
+        webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264},
+        "video_"+sanitizeTrackID(stationName),
+        "pion",
+    )
+    if err != nil {
+        log.Printf("Station %s: Failed to create video track: %v", stationName, err)
+        return nil
+    }
+    st.trackAudio, err = webrtc.NewTrackLocalStaticSample(
+        webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
+        "audio_"+sanitizeTrackID(stationName),
+        "pion",
+    )
+    if err != nil {
+        log.Printf("Station %s: Failed to create audio track: %v", stationName, err)
+        return nil
+    }
+    log.Printf("Station %s: Initialized at video %d (index %d) with offset %f seconds", stationName, currentVideoID, currentVideoIndex, currentOffset)
+    return st
 }
 
 func getQueueDuration(videoIDs []int64, db *sql.DB) (float64, error) {
     totalDuration := 0.0
     for _, vid := range videoIDs {
-        var duration sql.NullFloat64
         var hasCommercialTag bool
         err := db.QueryRow(
             "SELECT EXISTS (SELECT 1 FROM video_tags vt WHERE vt.video_id = $1 AND vt.tag_id = 4)",
@@ -633,6 +639,7 @@ func getQueueDuration(videoIDs []int64, db *sql.DB) (float64, error) {
         if hasCommercialTag {
             continue
         }
+        var duration sql.NullFloat64
         err = db.QueryRow("SELECT duration FROM videos WHERE id = $1", vid).Scan(&duration)
         if err != nil {
             log.Printf("Failed to get duration for video %d: %v", vid, err)
@@ -647,32 +654,6 @@ func getQueueDuration(videoIDs []int64, db *sql.DB) (float64, error) {
     return totalDuration, nil
 }
 
-func discoverStations(db *sql.DB) {
-	rows, err := db.Query("SELECT name FROM stations")
-	if err != nil {
-		log.Fatalf("Failed to query stations from DB: %v", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var stationName string
-		if err := rows.Scan(&stationName); err != nil {
-			log.Printf("Failed to scan station: %v", err)
-			continue
-		}
-		st := loadStation(stationName, db)
-		if st != nil {
-			stations[stationName] = st
-		}
-	}
-	if err := rows.Err(); err != nil {
-		log.Fatalf("Error iterating stations: %v", err)
-	}
-	log.Printf("Discovered %d stations from DB: %v", len(stations), stations)
-	if len(stations) == 0 {
-		log.Fatal("No stations found in DB - populate the 'stations' and 'station_videos' tables")
-	}
-}
-
 func sender(st *Station, db *sql.DB) {
     for {
         st.mu.Lock()
@@ -681,7 +662,9 @@ func sender(st *Station, db *sql.DB) {
             time.Sleep(time.Second)
             continue
         }
-        segPath := st.segmentList[0]
+        chunk := st.segmentList[0]
+        segPath := chunk.segPath
+        log.Printf("Station %s: Sending chunk %s (video %d, isAd: %v, duration: %.3fs)", st.name, segPath, chunk.videoID, chunk.isAd, chunk.dur)
         st.mu.Unlock()
         testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
         err := st.trackVideo.WriteSample(testSample)
@@ -705,19 +688,20 @@ func sender(st *Station, db *sql.DB) {
             os.Remove(segPath)
             opusSeg := strings.Replace(segPath, ".h264", ".opus", 1)
             os.Remove(opusSeg)
-            durSeg := strings.Replace(segPath, ".h264", ".dur", 1)
-            os.Remove(durSeg)
-            st.fpsCache.Delete(segPath)
-            st.durationCache.Delete(segPath)
             continue
         }
-        fpsNum := DefaultFPSNum
-        fpsDen := DefaultFPSDen
-        if val, ok := st.fpsCache.Load(segPath); ok {
-            pair := val.(fpsPair)
-            fpsNum = pair.num
-            fpsDen = pair.den
+        if chunk.dur <= 0 {
+            log.Printf("Station %s: Skipping chunk %s with zero duration", st.name, segPath)
+            st.mu.Lock()
+            st.segmentList = st.segmentList[1:]
+            st.mu.Unlock()
+            os.Remove(segPath)
+            opusSeg := strings.Replace(segPath, ".h264", ".opus", 1)
+            os.Remove(opusSeg)
+            continue
         }
+        fpsNum := chunk.fps.num
+        fpsDen := chunk.fps.den
         frameDuration := time.Second * time.Duration(fpsDen) / time.Duration(fpsNum)
         nalus := splitNALUs(data)
         if len(nalus) == 0 {
@@ -728,10 +712,6 @@ func sender(st *Station, db *sql.DB) {
             os.Remove(segPath)
             opusSeg := strings.Replace(segPath, ".h264", ".opus", 1)
             os.Remove(opusSeg)
-            durSeg := strings.Replace(segPath, ".h264", ".dur", 1)
-            os.Remove(durSeg)
-            st.fpsCache.Delete(segPath)
-            st.durationCache.Delete(segPath)
             continue
         }
         audioPath := strings.Replace(segPath, ".h264", ".opus", 1)
@@ -743,7 +723,6 @@ func sender(st *Station, db *sql.DB) {
                 log.Printf("Station %s: Failed to create ogg reader for %s: %v", st.name, audioPath, err)
             } else {
                 for {
-                    //payload, header, err := ogg.ParseNextPage()
                     payload, _, err := ogg.ParseNextPage()
                     if err == io.EOF {
                         break
@@ -761,7 +740,6 @@ func sender(st *Station, db *sql.DB) {
                         continue
                     }
                     audioPackets = append(audioPackets, payload)
-                    //log.Printf("Station %s: Parsed audio packet %d for %s, size: %d, granule: %d", st.name, len(audioPackets)-1, audioPath, len(payload), header.GranulePosition)
                 }
                 log.Printf("Station %s: Parsed %d audio packets for %s", st.name, len(audioPackets), audioPath)
             }
@@ -804,22 +782,9 @@ func sender(st *Station, db *sql.DB) {
                         }
                         boundChecked = true
                     }
-/*
-                    rtpPkt := &rtp.Packet{
-                        Header: rtp.Header{
-                            Version: 2,
-                            PayloadType: 111,
-                            SequenceNumber: uint16(i),
-                            Timestamp: audioTimestamp,
-                            SSRC: 2822942833,
-                        },
-                        Payload: pkt,
-                    }
-                    log.Printf("Station %s: Sending RTP audio packet: seq=%d, ts=%d, size=%d, duration=%dms", st.name, rtpPkt.Header.SequenceNumber, rtpPkt.Header.Timestamp, len(rtpPkt.Payload), baseFrameDurationMs)
-*/
                     sample := media.Sample{
-                        Data: pkt,
-                        Duration: time.Duration(baseFrameDurationMs) * time.Millisecond,
+                        Data:            pkt,
+                        Duration:        time.Duration(baseFrameDurationMs) * time.Millisecond,
                         PacketTimestamp: audioTimestamp,
                     }
                     if err := st.trackAudio.WriteSample(sample); err != nil {
@@ -884,8 +849,8 @@ func sender(st *Station, db *sql.DB) {
                         boundChecked = true
                     }
                     sample := media.Sample{
-                        Data: sampleData,
-                        Duration: frameDuration,
+                        Data:            sampleData,
+                        Duration:        frameDuration,
                         PacketTimestamp: videoTimestamp,
                     }
                     if err := st.trackVideo.WriteSample(sample); err != nil {
@@ -925,8 +890,8 @@ func sender(st *Station, db *sql.DB) {
                                 boundChecked = true
                             }
                             sample := media.Sample{
-                                Data: sampleData,
-                                Duration: frameDuration,
+                                Data:            sampleData,
+                                Duration:        frameDuration,
                                 PacketTimestamp: videoTimestamp,
                             }
                             if err := st.trackVideo.WriteSample(sample); err != nil {
@@ -967,8 +932,8 @@ func sender(st *Station, db *sql.DB) {
                     boundChecked = true
                 }
                 sample := media.Sample{
-                    Data: sampleData,
-                    Duration: frameDuration,
+                    Data:            sampleData,
+                    Duration:        frameDuration,
                     PacketTimestamp: videoTimestamp,
                 }
                 if err := st.trackVideo.WriteSample(sample); err != nil {
@@ -985,272 +950,62 @@ func sender(st *Station, db *sql.DB) {
         os.Remove(segPath)
         opusSeg := strings.Replace(segPath, ".h264", ".opus", 1)
         os.Remove(opusSeg)
-        durSeg := strings.Replace(segPath, ".h264", ".dur", 1)
-        os.Remove(durSeg)
         st.mu.Lock()
-        if val, ok := st.durationCache.Load(segPath); ok {
-            st.currentOffset += val.(float64)
-        }
-        st.fpsCache.Delete(segPath)
-        st.durationCache.Delete(segPath)
-        st.segmentList = st.segmentList[1:]
-        var duration sql.NullFloat64
-        err = db.QueryRow(`SELECT duration FROM videos WHERE id = $1`, st.currentVideo).Scan(&duration)
-        if err == nil && duration.Valid && st.currentOffset >= duration.Float64 {
-            st.currentIndex++
-            if st.currentIndex >= len(st.videoQueue) {
-                st.currentIndex = 0
+        if !chunk.isAd {
+            st.currentOffset += chunk.dur
+            videoDur := getVideoDur(st.currentVideo, db)
+            if videoDur > 0 && st.currentOffset >= videoDur {
+                log.Printf("Station %s: Completed video %d, advancing to next", st.name, st.currentVideo)
+                st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
+                st.currentVideo = st.videoQueue[st.currentIndex]
+                st.currentOffset = 0.0
+                st.spsPPS = nil
+                st.fmtpLine = ""
             }
-            st.currentVideo = st.videoQueue[st.currentIndex]
-            st.currentOffset = 0
-            st.spsPPS = nil
-            st.fmtpLine = ""
-            log.Printf("Station %s: Switched to video %d", st.name, st.currentVideo)
         }
+        st.segmentList = st.segmentList[1:]
         st.mu.Unlock()
         time.Sleep(10 * time.Millisecond)
     }
 }
 
-// Helper function for min
 func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func nalTypeToString(t int) string {
-	switch t {
-	case 1:
-		return "Non-IDR"
-	case 5:
-		return "IDR"
-	case 6:
-		return "SEI"
-	case 7:
-		return "SPS"
-	case 8:
-		return "PPS"
-	default:
-		return "Other"
-	}
+    if a < b {
+        return a
+    }
+    return b
 }
 
 func splitNALUs(data []byte) [][]byte {
-	if len(data) == 0 {
-		return nil
-	}
-	var nalus [][]byte
-	start := 0
-	i := 0
-	for i < len(data) {
-		if i+3 < len(data) && data[i] == 0 && data[i+1] == 0 && data[i+2] == 0 && data[i+3] == 1 {
-			if start < i {
-				nalus = append(nalus, data[start:i])
-			}
-			start = i + 4
-			i += 4
-			continue
-		}
-		if i+2 < len(data) && data[i] == 0 && data[i+1] == 0 && data[i+2] == 1 {
-			if start < i {
-				nalus = append(nalus, data[start:i])
-			}
-			start = i + 3
-			i += 3
-			continue
-		}
-		i++
-	}
-	if start < len(data) {
-		nalus = append(nalus, data[start:])
-	}
-	return nalus
-}
-
-func parseRawOpusPackets(data []byte) ([][]byte, error) {
-    var packets [][]byte
+    if len(data) == 0 {
+        return nil
+    }
+    var nalus [][]byte
+    start := 0
     i := 0
     for i < len(data) {
-        if i+1 > len(data) {
-            return packets, fmt.Errorf("incomplete Opus packet at position %d", i)
+        if i+3 < len(data) && data[i] == 0 && data[i+1] == 0 && data[i+2] == 0 && data[i+3] == 1 {
+            if start < i {
+                nalus = append(nalus, data[start:i])
+            }
+            start = i + 4
+            i += 4
+            continue
         }
-        packetStart := i
-        toc := data[i]
+        if i+2 < len(data) && data[i] == 0 && data[i+1] == 0 && data[i+2] == 1 {
+            if start < i {
+                nalus = append(nalus, data[start:i])
+            }
+            start = i + 3
+            i += 3
+            continue
+        }
         i++
-        config := (toc >> 3) & 0x1F
-        code := toc & 0x3
-        var frameLength int
-        var numFrames int
-        var lengthBytes int
-        var baseFrameDurationMs int
-        switch config {
-        case 0, 1, 2, 3, 16, 17, 18, 19:
-            baseFrameDurationMs = 10
-        case 4, 5, 6, 7, 20, 21, 22, 23:
-            baseFrameDurationMs = 20
-        case 8, 9, 10, 11:
-            baseFrameDurationMs = 40
-        case 12, 13, 14, 15:
-            baseFrameDurationMs = 60
-        case 24, 25, 26, 27:
-            baseFrameDurationMs = 2
-        case 28, 29, 30, 31:
-            baseFrameDurationMs = 5
-        default:
-            log.Printf("Warning: Unknown Opus config %d at position %d, assuming 20ms", config, packetStart)
-            baseFrameDurationMs = 20
-        }
-        if code == 0 {
-            if i+1 > len(data) {
-                return packets, fmt.Errorf("incomplete frame length at position %d", i)
-            }
-            frameSize := int(data[i])
-            i++
-            lengthBytes = 1
-            if frameSize == 0xFF {
-                if i+1 > len(data) {
-                    return packets, fmt.Errorf("incomplete extended frame length at position %d", i)
-                }
-                frameSize = int(data[i]) + 0xFF
-                i++
-                lengthBytes++
-            }
-            frameLength = frameSize
-            numFrames = 1
-        } else if code == 1 {
-            if i+1 > len(data) {
-                return packets, fmt.Errorf("incomplete frame length at position %d", i)
-            }
-            frameSize := int(data[i]) * 2
-            i++
-            lengthBytes = 1
-            if frameSize/2 == 0xFF {
-                if i+1 > len(data) {
-                    return packets, fmt.Errorf("incomplete extended frame length at position %d", i)
-                }
-                frameSize = (int(data[i]) + 0xFF) * 2
-                i++
-                lengthBytes++
-            }
-            frameLength = frameSize
-            numFrames = 2
-        } else if code == 2 {
-            if i+2 > len(data) {
-                return packets, fmt.Errorf("incomplete frame lengths at position %d", i)
-            }
-            firstLength := int(data[i])
-            i++
-            lengthBytes = 1
-            if firstLength == 0xFF {
-                if i+1 > len(data) {
-                    return packets, fmt.Errorf("incomplete extended first frame length at position %d", i)
-                }
-                firstLength = int(data[i]) + 0xFF
-                i++
-                lengthBytes++
-            }
-            secondLength := int(data[i])
-            i++
-            lengthBytes++
-            if secondLength == 0xFF {
-                if i+1 > len(data) {
-                    return packets, fmt.Errorf("incomplete extended second frame length at position %d", i)
-                }
-                secondLength = int(data[i]) + 0xFF
-                i++
-                lengthBytes++
-            }
-            frameLength = firstLength + secondLength
-            numFrames = 2
-        } else if code == 3 {
-            if i+1 > len(data) {
-                return packets, fmt.Errorf("incomplete frame count at position %d", i)
-            }
-            vbr := (data[i] & 0x80) != 0
-            numFrames = int(data[i]&0x3F) + 1
-            if numFrames > 10 {
-                log.Printf("Warning: Excessive numFrames %d at position %d, capping at 10", numFrames, packetStart)
-                numFrames = 10
-            }
-            i++
-            padding := (data[i] & 0x80) != 0
-            i++
-            paddingLength := 0
-            if padding {
-                for i < len(data) && data[i] == 0xFF {
-                    paddingLength += 255
-                    i++
-                }
-                if i < len(data) {
-                    paddingLength += int(data[i])
-                    i++
-                } else {
-                    return packets, fmt.Errorf("incomplete padding length at position %d", i)
-                }
-            }
-            frameLengths := make([]int, numFrames)
-            frameLength = 0
-            if vbr {
-                for j := 0; j < numFrames; j++ {
-                    if i >= len(data) {
-                        return packets, fmt.Errorf("incomplete frame length at position %d", i)
-                    }
-                    frameSize := int(data[i])
-                    i++
-                    lengthBytes++
-                    if frameSize == 0xFF {
-                        if i >= len(data) {
-                            return packets, fmt.Errorf("incomplete extended frame length at position %d", i)
-                        }
-                        frameSize = int(data[i]) + 0xFF
-                        i++
-                        lengthBytes++
-                    }
-                    frameLengths[j] = frameSize
-                    frameLength += frameSize
-                }
-            } else {
-                if i >= len(data) {
-                    return packets, fmt.Errorf("incomplete frame length at position %d", i)
-                }
-                frameSize := int(data[i])
-                i++
-                lengthBytes++
-                if frameSize == 0xFF {
-                    if i >= len(data) {
-                        return packets, fmt.Errorf("incomplete extended frame length at position %d", i)
-                    }
-                    frameSize = int(data[i]) + 0xFF
-                    i++
-                    lengthBytes++
-                }
-                for j := 0; j < numFrames; j++ {
-                    frameLengths[j] = frameSize
-                }
-                frameLength = frameSize * numFrames
-            }
-            if i+frameLength+paddingLength > len(data) {
-                log.Printf("Warning: incomplete frame data at position %d, expected %d bytes, remaining %d bytes", i, frameLength+paddingLength, len(data)-i)
-                continue
-            }
-            i += paddingLength
-        } else {
-            log.Printf("Invalid Opus code %d at position %d, skipping packet", code, packetStart)
-            continue
-        }
-        totalDurationMs := numFrames * baseFrameDurationMs
-        if totalDurationMs > 200 {
-            log.Printf("Warning: excessive duration %dms for packet at position %d, skipping", totalDurationMs, packetStart)
-            continue
-        }
-        packet := data[packetStart : i+frameLength]
-        packets = append(packets, packet)
-        log.Printf("Parsed Opus packet, size: %d, config: %d, code: %d, numFrames: %d, frameLength: %d, duration: %dms", len(packet), config, code, numFrames, frameLength, totalDurationMs)
-        i += frameLength
     }
-    return packets, nil
+    if start < len(data) {
+        nalus = append(nalus, data[start:])
+    }
+    return nalus
 }
 
 func signalingHandler(db *sql.DB, c *gin.Context) {
@@ -1292,7 +1047,7 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
             MimeType:    webrtc.MimeTypeOpus,
             ClockRate:   48000,
             Channels:    2,
-            SDPFmtpLine: "minptime=10;useinbandfec=1;stereo=1", // Added stereo=1
+            SDPFmtpLine: "minptime=10;useinbandfec=1;stereo=1",
         },
         PayloadType: 111,
     }, webrtc.RTPCodecTypeAudio); err != nil {
@@ -1327,7 +1082,39 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
             pc.Close()
             return
         }
-        segments, spsPPS, fmtpLine, err := processVideo(st, st.currentVideo, db, st.currentOffset, ChunkDuration)
+        videoDur := getVideoDur(st.currentVideo, db)
+        if videoDur <= 0 {
+            log.Printf("Station %s: Invalid duration for initial video %d, advancing", st.name, st.currentVideo)
+            st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
+            st.currentVideo = st.videoQueue[st.currentIndex]
+            st.currentOffset = 0.0
+            videoDur = getVideoDur(st.currentVideo, db)
+        }
+        breaks, err := getBreakPoints(st.currentVideo, db)
+        if err != nil {
+            log.Printf("Station %s: Failed to get break points for initial video %d: %v", st.name, st.currentVideo, err)
+            breaks = []float64{}
+        }
+        log.Printf("Station %s: Initial break points for video %d: %v", st.name, st.currentVideo, breaks)
+        nextStart := st.currentOffset
+        var nextBreak float64 = math.MaxFloat64
+        for _, b := range breaks {
+            if b > nextStart {
+                nextBreak = b
+                break
+            }
+        }
+        chunkDur := ChunkDuration
+        chunkEnd := nextStart + chunkDur
+        if chunkEnd > videoDur {
+            chunkEnd = videoDur
+            chunkDur = videoDur - nextStart
+        }
+        if nextBreak < chunkEnd {
+            chunkEnd = nextBreak
+            chunkDur = nextBreak - nextStart
+        }
+        segments, spsPPS, fmtpLine, actualDur, fps, err := processVideo(st, st.currentVideo, db, nextStart, chunkDur)
         if err != nil {
             log.Printf("Station %s: Failed to process initial chunk for video %d: %v", st.name, st.currentVideo, err)
             st.viewers--
@@ -1336,9 +1123,18 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
             pc.Close()
             return
         }
-        st.segmentList = segments
-        st.spsPPS = spsPPS
-        st.fmtpLine = fmtpLine
+        if len(st.spsPPS) == 0 { // Update codec configuration
+            st.spsPPS = spsPPS
+            st.fmtpLine = fmtpLine
+        }
+        st.segmentList = []bufferedChunk{{
+            segPath: segments[0],
+            dur:     actualDur,
+            isAd:    false,
+            videoID: st.currentVideo,
+            fps:     fps,
+        }}
+        log.Printf("Station %s: Queued initial chunk for video %d at %.3fs, duration %.3fs", st.name, st.currentVideo, nextStart, actualDur)
         audioPath := strings.Replace(segments[0], ".h264", ".opus", 1)
         if _, err := os.Stat(audioPath); os.IsNotExist(err) {
             log.Printf("Station %s: Audio file %s not found", st.name, audioPath)
@@ -1348,23 +1144,58 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
             pc.Close()
             return
         }
-        st.lastQueuedStart = st.currentOffset
-        nextStartTime := st.currentOffset + ChunkDuration
-        var dur sql.NullFloat64
-        err = db.QueryRow(`SELECT duration FROM videos WHERE id = $1`, st.currentVideo).Scan(&dur)
-        if err == nil && dur.Valid && nextStartTime >= dur.Float64 {
-            nextStartTime = dur.Float64 - st.currentOffset
-        }
-        segments, spsPPS, fmtpLine, err = processVideo(st, st.currentVideo, db, nextStartTime, ChunkDuration)
-        if err != nil {
-            log.Printf("Station %s: Failed to process second initial chunk for video %d: %v", st.name, st.currentVideo, err)
-        } else {
-            st.segmentList = append(st.segmentList, segments...)
-            if len(st.spsPPS) == 0 {
-                st.spsPPS = spsPPS
-                st.fmtpLine = fmtpLine
+        // Queue second chunk or ads
+        nextStart += actualDur
+        if nextBreak == chunkEnd && len(breaks) > 0 {
+            log.Printf("Station %s: Inserting initial ad break at %.3fs for video %d", st.name, nextBreak, st.currentVideo)
+            for i := 0; i < 3; i++ {
+                if len(adIDs) == 0 {
+                    log.Printf("Station %s: No ads available for initial break at %.3fs", st.name, nextBreak)
+                    break
+                }
+                adID := adIDs[rand.Intn(len(adIDs))]
+                adDur := getVideoDur(adID, db)
+                if adDur <= 0 {
+                    log.Printf("Station %s: Invalid duration for ad %d, skipping", st.name, adID)
+                    continue
+                }
+                segments, spsPPS, fmtpLine, actualDur, fps, err := processVideo(st, adID, db, 0, adDur)
+                if err != nil {
+                    log.Printf("Station %s: Failed to process initial ad %d: %v", st.name, adID, err)
+                    continue
+                }
+                if len(st.spsPPS) == 0 { // Update codec configuration
+                    st.spsPPS = spsPPS
+                    st.fmtpLine = fmtpLine
+                }
+                adChunk := bufferedChunk{
+                    segPath: segments[0],
+                    dur:     actualDur,
+                    isAd:    true,
+                    videoID: adID,
+                    fps:     fps,
+                }
+                st.segmentList = append(st.segmentList, adChunk)
+                log.Printf("Station %s: Queued initial ad %d with duration %.3fs at break %.3fs", st.name, adID, actualDur, nextBreak)
             }
-            st.lastQueuedStart = nextStartTime
+        } else if nextStart < videoDur {
+            segments, spsPPS, fmtpLine, actualDur, fps, err := processVideo(st, st.currentVideo, db, nextStart, ChunkDuration)
+            if err != nil {
+                log.Printf("Station %s: Failed to process second initial chunk for video %d: %v", st.name, st.currentVideo, err)
+            } else {
+                if len(st.spsPPS) == 0 { // Update codec configuration
+                    st.spsPPS = spsPPS
+                    st.fmtpLine = fmtpLine
+                }
+                st.segmentList = append(st.segmentList, bufferedChunk{
+                    segPath: segments[0],
+                    dur:     actualDur,
+                    isAd:    false,
+                    videoID: st.currentVideo,
+                    fps:     fps,
+                })
+                log.Printf("Station %s: Queued second initial chunk for video %d at %.3fs, duration %.3fs", st.name, st.currentVideo, nextStart, actualDur)
+            }
         }
         go manageProcessing(st, db)
     }
@@ -1512,12 +1343,11 @@ pc = new RTCPeerConnection(configuration);
 pc.ontrack = event => {
     const track = event.track;
     log('Track received: kind=' + track.kind + ', id=' + track.id + ', readyState=' + track.readyState + ', enabled=' + track.enabled + ', muted=' + track.muted);
-    
+   
     if (!remoteStream) {
         remoteStream = event.streams[0];
         log('Initialized remoteStream with first track');
     }
-
     if (track.kind === 'video') {
         hasVideo = true;
         stopStaticAudio();
@@ -1525,7 +1355,7 @@ pc.ontrack = event => {
         log('Video started playing');
         track.onunmute = () => log('Video unmuted - media flowing');
     }
-    
+   
     if (track.kind === 'audio') {
         hasAudio = true;
         const audioContext = new AudioContext({ sampleRate: 48000 }); // Explicit 48kHz
@@ -1556,7 +1386,6 @@ pc.ontrack = event => {
             log('Track ended: kind=' + track.kind + ', id=' + track.id);
         };
     }
-
     if (hasAudio && hasVideo && !videoElement.srcObject) {
         videoElement.srcObject = remoteStream;
         log('Both tracks received - assigned stream to video element');
@@ -1711,150 +1540,191 @@ document.getElementById('restartIceButton').addEventListener('click', restartIce
 }
 
 func updateVideoDurations(db *sql.DB) error {
-	if videoBaseDir == "" {
-		return fmt.Errorf("videoBaseDir is not set, cannot process video files")
-	}
-	rows, err := db.Query("SELECT id, uri FROM videos WHERE duration IS NULL")
-	if err != nil {
-		return fmt.Errorf("failed to query videos with NULL duration: %v", err)
-	}
-	defer rows.Close()
-	var videoIDs []int64
-	var uris []string
-	for rows.Next() {
-		var id int64
-		var uri string
-		if err := rows.Scan(&id, &uri); err != nil {
-			log.Printf("Failed to scan video ID and URI: %v", err)
-			continue
-		}
-		videoIDs = append(videoIDs, id)
-		uris = append(uris, uri)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("error iterating videos: %v", err)
-	}
-	if len(videoIDs) == 0 {
-		log.Println("No videos with NULL duration found")
-		return nil
-	}
-	log.Printf("Found %d videos with NULL duration, calculating durations", len(videoIDs))
-	const maxConcurrent = 5
-	semaphore := make(chan struct{}, maxConcurrent)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var errors []error
-	for i, videoID := range videoIDs {
-		wg.Add(1)
-		semaphore <- struct{}{}
-		go func(id int64, uri string) {
-			defer wg.Done()
-			defer func() { <-semaphore }()
-			fullPath := filepath.Join(videoBaseDir, uri)
-			if _, err := os.Stat(fullPath); err != nil {
-				mu.Lock()
-				errors = append(errors, fmt.Errorf("video %d file not found at %s: %v", id, fullPath, err))
-				mu.Unlock()
-				return
-			}
-			cmd := exec.Command(
-				"ffprobe",
-				"-v", "error",
-				"-show_entries", "format=duration",
-				"-of", "default=noprint_wrappers=1:nokey=1",
-				fullPath,
-			)
-			output, err := cmd.Output()
-			if err != nil {
-				mu.Lock()
-				errors = append(errors, fmt.Errorf("ffprobe failed for video %d (%s): %v", id, fullPath, err))
-				mu.Unlock()
-				return
-			}
-			durationStr := strings.TrimSpace(string(output))
-			duration, err := strconv.ParseFloat(durationStr, 64)
-			if err != nil {
-				mu.Lock()
-				errors = append(errors, fmt.Errorf("failed to parse duration for video %d (%s): %v", id, fullPath, err))
-				mu.Unlock()
-				return
-			}
-			_, err = db.Exec("UPDATE videos SET duration = $1 WHERE id = $2", duration, id)
-			if err != nil {
-				mu.Lock()
-				errors = append(errors, fmt.Errorf("failed to update duration for video %d (%s): %v", id, fullPath, err))
-				mu.Unlock()
-				return
-			}
-			log.Printf("Updated duration for video %d (%s) to %.2f seconds", id, fullPath, duration)
-		}(videoID, uris[i])
-	}
-	wg.Wait()
-	if len(errors) > 0 {
-		return fmt.Errorf("encountered %d errors during duration updates: %v", len(errors), errors)
-	}
-	log.Printf("Successfully updated durations for %d videos", len(videoIDs))
-	return nil
+    if videoBaseDir == "" {
+        return fmt.Errorf("videoBaseDir is not set, cannot process video files")
+    }
+    rows, err := db.Query("SELECT id, uri FROM videos WHERE duration IS NULL")
+    if err != nil {
+        return fmt.Errorf("failed to query videos with NULL duration: %v", err)
+    }
+    defer rows.Close()
+    var videoIDs []int64
+    var uris []string
+    for rows.Next() {
+        var id int64
+        var uri string
+        if err := rows.Scan(&id, &uri); err != nil {
+            log.Printf("Failed to scan video ID and URI: %v", err)
+            continue
+        }
+        videoIDs = append(videoIDs, id)
+        uris = append(uris, uri)
+    }
+    if err := rows.Err(); err != nil {
+        return fmt.Errorf("error iterating videos: %v", err)
+    }
+    if len(videoIDs) == 0 {
+        log.Println("No videos with NULL duration found")
+        return nil
+    }
+    log.Printf("Found %d videos with NULL duration, calculating durations", len(videoIDs))
+    const maxConcurrent = 5
+    semaphore := make(chan struct{}, maxConcurrent)
+    var wg sync.WaitGroup
+    var mu sync.Mutex
+    var errors []error
+    for i, videoID := range videoIDs {
+        wg.Add(1)
+        semaphore <- struct{}{}
+        go func(id int64, uri string) {
+            defer wg.Done()
+            defer func() { <-semaphore }()
+            fullPath := filepath.Join(videoBaseDir, uri)
+            if _, err := os.Stat(fullPath); err != nil {
+                mu.Lock()
+                errors = append(errors, fmt.Errorf("video %d file not found at %s: %v", id, fullPath, err))
+                mu.Unlock()
+                return
+            }
+            cmd := exec.Command(
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                fullPath,
+            )
+            output, err := cmd.Output()
+            if err != nil {
+                mu.Lock()
+                errors = append(errors, fmt.Errorf("ffprobe failed for video %d (%s): %v", id, fullPath, err))
+                mu.Unlock()
+                return
+            }
+            durationStr := strings.TrimSpace(string(output))
+            duration, err := strconv.ParseFloat(durationStr, 64)
+            if err != nil {
+                mu.Lock()
+                errors = append(errors, fmt.Errorf("failed to parse duration for video %d (%s): %v", id, fullPath, err))
+                mu.Unlock()
+                return
+            }
+            _, err = db.Exec("UPDATE videos SET duration = $1 WHERE id = $2", duration, id)
+            if err != nil {
+                mu.Lock()
+                errors = append(errors, fmt.Errorf("failed to update duration for video %d (%s): %v", id, fullPath, err))
+                mu.Unlock()
+                return
+            }
+            log.Printf("Updated duration for video %d (%s) to %.2f seconds", id, fullPath, duration)
+        }(videoID, uris[i])
+    }
+    wg.Wait()
+    if len(errors) > 0 {
+        return fmt.Errorf("encountered %d errors during duration updates: %v", len(errors), errors)
+    }
+    log.Printf("Successfully updated durations for %d videos", len(videoIDs))
+    return nil
+}
+
+var adIDs []int64
+var videoBaseDir string
+var stations = make(map[string]*Station)
+var mu sync.Mutex
+var globalStart = time.Now()
+
+type Station struct {
+    name            string
+    segmentList     []bufferedChunk
+    spsPPS          [][]byte
+    fmtpLine        string
+    trackVideo      *webrtc.TrackLocalStaticSample
+    trackAudio      *webrtc.TrackLocalStaticSample
+    videoQueue      []int64
+    currentVideo    int64
+    currentIndex    int
+    currentOffset   float64
+    viewers         int
+    processing      bool
+    stopProcessing  chan struct{}
+    mu              sync.Mutex
+}
+
+func discoverStations(db *sql.DB) {
+    rows, err := db.Query("SELECT name FROM stations")
+    if err != nil {
+        log.Fatalf("Failed to query stations from DB: %v", err)
+    }
+    defer rows.Close()
+    for rows.Next() {
+        var stationName string
+        if err := rows.Scan(&stationName); err != nil {
+            log.Printf("Failed to scan station: %v", err)
+            continue
+        }
+        st := loadStation(stationName, db)
+        if st != nil {
+            stations[stationName] = st
+        }
+    }
+    if err := rows.Err(); err != nil {
+        log.Fatalf("Error iterating stations: %v", err)
+    }
+    log.Printf("Discovered %d stations from DB: %v", len(stations), stations)
+    if len(stations) == 0 {
+        log.Fatal("No stations found in DB - populate the 'stations' and 'station_videos' tables")
+    }
 }
 
 func main() {
-	rand.Seed(time.Now().UnixNano())
-	if err := os.MkdirAll(HlsDir, 0755); err != nil {
-		log.Fatal(err)
-	}
-	db, err := sql.Open("postgres", dbConnString)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer db.Close()
-	if err := db.Ping(); err != nil {
-		log.Fatal("DB ping failed: ", err)
-	}
-	log.Println("Connected to PostgreSQL DB")
-	videoBaseDir = os.Getenv("VIDEO_BASE_DIR")
-	if videoBaseDir == "" {
-		videoBaseDir = DefaultVideoBaseDir
-	}
-	log.Printf("Using video base directory: %s", videoBaseDir)
-	if err := updateVideoDurations(db); err != nil {
-		log.Printf("Failed to update video durations: %v", err)
-	}
-	adRows, err := db.Query(
-		"SELECT v.uri FROM videos v JOIN video_tags vt ON v.id = vt.video_id WHERE vt.tag_id = 4")
-	if err != nil {
-		log.Fatalf("Failed to query commercials: %v", err)
-	}
-	defer adRows.Close()
-	for adRows.Next() {
-		var uri string
-		if err := adRows.Scan(&uri); err != nil {
-			log.Printf("Failed to scan ad URI: %v", err)
-			continue
-		}
-		fullAdPath := filepath.Join(videoBaseDir, uri)
-		if _, err := os.Stat(fullAdPath); err == nil {
-			adFullPaths = append(adFullPaths, fullAdPath)
-		} else {
-			log.Printf("Ad file not found: %s", fullAdPath)
-		}
-	}
-	if err := adRows.Err(); err != nil {
-		log.Fatalf("Error iterating ads: %v", err)
-	}
-	log.Printf("Loaded %d commercials", len(adFullPaths))
-	discoverStations(db)
-	for _, st := range stations {
-		go sender(st, db)
-	}
-	r := gin.Default()
-	r.Use(cors.Default())
-	r.POST("/signal", func(c *gin.Context) {
-		signalingHandler(db, c)
-	})
-	r.GET("/", indexHandler)
-	r.GET("/hls/*path", func(c *gin.Context) {
-		c.String(404, "Use WebRTC")
-	})
-	log.Printf("WebRTC TV server on %s. Stations: %v", Port, stations)
-	log.Fatal(r.Run(Port))
+    rand.Seed(time.Now().UnixNano())
+    if err := os.MkdirAll(HlsDir, 0755); err != nil {
+        log.Fatal(err)
+    }
+    db, err := sql.Open("postgres", dbConnString)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
+    if err := db.Ping(); err != nil {
+        log.Fatal("DB ping failed: ", err)
+    }
+    log.Println("Connected to PostgreSQL DB")
+    videoBaseDir = os.Getenv("VIDEO_BASE_DIR")
+    if videoBaseDir == "" {
+        videoBaseDir = DefaultVideoBaseDir
+    }
+    log.Printf("Using video base directory: %s", videoBaseDir)
+    if err := updateVideoDurations(db); err != nil {
+        log.Printf("Failed to update video durations: %v", err)
+    }
+    rows, err := db.Query("SELECT v.id FROM videos v JOIN video_tags vt ON v.id = vt.video_id WHERE vt.tag_id = 4")
+    if err != nil {
+        log.Fatalf("Failed to load ad IDs: %v", err)
+    }
+    defer rows.Close()
+    for rows.Next() {
+        var id int64
+        if err := rows.Scan(&id); err != nil {
+            log.Printf("Failed to scan ad ID: %v", err)
+            continue
+        }
+        adIDs = append(adIDs, id)
+    }
+    if err := rows.Err(); err != nil {
+        log.Fatalf("Error iterating ad IDs: %v", err)
+    }
+    log.Printf("Loaded %d commercials", len(adIDs))
+    discoverStations(db)
+    for _, st := range stations {
+        go sender(st, db)
+    }
+    r := gin.Default()
+    r.Use(cors.Default())
+    r.POST("/signal", func(c *gin.Context) { signalingHandler(db, c) })
+    r.GET("/", indexHandler)
+    r.GET("/hls/*path", func(c *gin.Context) {
+        c.String(404, "Use WebRTC")
+    })
+    log.Printf("WebRTC TV server on %s. Stations: %v", Port, stations)
+    log.Fatal(r.Run(Port))
 }
