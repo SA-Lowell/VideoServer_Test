@@ -271,27 +271,104 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
     cmdDur := exec.Command(
         "ffprobe",
         "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
+        "-select_streams", "v:0",
+        "-count_frames",
+        "-show_entries", "stream=nb_frames,r_frame_rate",
+        "-of", "json",
         fullSegPath,
     )
     outputDur, err := cmdDur.Output()
     var actualDur float64
     if err == nil {
-        durStr := strings.TrimSpace(string(outputDur))
-        actualDur, err = strconv.ParseFloat(durStr, 64)
-        if err != nil {
-            log.Printf("Station %s: Failed to parse duration for %s: %v, using adjustedChunkDur %.3f", st.name, fullSegPath, err, adjustedChunkDur)
-            actualDur = adjustedChunkDur
-        } else {
-            log.Printf("Station %s: Video segment %s duration: %.3f s", st.name, fullSegPath, actualDur)
-            if actualDur < adjustedChunkDur*0.9 || actualDur > adjustedChunkDur*1.1 {
-                log.Printf("Station %s: Warning: Video duration %.3fs does not match expected %.3fs", st.name, actualDur, adjustedChunkDur)
-            }
+        var result struct {
+            Streams []struct {
+                NbFrames  string `json:"nb_frames"`
+                FrameRate string `json:"r_frame_rate"`
+            } `json:"streams"`
         }
-    } else {
-        log.Printf("Station %s: ffprobe duration failed for %s: %v, using adjustedChunkDur %.3f", st.name, fullSegPath, err, adjustedChunkDur)
-        actualDur = adjustedChunkDur
+        if err := json.Unmarshal(outputDur, &result); err != nil {
+            log.Printf("Station %s: Failed to parse ffprobe JSON for %s: %v, falling back to format duration", st.name, fullSegPath, err)
+        } else if len(result.Streams) > 0 && result.Streams[0].NbFrames != "" {
+            nbFrames, err := strconv.Atoi(result.Streams[0].NbFrames)
+            if err != nil {
+                log.Printf("Station %s: Failed to parse nb_frames '%s' for %s: %v, falling back to format duration", st.name, result.Streams[0].NbFrames, fullSegPath, err)
+            } else {
+                rate := result.Streams[0].FrameRate
+                var fpsNum, fpsDen int
+                if slash := strings.Index(rate, "/"); slash != -1 {
+                    fpsNum, _ = strconv.Atoi(rate[:slash])
+                    fpsDen, _ = strconv.Atoi(rate[slash+1:])
+                } else {
+                    fpsNum, _ = strconv.Atoi(rate)
+                    fpsDen = 1
+                }
+                if fpsNum > 0 && fpsDen > 0 {
+                    actualDur = float64(nbFrames) * float64(fpsDen) / float64(fpsNum)
+                    log.Printf("Station %s: Video segment %s duration: %.3fs (calculated from %d frames at %s fps)", st.name, fullSegPath, actualDur, nbFrames, rate)
+                    if actualDur < adjustedChunkDur*0.9 || actualDur > adjustedChunkDur*1.1 {
+                        log.Printf("Station %s: Warning: Video duration %.3fs does not match expected %.3fs", st.name, actualDur, adjustedChunkDur)
+                    }
+                } else {
+                    log.Printf("Station %s: Invalid frame rate %s for %s, falling back to format duration", st.name, rate, fullSegPath)
+                }
+            }
+        } else {
+            log.Printf("Station %s: No valid streams or nb_frames in ffprobe output for %s, falling back to format duration", st.name, fullSegPath)
+        }
+    }
+    // Fallback to format duration if frame-based method fails
+    if actualDur == 0 {
+        cmdDur = exec.Command(
+            "ffprobe",
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            fullSegPath,
+        )
+        outputDur, err = cmdDur.Output()
+        if err == nil {
+            durStr := strings.TrimSpace(string(outputDur))
+            actualDur, err = strconv.ParseFloat(durStr, 64)
+            if err != nil {
+                log.Printf("Station %s: Failed to parse format duration for %s: %v, falling back to source duration", st.name, fullSegPath, err)
+            } else {
+                log.Printf("Station %s: Video segment %s duration: %.3fs (from format)", st.name, fullSegPath, actualDur)
+                if actualDur < adjustedChunkDur*0.9 || actualDur > adjustedChunkDur*1.1 {
+                    log.Printf("Station %s: Warning: Video duration %.3fs does not match expected %.3fs", st.name, actualDur, adjustedChunkDur)
+                }
+            }
+        } else {
+            log.Printf("Station %s: ffprobe format duration failed for %s: %v, falling back to source duration", st.name, fullSegPath, err)
+        }
+    }
+    // Fallback to source file duration with time range
+    if actualDur == 0 {
+        cmdDur = exec.Command(
+            "ffprobe",
+            "-v", "error",
+            "-ss", fmt.Sprintf("%.3f", startTime),
+            "-t", fmt.Sprintf("%.3f", adjustedChunkDur),
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            fullEpisodePath,
+        )
+        outputDur, err = cmdDur.Output()
+        if err == nil {
+            durStr := strings.TrimSpace(string(outputDur))
+            actualDur, err = strconv.ParseFloat(durStr, 64)
+            if err != nil {
+                log.Printf("Station %s: Failed to parse source duration for %s at %.3fs: %v, using adjustedChunkDur %.3f", st.name, fullEpisodePath, startTime, err, adjustedChunkDur)
+                actualDur = adjustedChunkDur
+            } else {
+                log.Printf("Station %s: Video segment %s duration: %.3fs (from source at %.3fs)", st.name, fullSegPath, actualDur, startTime)
+                if actualDur < adjustedChunkDur*0.9 || actualDur > adjustedChunkDur*1.1 {
+                    log.Printf("Station %s: Warning: Video duration %.3fs does not match expected %.3fs", st.name, actualDur, adjustedChunkDur)
+                }
+            }
+        } else {
+            log.Printf("Station %s: ffprobe source duration failed for %s at %.3fs: %v, using adjustedChunkDur %.3f", st.name, fullEpisodePath, startTime, err, adjustedChunkDur)
+            actualDur = adjustedChunkDur
+        }
     }
     data, err := os.ReadFile(fullSegPath)
     if err != nil || len(data) == 0 {
@@ -480,20 +557,23 @@ func manageProcessing(st *Station, db *sql.DB) {
                 }
                 if nextBreak == chunkEnd && len(breaks) > 0 {
                     log.Printf("Station %s: Inserting ad break at %.3fs for video %d", st.name, nextBreak, st.currentVideo)
-                    for i := 0; i < 3; i++ {
-                        if len(adIDs) == 0 {
-                            log.Printf("Station %s: No ads available for break at %.3fs", st.name, nextBreak)
-                            break
-                        }
-                        adID := adIDs[rand.Intn(len(adIDs))]
+                    availableAds := make([]int64, len(adIDs))
+                    copy(availableAds, adIDs)
+                    for i := 0; i < 3 && len(availableAds) > 0; i++ {
+                        idx := rand.Intn(len(availableAds))
+                        adID := availableAds[idx]
                         adDur := getVideoDur(adID, db)
                         if adDur <= 0 {
                             log.Printf("Station %s: Invalid duration for ad %d, skipping", st.name, adID)
+                            availableAds = append(availableAds[:idx], availableAds[idx+1:]...)
+                            i--
                             continue
                         }
                         segments, spsPPS, fmtpLine, actualDur, fps, err := processVideo(st, adID, db, 0, adDur)
                         if err != nil {
                             log.Printf("Station %s: Failed to process ad %d: %v", st.name, adID, err)
+                            availableAds = append(availableAds[:idx], availableAds[idx+1:]...)
+                            i--
                             continue
                         }
                         if len(st.spsPPS) == 0 {
@@ -510,6 +590,7 @@ func manageProcessing(st *Station, db *sql.DB) {
                         st.segmentList = append(st.segmentList, adChunk)
                         remainingDur += actualDur
                         log.Printf("Station %s: Queued ad %d with duration %.3fs at break %.3fs", st.name, adID, actualDur, nextBreak)
+                        availableAds = append(availableAds[:idx], availableAds[idx+1:]...)
                     }
                 }
             }
@@ -658,8 +739,9 @@ func sender(st *Station, db *sql.DB) {
     for {
         st.mu.Lock()
         if st.viewers == 0 || len(st.segmentList) == 0 {
+            log.Printf("Station %s: No viewers or empty segment list, waiting", st.name)
             st.mu.Unlock()
-            time.Sleep(time.Second)
+            time.Sleep(500 * time.Millisecond) // Reduced sleep time
             continue
         }
         chunk := st.segmentList[0]
@@ -668,16 +750,19 @@ func sender(st *Station, db *sql.DB) {
         st.mu.Unlock()
         testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
         err := st.trackVideo.WriteSample(testSample)
-        if err != nil && strings.Contains(err.Error(), "not bound") {
-            log.Printf("Station %s: Video track not bound, checking viewers", st.name)
-            st.mu.Lock()
-            if st.viewers == 0 {
-                close(st.stopProcessing)
-                st.stopProcessing = make(chan struct{})
+        if err != nil {
+            log.Printf("Station %s: Video track write test error: %v", st.name, err)
+            if strings.Contains(err.Error(), "not bound") {
+                log.Printf("Station %s: Video track not bound, checking viewers", st.name)
+                st.mu.Lock()
+                if st.viewers == 0 {
+                    close(st.stopProcessing)
+                    st.stopProcessing = make(chan struct{})
+                }
+                st.mu.Unlock()
+                time.Sleep(500 * time.Millisecond)
+                continue
             }
-            st.mu.Unlock()
-            time.Sleep(time.Second)
-            continue
         }
         data, err := os.ReadFile(segPath)
         if err != nil || len(data) == 0 {
@@ -789,9 +874,7 @@ func sender(st *Station, db *sql.DB) {
                     }
                     if err := st.trackAudio.WriteSample(sample); err != nil {
                         log.Printf("Station %s: Audio sample %d write error: %v, packet size: %d", st.name, i, err, len(pkt))
-                        if strings.Contains(err.Error(), "not bound") {
-                            break
-                        }
+                        break // Exit on write error to avoid stalling
                     }
                     audioTimestamp += uint32(samples)
                     targetTime := audioStart.Add(time.Duration(audioTimestamp*1000/sampleRate) * time.Millisecond)
@@ -855,9 +938,7 @@ func sender(st *Station, db *sql.DB) {
                     }
                     if err := st.trackVideo.WriteSample(sample); err != nil {
                         log.Printf("Station %s: Video sample write error: %v", st.name, err)
-                        if strings.Contains(err.Error(), "not bound") {
-                            return
-                        }
+                        return // Exit on write error to avoid stalling
                     }
                     segmentSamples++
                     videoTimestamp += uint32((frameDuration * videoClockRate) / time.Second)
@@ -896,9 +977,7 @@ func sender(st *Station, db *sql.DB) {
                             }
                             if err := st.trackVideo.WriteSample(sample); err != nil {
                                 log.Printf("Station %s: Video sample write error: %v", st.name, err)
-                                if strings.Contains(err.Error(), "not bound") {
-                                    return
-                                }
+                                return // Exit on write error to avoid stalling
                             }
                             segmentSamples++
                             videoTimestamp += uint32((frameDuration * videoClockRate) / time.Second)
@@ -938,9 +1017,7 @@ func sender(st *Station, db *sql.DB) {
                 }
                 if err := st.trackVideo.WriteSample(sample); err != nil {
                     log.Printf("Station %s: Video sample write error: %v", st.name, err)
-                    if strings.Contains(err.Error(), "not bound") {
-                        return
-                    }
+                    return // Exit on write error to avoid stalling
                 }
                 segmentSamples++
             }
@@ -953,6 +1030,7 @@ func sender(st *Station, db *sql.DB) {
         st.mu.Lock()
         if !chunk.isAd {
             st.currentOffset += chunk.dur
+            log.Printf("Station %s: Updated offset to %.3fs for video %d", st.name, st.currentOffset, st.currentVideo)
             videoDur := getVideoDur(st.currentVideo, db)
             if videoDur > 0 && st.currentOffset >= videoDur {
                 log.Printf("Station %s: Completed video %d, advancing to next", st.name, st.currentVideo)
@@ -964,8 +1042,9 @@ func sender(st *Station, db *sql.DB) {
             }
         }
         st.segmentList = st.segmentList[1:]
+        log.Printf("Station %s: Removed chunk %s from segment list, %d chunks remain", st.name, segPath, len(st.segmentList))
         st.mu.Unlock()
-        time.Sleep(10 * time.Millisecond)
+        time.Sleep(time.Millisecond) // Minimal sleep to avoid CPU hogging
     }
 }
 
