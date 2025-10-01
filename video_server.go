@@ -583,7 +583,7 @@ func manageProcessing(st *Station, db *sql.DB) {
                 }
             }
             log.Printf("Station %s: Remaining buffer %.3fs, non-ad %.3fs, current video %d, offset %.3f", st.name, remainingDur, sumNonAd, st.currentVideo, st.currentOffset)
-            for remainingDur < BufferThreshold {
+            for remainingDur < 90.0 { // Increased to 90s to ensure episode segment is ready
                 videoDur := getVideoDur(st.currentVideo, db)
                 if videoDur <= 0 {
                     log.Printf("Station %s: Invalid duration for video %d, advancing to next video", st.name, st.currentVideo)
@@ -643,10 +643,10 @@ func manageProcessing(st *Station, db *sql.DB) {
                     }
                     newChunk := bufferedChunk{
                         segPath: segments[0],
-                        dur:     actualDur,
-                        isAd:    false,
+                        dur: actualDur,
+                        isAd: false,
                         videoID: st.currentVideo,
-                        fps:     fps,
+                        fps: fps,
                     }
                     st.segmentList = append(st.segmentList, newChunk)
                     remainingDur += actualDur
@@ -657,6 +657,7 @@ func manageProcessing(st *Station, db *sql.DB) {
                     log.Printf("Station %s: Inserting ad break at %.3fs for video %d", st.name, nextBreak, st.currentVideo)
                     availableAds := make([]int64, len(adIDs))
                     copy(availableAds, adIDs)
+                    adDurTotal := 0.0
                     for i := 0; i < 3 && len(availableAds) > 0; i++ {
                         idx := rand.Intn(len(availableAds))
                         adID := availableAds[idx]
@@ -680,18 +681,46 @@ func manageProcessing(st *Station, db *sql.DB) {
                         }
                         adChunk := bufferedChunk{
                             segPath: segments[0],
-                            dur:     actualDur,
-                            isAd:    true,
+                            dur: actualDur,
+                            isAd: true,
                             videoID: adID,
-                            fps:     fps,
+                            fps: fps,
                         }
                         st.segmentList = append(st.segmentList, adChunk)
                         remainingDur += actualDur
+                        adDurTotal += actualDur
                         log.Printf("Station %s: Queued ad %d with duration %.3fs at break %.3fs", st.name, adID, actualDur, nextBreak)
                         availableAds = append(availableAds[:idx], availableAds[idx+1:]...)
                     }
+                    // Queue next episode segment immediately after ads
+                    if adDurTotal > 0 {
+                        nextStart = st.currentOffset + sumNonAd
+                        if nextStart < videoDur {
+                            segments, spsPPS, fmtpLine, actualDur, fps, err := processVideo(st, st.currentVideo, db, nextStart, ChunkDuration)
+                            if err != nil {
+                                log.Printf("Station %s: Failed to pre-queue episode chunk after ads for video %d at %.3fs: %v", st.name, st.currentVideo, nextStart, err)
+                            } else {
+                                if len(st.spsPPS) == 0 {
+                                    st.spsPPS = spsPPS
+                                    st.fmtpLine = fmtpLine
+                                }
+                                newChunk := bufferedChunk{
+                                    segPath: segments[0],
+                                    dur: actualDur,
+                                    isAd: false,
+                                    videoID: st.currentVideo,
+                                    fps: fps,
+                                }
+                                st.segmentList = append(st.segmentList, newChunk)
+                                remainingDur += actualDur
+                                sumNonAd += actualDur
+                                log.Printf("Station %s: Pre-queued episode chunk after ads for video %d at %.3fs, duration %.3fs", st.name, st.currentVideo, nextStart, actualDur)
+                            }
+                        }
+                    }
                 }
             }
+            log.Printf("Station %s: Buffer check complete, remainingDur %.3fs", st.name, remainingDur)
             st.mu.Unlock()
             time.Sleep(time.Second)
         }
