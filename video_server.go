@@ -4,6 +4,7 @@ import (
     "bytes"
     "database/sql"
     "fmt"
+    "io"
     "log"
     "math"
     "math/rand"
@@ -14,11 +15,11 @@ import (
     "strings"
     "sync"
     "time"
-    "io"
 
     _ "github.com/lib/pq"
     "github.com/gin-contrib/cors"
     "github.com/gin-gonic/gin"
+    "github.com/pion/rtp" // Added for RTP packet logging
     "github.com/pion/webrtc/v3"
     "github.com/pion/webrtc/v3/pkg/media"
     "github.com/pion/webrtc/v3/pkg/media/oggreader"
@@ -221,6 +222,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
     fullSegPath := filepath.Join(HlsDir, segName)
     opusName := baseName + ".opus"
     opusPath := filepath.Join(HlsDir, opusName)
+
     args := []string{
         "-y",
         "-ss", fmt.Sprintf("%.3f", startTime),
@@ -230,6 +232,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         "-c:a", "libopus",
         "-b:a", "64k",
         "-frame_duration", "20",
+        "-page_duration", "20000", // Ensure 20ms Ogg pages
         "-application", "audio",
         "-avoid_negative_ts", "make_zero",
         "-fflags", "+genpts",
@@ -238,6 +241,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         "-strict", "-2",
         opusPath,
     }
+
     cmdAudio := exec.Command("ffmpeg", args...)
     log.Printf("Station %s: Running ffmpeg audio command: %v", st.name, cmdAudio.Args)
     outputAudio, err := cmdAudio.CombinedOutput()
@@ -275,11 +279,10 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         return nil, nil, "", fmt.Errorf("failed to create ogg reader for %s: %v", opusPath, err)
     }
     var audioPackets [][]byte
-    var packetDurations []int // Store durations for each packet in ms
-    previousGranule := uint64(0)
-    totalDurationMs := 0
+    var packetDurations []int
+    var pageSizes []int // Track page sizes
     for {
-        payload, header, err := ogg.ParseNextPage()
+        payload, _, err := ogg.ParseNextPage()
         if err == io.EOF {
             break
         }
@@ -287,6 +290,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             log.Printf("Station %s: Failed to parse ogg page for %s: %v", st.name, opusPath, err)
             continue
         }
+        pageSizes = append(pageSizes, len(payload)) // Log page size
         if len(payload) < 1 {
             log.Printf("Station %s: Empty ogg payload for %s, skipping", st.name, opusPath)
             continue
@@ -295,31 +299,18 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             log.Printf("Station %s: Skipping header packet: %s", st.name, string(payload[:8]))
             continue
         }
-        frameDurationMs := 20
-        currentGranule := header.GranulePosition
-        if currentGranule > previousGranule {
-            frameSamples := currentGranule - previousGranule
-            frameDurationMs = int((frameSamples * 1000) / 48000)
-            if frameDurationMs < 2 || frameDurationMs > 60 {
-                log.Printf("Station %s: Invalid calculated duration %dms for packet %d, using 20ms", st.name, frameDurationMs, len(audioPackets))
-                frameDurationMs = 20
-            }
-        }
-        previousGranule = currentGranule
-        totalDurationMs += frameDurationMs
-        if totalDurationMs > int(adjustedChunkDur*1000*1.1) {
-            log.Printf("Station %s: Total audio duration %dms exceeds expected %dms, stopping", st.name, totalDurationMs, int(adjustedChunkDur*1000))
-            break
-        }
+        frameDurationMs := 20 // Fixed duration as per FFmpeg -frame_duration 20
         audioPackets = append(audioPackets, payload)
         packetDurations = append(packetDurations, frameDurationMs)
-        log.Printf("Station %s: Extracted audio packet %d, size: %d, duration: %dms, granule: %d", st.name, len(audioPackets)-1, len(payload), frameDurationMs, currentGranule)
+        log.Printf("Station %s: Extracted audio packet %d, size: %d, duration: %dms", st.name, len(audioPackets)-1, len(payload), frameDurationMs)
     }
+    log.Printf("Station %s: Ogg page sizes: %v", st.name, pageSizes) // Log all page sizes
     if len(audioPackets) == 0 {
         log.Printf("Station %s: No valid audio packets extracted from %s", st.name, opusPath)
         return nil, nil, "", fmt.Errorf("no valid audio packets extracted from %s", opusPath)
     }
-    log.Printf("Station %s: Extracted %d audio packets, total duration: %dms", st.name, len(audioPackets), totalDurationMs)
+    log.Printf("Station %s: Extracted %d audio packets, total duration: %dms", st.name, len(audioPackets), len(audioPackets)*20)
+
     args = []string{
         "-y",
         "-ss", fmt.Sprintf("%.3f", startTime),
@@ -693,8 +684,6 @@ func sender(st *Station, db *sql.DB) {
             if st.viewers == 0 {
                 close(st.stopProcessing)
                 st.stopProcessing = make(chan struct{})
-                st.mu.Unlock()
-                return
             }
             st.mu.Unlock()
             time.Sleep(time.Second)
@@ -795,6 +784,18 @@ func sender(st *Station, db *sql.DB) {
                         }
                         boundChecked = true
                     }
+                    // Create RTP packet for logging
+                    rtpPkt := &rtp.Packet{
+                        Header: rtp.Header{
+                            Version:        2,
+                            PayloadType:    111, // Opus
+                            SequenceNumber: uint16(i), // Simple sequence for debugging
+                            Timestamp:      audioTimestamp,
+                            SSRC:           2822942833, // From latest SDP
+                        },
+                        Payload: pkt,
+                    }
+                    log.Printf("Station %s: Sending RTP audio packet: seq=%d, ts=%d, size=%d", st.name, rtpPkt.Header.SequenceNumber, rtpPkt.Header.Timestamp, len(rtpPkt.Payload))
                     sample := media.Sample{
                         Data:            pkt,
                         Duration:        time.Duration(frameDurationMs) * time.Millisecond,
@@ -1450,7 +1451,7 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
 }
 
 func indexHandler(c *gin.Context) {
-	html := `
+    html := `
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1469,152 +1470,230 @@ background-color: black;
 <h1>WebRTC Video Receiver</h1>
 <video id="remoteVideo" autoplay playsinline controls></video>
 <button id="startButton">Start Connection</button>
-<label for="serverUrl">Go Server Base URL (e.g., http://localhost:8081/signal):</label>
-<input id="serverUrl" type="text" value="http://localhost:8081/signal">
-<label for="station">Station (e.g., default, 1, 2):</label>
-<input id="station" type="text" value="default" style="width: 100px;">
+<label for="serverUrl">Go Server Base URL (e.g., http://192.168.0.60:8081/signal):</label>
+<input id="serverUrl" type="text" value="http://192.168.0.60:8081/signal">
+<label for="station">Station (e.g., Bob's Burgers):</label>
+<input id="station" type="text" value="Bob's Burgers" style="width: 100px;">
 <button id="sendOfferButton" disabled>Send Offer to Server</button>
 <button id="restartIceButton" disabled>Restart ICE</button>
 <pre id="log"></pre>
 <script>
 function log(message) {
-console.log(message);
-const logElement = document.getElementById('log');
-logElement.textContent += message + '\n';
+    console.log(message);
+    const logElement = document.getElementById('log');
+    logElement.textContent += message + '\n';
 }
 const configuration = {
-iceServers: [
-{ urls: 'stun:stun.l.google.com:19302' },
-{ urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-{ urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-]
+    iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+        { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    ]
 };
 let pc = null;
 let remoteStream = null;
-let offer = null;
-let candidates = [];
-async function createOffer() {
+let analyser = null;
+let hasAudio = false;
+let hasVideo = false;
 pc = new RTCPeerConnection(configuration);
+pc.ontrack = event => {
+    const track = event.track;
+    log('Track received: kind=' + track.kind + ', id=' + track.id + ', readyState=' + track.readyState + ', enabled=' + track.enabled + ', muted=' + track.muted);
+    
+    if (!remoteStream) {
+        remoteStream = event.streams[0];
+        log('Initialized remoteStream with first track');
+    }
+
+    if (track.kind === 'video') {
+        hasVideo = true;
+        stopStaticAudio();
+        log('Stopping TV static effect');
+        log('Video started playing');
+        track.onunmute = () => log('Video unmuted - media flowing');
+    }
+    
+    if (track.kind === 'audio') {
+        hasAudio = true;
+        const audioContext = new AudioContext();
+        const source = audioContext.createMediaStreamSource(remoteStream);
+        analyser = audioContext.createAnalyser();
+        source.connect(analyser);
+        analyser.connect(audioContext.destination);
+        log('Connected audio track to AudioContext for debugging');
+        setInterval(() => {
+            if (analyser) {
+                const data = new Float32Array(analyser.fftSize);
+                analyser.getFloatTimeDomainData(data);
+                const level = data.reduce((sum, val) => sum + Math.abs(val), 0) / data.length;
+                log('Audio level: ' + level.toFixed(4) + ', sample: ' + data.slice(0, 10).join(', '));
+            }
+        }, 1000);
+        track.onmute = () => {
+            log('Track muted: kind=' + track.kind + ', id=' + track.id + ' - possible silence or no media flow');
+        };
+        track.onunmute = () => {
+            log('Track unmuted: kind=' + track.kind + ', id=' + track.id + ' - media flowing');
+            const data = new Float32Array(analyser.fftSize);
+            analyser.getFloatTimeDomainData(data);
+            log('Audio data sample on unmute: ' + data.slice(0, 10).join(', '));
+        };
+        track.onended = () => {
+            log('Track ended: kind=' + track.kind + ', id=' + track.id);
+        };
+    }
+
+    if (hasAudio && hasVideo && !videoElement.srcObject) {
+        videoElement.srcObject = remoteStream;
+        log('Both tracks received - assigned stream to video element');
+        videoElement.play().then(() => {
+            log('Audio and video playback started');
+            if (analyser) {
+                const data = new Float32Array(analyser.fftSize);
+                analyser.getFloatTimeDomainData(data);
+                log('Audio data sample: ' + data.slice(0, 10).join(', '));
+            }
+        }).catch(err => {
+            log('Audio and video playback error: ' + err);
+        });
+    }
+};
 pc.oniceconnectionstatechange = () => {
-log('ICE connection state: ' + pc.iceConnectionState);
-if (pc.iceConnectionState === 'disconnected') {
-log('ICE disconnected - attempting automatic restart in 5 seconds...');
-setTimeout(restartIce, 5000);
-}
-if (pc.iceConnectionState === 'failed') {
-log('ICE failed - manual restart may be needed.');
-document.getElementById('restartIceButton').disabled = false;
-}
-if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-const videoElement = document.getElementById('remoteVideo');
-videoElement.srcObject = remoteStream;
-log('ICE connected - assigned stream to video element.');
-}
+    log('ICE connection state: ' + pc.iceConnectionState);
+    if (pc.iceConnectionState === 'disconnected') {
+        log('ICE disconnected - attempting automatic restart in 5 seconds...');
+        setTimeout(restartIce, 5000);
+    }
+    if (pc.iceConnectionState === 'failed') {
+        log('ICE failed - manual restart may be needed.');
+        document.getElementById('restartIceButton').disabled = false;
+    }
+    if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+        log('ICE connected - assigned stream to video element.');
+    }
 };
 pc.onconnectionstatechange = () => {
-log('Peer connection state: ' + pc.connectionState);
+    log('Peer connection state: ' + pc.connectionState);
 };
 pc.onicecandidate = (event) => {
-if (event.candidate) {
-log('New ICE candidate: ' + JSON.stringify(event.candidate));
-candidates.push(event.candidate);
-} else {
-log('All ICE candidates gathered (end-of-candidates)');
-}
+    if (event.candidate) {
+        log('New ICE candidate: ' + JSON.stringify(event.candidate));
+    } else {
+        log('All ICE candidates gathered (end-of-candidates)');
+    }
 };
-pc.ontrack = (event) => {
-log('Track received: ' + event.track.kind + ' ' + event.track.readyState);
-if (!remoteStream) {
-remoteStream = new MediaStream();
+let staticAudio = null;
+function startStaticAudio() {
+    const ctx = new AudioContext();
+    const bufferSize = 4096;
+    const noise = ctx.createScriptProcessor(bufferSize, 1, 1);
+    noise.onaudioprocess = (e) => {
+        const output = e.outputBuffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+            output[i] = (Math.random() * 2 - 1) * 0.05;
+        }
+    };
+    const gain = ctx.createGain();
+    gain.gain.value = 0.1;
+    noise.connect(gain);
+    gain.connect(ctx.destination);
+    staticAudio = noise;
+    log('Starting static audio');
 }
-remoteStream.addTrack(event.track);
-event.track.onmute = () => log('Track muted - possible black screen or no media flow');
-event.track.onunmute = () => log('Track unmuted - media flowing');
-};
-offer = await pc.createOffer({ offerToReceiveVideo: true, offerToReceiveAudio: true });
-await pc.setLocalDescription(offer);
-log('Local Offer SDP: ' + offer.sdp);
+function stopStaticAudio() {
+    if (staticAudio) {
+        staticAudio.disconnect();
+        staticAudio = null;
+        log('Stopping static audio');
+    }
+}
+startStaticAudio();
+async function createOffer() {
+    const offer = await pc.createOffer({ offerToReceiveVideo: true, offerToReceiveAudio: true });
+    await pc.setLocalDescription(offer);
+    log('Local Offer SDP: ' + offer.sdp);
+    document.getElementById('sendOfferButton').disabled = false;
 }
 async function sendOfferToServer() {
-let baseUrl = document.getElementById('serverUrl').value;
-const station = document.getElementById('station').value;
-const serverUrl = baseUrl + (baseUrl.includes('?') ? '&' : '?') + 'station=' + encodeURIComponent(station);
-if (!offer) {
-log('No offer generated yet - start connection first.');
-return;
-}
-try {
-const response = await fetch(serverUrl, {
-method: 'POST',
-headers: { 'Content-Type': 'application/json' },
-body: JSON.stringify({ sdp: offer.sdp, type: offer.type })
-});
-if (!response.ok) {
-throw new Error('HTTP error: ' + response.status);
-}
-const answerJson = await response.json();
-const answer = new RTCSessionDescription(answerJson);
-await pc.setRemoteDescription(answer);
-log('Remote Answer SDP set: ' + answer.sdp);
-} catch (error) {
-log('Error sending offer: ' + error);
-}
+    let baseUrl = document.getElementById('serverUrl').value;
+    const station = document.getElementById('station').value;
+    const serverUrl = baseUrl + (baseUrl.includes('?') ? '&' : '?') + 'station=' + encodeURIComponent(station);
+    try {
+        const response = await fetch(serverUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type })
+        });
+        if (!response.ok) {
+            throw new Error('HTTP error: ' + response.status);
+        }
+        const answerJson = await response.json();
+        const answer = new RTCSessionDescription(answerJson);
+        await pc.setRemoteDescription(answer);
+        log('Remote Answer SDP: ' + answer.sdp);
+    } catch (error) {
+        log('Error sending offer: ' + error);
+    }
 }
 async function restartIce() {
-log('Restarting ICE...');
-try {
-const newOffer = await pc.createOffer({ iceRestart: true });
-await pc.setLocalDescription(newOffer);
-log('New offer with ICE restart: ' + newOffer.sdp);
-offer = newOffer;
-} catch (error) {
-log('ICE restart failed: ' + error);
-}
+    log('Restarting ICE...');
+    try {
+        const newOffer = await pc.createOffer({ iceRestart: true });
+        await pc.setLocalDescription(newOffer);
+        log('New offer with ICE restart: ' + newOffer.sdp);
+        sendOfferToServer();
+    } catch (error) {
+        log('ICE restart failed: ' + error);
+    }
 }
 function startStatsLogging() {
-setInterval(async () => {
-if (!pc) return;
-try {
-const stats = await pc.getStats();
-stats.forEach(report => {
-if (report.type === 'inbound-rtp' && report.kind === 'video') {
-log('Video inbound: packetsReceived=' + (report.packetsReceived || 0) +
-', bytesReceived=' + (report.bytesReceived || 0) +
-', packetsLost=' + (report.packetsLost || 0) +
-', jitter=' + (report.jitter || 0) +
-', frameRate=' + (report.frameRate || 0));
-}
-if (report.type === 'inbound-rtp' && report.kind === 'audio') {
-log('Audio inbound: packetsReceived=' + (report.packetsReceived || 0) +
-', bytesReceived=' + (report.bytesReceived || 0) +
-', packetsLost=' + (report.packetsLost || 0) +
-', jitter=' + (report.jitter || 0));
-}
-if (report.type === 'candidate-pair' && report.state === 'succeeded') {
-log('Active candidate pair: localType=' + report.localCandidateId +
-', remoteType=' + report.remoteCandidateId +
-', bytesSent=' + report.bytesSent +
-', bytesReceived=' + report.bytesReceived);
-}
-});
-} catch (error) {
-log('getStats error: ' + error);
-}
-}, 5000);
+    setInterval(async () => {
+        if (!pc) return;
+        try {
+            const stats = await pc.getStats();
+            stats.forEach(report => {
+                if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                    log('Video inbound: packetsReceived=' + (report.packetsReceived || 0) +
+                        ', bytesReceived=' + (report.bytesReceived || 0) +
+                        ', packetsLost=' + (report.packetsLost || 0) +
+                        ', jitter=' + (report.jitter || 0) +
+                        ', frameRate=' + (report.frameRate || 0));
+                }
+                if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+                    log('Audio inbound: packetsReceived=' + (report.packetsReceived || 0) +
+                        ', bytesReceived=' + (report.bytesReceived || 0) +
+                        ', packetsLost=' + (report.packetsLost || 0) +
+                        ', jitter=' + (report.jitter || 0) +
+                        ', audioLevel=' + (report.audioLevel || 0) +
+                        ', totalAudioEnergy=' + (report.totalAudioEnergy || 0) +
+                        ', totalSamplesReceived=' + (report.totalSamplesReceived || 0));
+                }
+                if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+                    log('Active candidate pair: localType=' + report.localCandidateId +
+                        ', remoteType=' + report.remoteCandidateId +
+                        ', bytesSent=' + report.bytesSent +
+                        ', bytesReceived=' + report.bytesReceived);
+                }
+            });
+        } catch (error) {
+            log('getStats error: ' + error);
+        }
+    }, 2000);
 }
 document.getElementById('startButton').addEventListener('click', async () => {
-await createOffer();
-startStatsLogging();
-document.getElementById('sendOfferButton').disabled = false;
-log('Connection started. Enter server URL and station, then click "Send Offer to Server".');
+    await createOffer();
+    startStatsLogging();
+    document.getElementById('sendOfferButton').disabled = false;
+    document.getElementById('restartIceButton').disabled = false;
+    log('Connection started. Enter server URL and station, then click "Send Offer to Server".');
 });
 document.getElementById('sendOfferButton').addEventListener('click', sendOfferToServer);
 document.getElementById('restartIceButton').addEventListener('click', restartIce);
 </script>
 </body>
 </html>`
-	c.Header("Content-Type", "text/html")
-	c.String(200, html)
+    c.Header("Content-Type", "text/html")
+    c.String(200, html)
 }
 
 func updateVideoDurations(db *sql.DB) error {

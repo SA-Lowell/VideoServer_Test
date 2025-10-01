@@ -214,34 +214,71 @@
                 }
             };
 
-            pc.ontrack = event => {
-                const track = event.track;
-                log(`Track received: kind=${track.kind}, id=${track.id}, readyState=${track.readyState}, enabled=${track.enabled}, muted=${track.muted}`);
-                if (track.kind === 'video') {
-                    videoElement.srcObject = event.streams[0];
-                    stopStaticAudio();
-                    log('Stopping TV static effect');
-                    log('Video started playing');
-                }
-                if (track.kind === 'audio') {
-                    const stream = new MediaStream([track]);
-                    videoElement.srcObject = event.streams[0]; // Ensure audio and video in same stream
-                    videoElement.play().then(() => {
-                        log('Audio and video playback started');
-                    }).catch(err => {
-                        log(`Audio and video playback error: ${err}`);
-                    });
-                    track.onmute = () => {
-                        log(`Track muted: kind=${track.kind}, id=${track.id} - possible silence or no media flow`);
-                    };
-                    track.onunmute = () => {
-                        log(`Track unmuted: kind=${track.kind}, id=${track.id} - media flowing`);
-                    };
-                    track.onended = () => {
-                        log(`Track ended: kind=${track.kind}, id=${track.id}`);
-                    };
-                }
-            };
+let remoteStream = null;
+let analyser = null; // Store analyser globally for periodic checks
+
+pc.ontrack = event => {
+    const track = event.track;
+    log(`Track received: kind=${track.kind}, id=${track.id}, readyState=${track.readyState}, enabled=${track.enabled}, muted=${track.muted}`);
+    
+    if (!remoteStream) {
+        remoteStream = event.streams[0];
+        log('Initialized remoteStream with first track');
+    }
+
+    if (track.kind === 'video') {
+        videoElement.srcObject = remoteStream;
+        stopStaticAudio();
+        log('Stopping TV static effect');
+        log('Video started playing');
+        videoElement.play().then(() => {
+            log('Video playback started');
+            log(`Video element state: paused=${videoElement.paused}, ended=${videoElement.ended}, error=${videoElement.error ? videoElement.error.message : 'none'}`);
+        }).catch(err => {
+            log(`Video playback error: ${err}`);
+        });
+        track.onunmute = () => log(`Video unmuted - media flowing`);
+    }
+    
+    if (track.kind === 'audio') {
+        const audioContext = new AudioContext();
+        const source = audioContext.createMediaStreamSource(remoteStream);
+        analyser = audioContext.createAnalyser();
+        source.connect(analyser);
+        analyser.connect(audioContext.destination);
+        log('Connected audio track to AudioContext for debugging');
+        // Periodic audio level logging
+        setInterval(() => {
+            if (analyser) {
+                const data = new Float32Array(analyser.fftSize);
+                analyser.getFloatTimeDomainData(data);
+                const level = data.reduce((sum, val) => sum + Math.abs(val), 0) / data.length;
+                log(`Audio level: ${level.toFixed(4)}, sample: ${data.slice(0, 10).join(', ')}`);
+            }
+        }, 1000);
+        videoElement.srcObject = remoteStream; // Ensure both tracks
+        videoElement.play().then(() => {
+            log('Audio and video playback started');
+            const data = new Float32Array(analyser.fftSize);
+            analyser.getFloatTimeDomainData(data);
+            log(`Audio data sample: ${data.slice(0, 10).join(', ')}`);
+        }).catch(err => {
+            log(`Audio playback error: ${err}`);
+        });
+        track.onmute = () => {
+            log(`Track muted: kind=${track.kind}, id=${track.id} - possible silence or no media flow`);
+        };
+        track.onunmute = () => {
+            log(`Track unmuted: kind=${track.kind}, id=${track.id} - media flowing`);
+            const data = new Float32Array(analyser.fftSize);
+            analyser.getFloatTimeDomainData(data);
+            log(`Audio data sample on unmute: ${data.slice(0, 10).join(', ')}`);
+        };
+        track.onended = () => {
+            log(`Track ended: kind=${track.kind}, id=${track.id}`);
+        };
+    }
+};
 
             pc.onconnectionstatechange = () => {
                 log(`Peer connection state: ${pc.connectionState}`);
