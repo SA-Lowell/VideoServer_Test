@@ -185,12 +185,13 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         "-t", fmt.Sprintf("%.3f", adjustedChunkDur),
         "-map", "0:a:0",
         "-c:a", "libopus",
-        "-b:a", "192k",
+        "-b:a", "128k",
         "-ar", "48000",
         "-ac", "2",
         "-frame_duration", "20",
         "-page_duration", "20000",
         "-application", "audio",
+        "-vbr", "on",
         "-avoid_negative_ts", "make_zero",
         "-fflags", "+genpts",
         "-f", "opus",
@@ -214,13 +215,17 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         "-i", fullEpisodePath,
         "-t", fmt.Sprintf("%.3f", adjustedChunkDur),
         "-c:v", "libx264",
-        "-preset", "ultrafast",
+        "-preset", "fast",
         "-crf", "23",
+        "-profile:v", "baseline",
+        "-level", "3.0",
+        "-pix_fmt", "yuv420p",
         "-force_key_frames", "expr:gte(t,n_forced*2)",
         "-sc_threshold", "0",
         "-an",
         "-bsf:v", "h264_mp4toannexb",
         "-g", "60",
+        "-reset_timestamps", "1",
         fullSegPath,
     }
     cmdVideo := exec.Command("ffmpeg", args...)
@@ -268,9 +273,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
     cmdDur := exec.Command(
         "ffprobe",
         "-v", "error",
-        "-select_streams", "v:0",
-        "-count_frames",
-        "-show_entries", "stream=nb_frames,r_frame_rate",
+        "-show_entries", "format=duration",
         "-of", "json",
         fullSegPath,
     )
@@ -278,39 +281,19 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
     var actualDur float64
     if err == nil {
         var result struct {
-            Streams []struct {
-                NbFrames  string `json:"nb_frames"`
-                FrameRate string `json:"r_frame_rate"`
-            } `json:"streams"`
+            Format struct {
+                Duration string `json:"duration"`
+            } `json:"format"`
         }
         if err := json.Unmarshal(outputDur, &result); err != nil {
-            log.Printf("Station %s: Failed to parse ffprobe JSON for %s: %v, falling back to format duration", st.name, fullSegPath, err)
-        } else if len(result.Streams) > 0 && result.Streams[0].NbFrames != "" {
-            nbFrames, err := strconv.Atoi(result.Streams[0].NbFrames)
+            log.Printf("Station %s: Failed to parse ffprobe JSON for %s: %v", st.name, fullSegPath, err)
+        } else if result.Format.Duration != "" {
+            actualDur, err = strconv.ParseFloat(result.Format.Duration, 64)
             if err != nil {
-                log.Printf("Station %s: Failed to parse nb_frames '%s' for %s: %v, falling back to format duration", st.name, result.Streams[0].NbFrames, fullSegPath, err)
+                log.Printf("Station %s: Failed to parse duration for %s: %v", st.name, fullSegPath, err)
             } else {
-                rate := result.Streams[0].FrameRate
-                var fpsNum, fpsDen int
-                if slash := strings.Index(rate, "/"); slash != -1 {
-                    fpsNum, _ = strconv.Atoi(rate[:slash])
-                    fpsDen, _ = strconv.Atoi(rate[slash+1:])
-                } else {
-                    fpsNum, _ = strconv.Atoi(rate)
-                    fpsDen = 1
-                }
-                if fpsNum > 0 && fpsDen > 0 {
-                    actualDur = float64(nbFrames) * float64(fpsDen) / float64(fpsNum)
-                    log.Printf("Station %s: Video segment %s duration: %.3fs (calculated from %d frames at %s fps)", st.name, fullSegPath, actualDur, nbFrames, rate)
-                    if actualDur < adjustedChunkDur*0.9 || actualDur > adjustedChunkDur*1.1 {
-                        log.Printf("Station %s: Warning: Video duration %.3fs does not match expected %.3fs", st.name, actualDur, adjustedChunkDur)
-                    }
-                } else {
-                    log.Printf("Station %s: Invalid frame rate %s for %s, falling back to format duration", st.name, rate, fullSegPath)
-                }
+                log.Printf("Station %s: Video segment %s duration: %.3fs", st.name, fullSegPath, actualDur)
             }
-        } else {
-            log.Printf("Station %s: No valid streams or nb_frames in ffprobe output for %s, falling back to format duration", st.name, fullSegPath)
         }
     }
     if actualDur == 0 {
@@ -318,50 +301,30 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "ffprobe",
             "-v", "error",
             "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            fullSegPath,
-        )
-        outputDur, err = cmdDur.Output()
-        if err == nil {
-            durStr := strings.TrimSpace(string(outputDur))
-            actualDur, err = strconv.ParseFloat(durStr, 64)
-            if err != nil {
-                log.Printf("Station %s: Failed to parse format duration for %s: %v, falling back to source duration", st.name, fullSegPath, err)
-            } else {
-                log.Printf("Station %s: Video segment %s duration: %.3fs (from format)", st.name, fullSegPath, actualDur)
-                if actualDur < adjustedChunkDur*0.9 || actualDur > adjustedChunkDur*1.1 {
-                    log.Printf("Station %s: Warning: Video duration %.3fs does not match expected %.3fs", st.name, actualDur, adjustedChunkDur)
-                }
-            }
-        } else {
-            log.Printf("Station %s: ffprobe format duration failed for %s: %v, falling back to source duration", st.name, fullSegPath, err)
-        }
-    }
-    if actualDur == 0 {
-        cmdDur = exec.Command(
-            "ffprobe",
-            "-v", "error",
-            "-ss", fmt.Sprintf("%.3f", startTime),
-            "-t", fmt.Sprintf("%.3f", adjustedChunkDur),
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-of", "json",
             fullEpisodePath,
         )
         outputDur, err = cmdDur.Output()
         if err == nil {
-            durStr := strings.TrimSpace(string(outputDur))
-            actualDur, err = strconv.ParseFloat(durStr, 64)
-            if err != nil {
-                log.Printf("Station %s: Failed to parse source duration for %s at %.3fs: %v, using adjustedChunkDur %.3f", st.name, fullEpisodePath, startTime, err, adjustedChunkDur)
-                actualDur = adjustedChunkDur
-            } else {
-                log.Printf("Station %s: Video segment %s duration: %.3fs (from source at %.3fs)", st.name, fullSegPath, actualDur, startTime)
-                if actualDur < adjustedChunkDur*0.9 || actualDur > adjustedChunkDur*1.1 {
-                    log.Printf("Station %s: Warning: Video duration %.3fs does not match expected %.3fs", st.name, actualDur, adjustedChunkDur)
+            var result struct {
+                Format struct {
+                    Duration string `json:"duration"`
+                } `json:"format"`
+            }
+            if err := json.Unmarshal(outputDur, &result); err != nil {
+                log.Printf("Station %s: Failed to parse source ffprobe JSON for %s: %v", st.name, fullEpisodePath, err)
+            } else if result.Format.Duration != "" {
+                actualDur, err = strconv.ParseFloat(result.Format.Duration, 64)
+                if err != nil {
+                    log.Printf("Station %s: Failed to parse source duration for %s: %v", st.name, fullEpisodePath, err)
+                } else {
+                    actualDur = math.Min(actualDur, adjustedChunkDur)
+                    log.Printf("Station %s: Video segment %s duration from source: %.3fs", st.name, fullSegPath, actualDur)
                 }
             }
-        } else {
-            log.Printf("Station %s: ffprobe source duration failed for %s at %.3fs: %v, using adjustedChunkDur %.3f", st.name, fullEpisodePath, startTime, err, adjustedChunkDur)
+        }
+        if actualDur == 0 {
+            log.Printf("Station %s: All duration probes failed, using adjustedChunkDur %.3f", st.name, adjustedChunkDur)
             actualDur = adjustedChunkDur
         }
     }
@@ -369,19 +332,28 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         "ffprobe",
         "-v", "error",
         "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
+        "-of", "json",
         opusPath,
     )
     outputAudioDur, err := cmdAudioDur.Output()
     var audioDur float64
     if err == nil {
-        durStr := strings.TrimSpace(string(outputAudioDur))
-        audioDur, err = strconv.ParseFloat(durStr, 64)
-        if err != nil {
-            log.Printf("Station %s: Failed to parse audio duration for %s: %v, assuming video duration %.3fs", st.name, opusPath, err, actualDur)
+        var result struct {
+            Format struct {
+                Duration string `json:"duration"`
+            } `json:"format"`
+        }
+        if err := json.Unmarshal(outputAudioDur, &result); err != nil {
+            log.Printf("Station %s: Failed to parse audio duration JSON for %s: %v", st.name, opusPath, err)
             audioDur = actualDur
-        } else {
-            log.Printf("Station %s: Audio segment %s duration: %.3fs", st.name, opusPath, audioDur)
+        } else if result.Format.Duration != "" {
+            audioDur, err = strconv.ParseFloat(result.Format.Duration, 64)
+            if err != nil {
+                log.Printf("Station %s: Failed to parse audio duration for %s: %v", st.name, opusPath, err)
+                audioDur = actualDur
+            } else {
+                log.Printf("Station %s: Audio segment %s duration: %.3fs", st.name, opusPath, audioDur)
+            }
         }
     } else {
         log.Printf("Station %s: ffprobe audio duration failed for %s: %v, assuming video duration %.3fs", st.name, opusPath, err, actualDur)
@@ -396,12 +368,13 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-t", fmt.Sprintf("%.3f", actualDur),
             "-map", "0:a:0",
             "-c:a", "libopus",
-            "-b:a", "192k",
+            "-b:a", "128k",
             "-ar", "48000",
             "-ac", "2",
             "-frame_duration", "20",
             "-page_duration", "20000",
             "-application", "audio",
+            "-vbr", "on",
             "-avoid_negative_ts", "make_zero",
             "-fflags", "+genpts",
             "-f", "opus",
@@ -451,8 +424,11 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-y",
             "-i", fullSegPath,
             "-c:v", "libx264",
-            "-preset", "ultrafast",
+            "-preset", "fast",
             "-crf", "23",
+            "-profile:v", "baseline",
+            "-level", "3.0",
+            "-pix_fmt", "yuv420p",
             "-force_key_frames", "expr:gte(t,n_forced*2)",
             "-sc_threshold", "0",
             "-bsf:v", "h264_mp4toannexb",
@@ -492,19 +468,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             }
         }
     }
-    if len(spsPPS) > 0 {
-        sps := spsPPS[0]
-        if len(sps) >= 4 {
-            profileIDC := sps[1]
-            constraints := sps[2]
-            levelIDC := sps[3]
-            profileLevelID := fmt.Sprintf("%02x%02x%02x", profileIDC, constraints, levelIDC)
-            fmtpLine = fmt.Sprintf("level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=%s", profileLevelID)
-        }
-    } else {
-        log.Printf("Station %s: No SPS/PPS found in segment %s, using default", st.name, fullSegPath)
-        fmtpLine = "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"
-    }
+    fmtpLine = "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42000a"
     log.Printf("Station %s: Processed segment %s with %d NALUs, %d SPS/PPS, fmtp: %s, hasIDR: %v", st.name, fullSegPath, len(nalus), len(spsPPS), fmtpLine, hasIDR)
     return segments, spsPPS, fmtpLine, actualDur, fpsPair{num: fpsNum, den: fpsDen}, nil
 }
@@ -1273,7 +1237,7 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
     if stationName == "" {
         stationName = DefaultStation
     }
-    adsEnabled := c.Query("adsEnabled") != "false" // Default to true if not specified or invalid
+    adsEnabled := c.Query("adsEnabled") != "false"
     mu.Lock()
     var st *Station
     var ok bool
@@ -1287,7 +1251,6 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
     } else {
         st, ok = noAdsStations[stationName]
         if !ok {
-            // Create no-ads station on demand, copying initial state from ad-enabled station
             originalSt, exists := stations[stationName]
             if !exists {
                 mu.Unlock()
@@ -1309,7 +1272,7 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
     log.Printf("Signaling for station %s, adsEnabled: %v", stationName, adsEnabled)
     var msg struct {
         Type string `json:"type"`
-        SDP  string `json:"sdp,omitempty"`
+        SDP string `json:"sdp,omitempty"`
     }
     if err := c.BindJSON(&msg); err != nil {
         log.Printf("JSON bind error: %v", err)
@@ -1319,9 +1282,9 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
     m := &webrtc.MediaEngine{}
     if err := m.RegisterCodec(webrtc.RTPCodecParameters{
         RTPCodecCapability: webrtc.RTPCodecCapability{
-            MimeType:     webrtc.MimeTypeH264,
-            ClockRate:    90000,
-            SDPFmtpLine:  st.fmtpLine,
+            MimeType: webrtc.MimeTypeH264,
+            ClockRate: 90000,
+            SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42000a",
             RTCPFeedback: []webrtc.RTCPFeedback{{"goog-remb", ""}, {"ccm", "fir"}, {"nack", ""}, {"nack", "pli"}},
         },
         PayloadType: 96,
@@ -1332,10 +1295,10 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
     }
     if err := m.RegisterCodec(webrtc.RTPCodecParameters{
         RTPCodecCapability: webrtc.RTPCodecCapability{
-            MimeType:     webrtc.MimeTypeOpus,
-            ClockRate:    48000,
-            Channels:     2,
-            SDPFmtpLine:  "minptime=10;useinbandfec=1;stereo=1",
+            MimeType: webrtc.MimeTypeOpus,
+            ClockRate: 48000,
+            Channels: 2,
+            SDPFmtpLine: "minptime=10;useinbandfec=1;stereo=1",
         },
         PayloadType: 111,
     }, webrtc.RTPCodecTypeAudio); err != nil {
@@ -1417,10 +1380,10 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
         }
         st.segmentList = []bufferedChunk{{
             segPath: segments[0],
-            dur:     actualDur,
-            isAd:    false,
+            dur: actualDur,
+            isAd: false,
             videoID: st.currentVideo,
-            fps:     fps,
+            fps: fps,
         }}
         log.Printf("Station %s: Queued initial chunk for video %d at %.3fs, duration %.3fs", st.name, st.currentVideo, nextStart, actualDur)
         audioPath := strings.Replace(segments[0], ".h264", ".opus", 1)
@@ -1432,7 +1395,6 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
             pc.Close()
             return
         }
-        // Queue second chunk or ads (skip ads if adsEnabled is false)
         nextStart += actualDur
         if st.adsEnabled && nextBreak == chunkEnd && len(breaks) > 0 {
             log.Printf("Station %s: Inserting initial ad break at %.3fs for video %d", st.name, nextBreak, st.currentVideo)
@@ -1458,10 +1420,10 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
                 }
                 adChunk := bufferedChunk{
                     segPath: segments[0],
-                    dur:     actualDur,
-                    isAd:    true,
+                    dur: actualDur,
+                    isAd: true,
                     videoID: adID,
-                    fps:     fps,
+                    fps: fps,
                 }
                 st.segmentList = append(st.segmentList, adChunk)
                 log.Printf("Station %s: Queued initial ad %d with duration %.3fs at break %.3fs", st.name, adID, actualDur, nextBreak)
@@ -1477,10 +1439,10 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
                 }
                 st.segmentList = append(st.segmentList, bufferedChunk{
                     segPath: segments[0],
-                    dur:     actualDur,
-                    isAd:    false,
+                    dur: actualDur,
+                    isAd: false,
                     videoID: st.currentVideo,
-                    fps:     fps,
+                    fps: fps,
                 })
                 log.Printf("Station %s: Queued second initial chunk for video %d at %.3fs, duration %.3fs", st.name, st.currentVideo, nextStart, actualDur)
             }
@@ -1573,7 +1535,6 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
             if st.viewers == 0 {
                 close(st.stopProcessing)
                 st.stopProcessing = make(chan struct{})
-                // Clean up no-ads station from map if it has no viewers
                 if !st.adsEnabled {
                     mu.Lock()
                     delete(noAdsStations, stationName)

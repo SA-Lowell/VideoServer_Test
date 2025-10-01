@@ -1,43 +1,3 @@
-<script type="text/javascript">
-        var gk_isXlsx = false;
-        var gk_xlsxFileLookup = {};
-        var gk_fileData = {};
-        function filledCell(cell) {
-          return cell !== '' && cell != null;
-        }
-        function loadFileData(filename) {
-        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
-            try {
-                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
-                var firstSheetName = workbook.SheetNames[0];
-                var worksheet = workbook.Sheets[firstSheetName];
-
-                // Convert sheet to JSON to filter blank rows
-                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
-                // Filter out blank rows (rows where all cells are empty, null, or undefined)
-                var filteredData = jsonData.filter(row => row.some(filledCell));
-
-                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
-                var headerRowIndex = filteredData.findIndex((row, index) =>
-                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
-                );
-                // Fallback
-                if (headerRowIndex === -1 || headerRowIndex > 25) {
-                  headerRowIndex = 0;
-                }
-
-                // Convert filtered JSON back to CSV
-                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
-                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
-                return csv;
-            } catch (e) {
-                console.error(e);
-                return "";
-            }
-        }
-        return gk_fileData[filename] || "";
-        }
-        </script>
 <!DOCTYPE html>
 <html>
 <head>
@@ -80,35 +40,27 @@
     </div>
     <pre id="log"></pre>
 <script type="text/javascript">
-        var gk_isXlsx = false;
-        var gk_xlsxFileLookup = {};
-        var gk_fileData = {};
-        function filledCell(cell) {
-          return cell !== '' && cell != null;
-        }
-        function loadFileData(filename) {
+    var gk_isXlsx = false;
+    var gk_xlsxFileLookup = {};
+    var gk_fileData = {};
+    function filledCell(cell) {
+        return cell !== '' && cell != null;
+    }
+    function loadFileData(filename) {
         if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
             try {
                 var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
                 var firstSheetName = workbook.SheetNames[0];
                 var worksheet = workbook.Sheets[firstSheetName];
-
-                // Convert sheet to JSON to filter blank rows
                 var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
-                // Filter out blank rows (rows where all cells are empty, null, or undefined)
                 var filteredData = jsonData.filter(row => row.some(filledCell));
-
-                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
                 var headerRowIndex = filteredData.findIndex((row, index) =>
-                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                    row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
                 );
-                // Fallback
                 if (headerRowIndex === -1 || headerRowIndex > 25) {
-                  headerRowIndex = 0;
+                    headerRowIndex = 0;
                 }
-
-                // Convert filtered JSON back to CSV
-                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex));
                 csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
                 return csv;
             } catch (e) {
@@ -117,8 +69,9 @@
             }
         }
         return gk_fileData[filename] || "";
-        }
-        </script><script>
+    }
+</script>
+<script>
 let pc = null;
 let audioContext = null;
 let staticAudioNode = null;
@@ -277,6 +230,7 @@ async function startConnection() {
             }).catch(err => log(`Video playback error: ${err}`));
             track.onunmute = () => log(`Video unmuted - media flowing`);
             track.onmute = () => log(`Video track muted: id=${track.id} - possible no media flow`);
+            track.onended = () => log(`Video track ended: id=${track.id}`);
         }
         if (track.kind === 'audio') {
             if (!audioContext || audioContext.state === 'closed') {
@@ -292,7 +246,6 @@ async function startConnection() {
             analyser = audioContext.createAnalyser();
             analyser.fftSize = 2048;
             source.connect(analyser);
-            // Do NOT connect analyser to audioContext.destination to avoid playback
             log(`Connected audio track to AnalyserNode for analysis, sampleRate=${audioContext.sampleRate}, channels=${source.channelCount}`);
             track.onunmute = () => log(`Audio track unmuted: id=${track.id} - media flowing`);
             track.onmute = () => log(`Audio track muted: id=${track.id} - possible silence or no media flow`);
@@ -305,6 +258,12 @@ async function startConnection() {
         } else {
             log('All ICE candidates gathered (end-of-candidates)');
         }
+    };
+    pc.onicecandidateerror = event => {
+        log(`ICE candidate error: ${JSON.stringify(event)}`);
+    };
+    pc.onnegotiationneeded = () => {
+        log('Negotiation needed');
     };
     pc.oniceconnectionstatechange = () => {
         log(`ICE connection state: ${pc.iceConnectionState}`);
@@ -329,13 +288,22 @@ async function startConnection() {
             restartICE();
         }
     };
+    videoElement.addEventListener('error', () => {
+        log(`Video element error: ${videoElement.error ? videoElement.error.message : 'Unknown error'}`);
+    });
+    videoElement.addEventListener('stalled', () => {
+        log('Video stalled - checking connection state');
+    });
+    videoElement.addEventListener('waiting', () => {
+        log('Video waiting for data - checking connection state');
+    });
     function checkForDesync() {
         if (!videoElement.srcObject || videoElement.paused || videoElement.ended) return;
         const now = performance.now() / 1000;
         const videoTime = videoElement.currentTime;
         const elapsed = now - lastCheckTime;
-        if (elapsed > 2) {
-            if (Math.abs(videoTime - lastVideoTime) < 0.5 && !videoElement.paused) {
+        if (elapsed > 5) {
+            if (Math.abs(videoTime - lastVideoTime) < 1.0 && !videoElement.paused) {
                 log('Video freeze detected: currentTime=' + videoTime + ', lastTime=' + lastVideoTime);
                 freezeCount++;
                 if (freezeCount >= maxFreezeRestarts) {
@@ -349,10 +317,6 @@ async function startConnection() {
                 const data = new Float32Array(analyser.fftSize);
                 analyser.getFloatTimeDomainData(data);
                 const level = data.reduce((sum, val) => sum + Math.abs(val), 0) / data.length;
-                if (level > 0.05 && Math.abs(videoTime - lastVideoTime - elapsed) > 1.0) {
-                    log('Audio-video desync detected: videoTime=' + videoTime + ', expected=' + (lastVideoTime + elapsed) + ', audioLevel=' + level.toFixed(4));
-                    restartICE();
-                }
                 if (level < 0.001) {
                     log('Warning: Audio level very low, possible silence or decoding issue');
                 }
@@ -361,21 +325,17 @@ async function startConnection() {
             lastCheckTime = now;
         }
     }
-    setInterval(checkForDesync, 2000);
-    videoElement.addEventListener('stalled', () => {
-        log('Video stalled - checking connection state');
-        if (pc && pc.iceConnectionState !== 'connected') {
-            restartICE();
-        }
-    });
-    videoElement.addEventListener('waiting', () => {
-        log('Video waiting for data - checking connection state');
-        if (pc && pc.iceConnectionState !== 'connected') {
-            restartICE();
-        }
-    });
+    setInterval(checkForDesync, 5000);
     const audioTransceiver = pc.addTransceiver('audio', { direction: 'recvonly' });
-    const videoTransceiver = pc.addTransceiver('video', { direction: 'recvonly' });
+    const videoTransceiver = pc.addTransceiver('video', {
+        direction: 'recvonly',
+        receiveCodecs: [
+            {
+                mimeType: 'video/H264',
+                sdpFmtpLine: 'level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42000a',
+            }
+        ]
+    });
     try {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
