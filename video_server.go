@@ -583,7 +583,7 @@ func manageProcessing(st *Station, db *sql.DB) {
                 }
             }
             log.Printf("Station %s: Remaining buffer %.3fs, non-ad %.3fs, current video %d, offset %.3f", st.name, remainingDur, sumNonAd, st.currentVideo, st.currentOffset)
-            for remainingDur < 90.0 { // Increased to 90s to ensure episode segment is ready
+            for remainingDur < 90.0 { // Increased to 90s
                 videoDur := getVideoDur(st.currentVideo, db)
                 if videoDur <= 0 {
                     log.Printf("Station %s: Invalid duration for video %d, advancing to next video", st.name, st.currentVideo)
@@ -692,7 +692,7 @@ func manageProcessing(st *Station, db *sql.DB) {
                         log.Printf("Station %s: Queued ad %d with duration %.3fs at break %.3fs", st.name, adID, actualDur, nextBreak)
                         availableAds = append(availableAds[:idx], availableAds[idx+1:]...)
                     }
-                    // Queue next episode segment immediately after ads
+                    // Pre-queue next episode segment after ads
                     if adDurTotal > 0 {
                         nextStart = st.currentOffset + sumNonAd
                         if nextStart < videoDur {
@@ -1552,11 +1552,12 @@ let remoteStream = null;
 let analyser = null;
 let hasAudio = false;
 let hasVideo = false;
+let lastVideoTime = 0;
+let lastCheckTime = 0;
 pc = new RTCPeerConnection(configuration);
 pc.ontrack = event => {
     const track = event.track;
     log('Track received: kind=' + track.kind + ', id=' + track.id + ', readyState=' + track.readyState + ', enabled=' + track.enabled + ', muted=' + track.muted);
-   
     if (!remoteStream) {
         remoteStream = event.streams[0];
         log('Initialized remoteStream with first track');
@@ -1568,24 +1569,15 @@ pc.ontrack = event => {
         log('Video started playing');
         track.onunmute = () => log('Video unmuted - media flowing');
     }
-   
     if (track.kind === 'audio') {
         hasAudio = true;
-        const audioContext = new AudioContext({ sampleRate: 48000 }); // Explicit 48kHz
+        const audioContext = new AudioContext({ sampleRate: 48000 });
         log('AudioContext created with sampleRate=' + audioContext.sampleRate);
         const source = audioContext.createMediaStreamSource(remoteStream);
         analyser = audioContext.createAnalyser();
         source.connect(analyser);
         analyser.connect(audioContext.destination);
         log('Connected audio track to AudioContext, channels=' + source.channelCount);
-        setInterval(() => {
-            if (analyser) {
-                const data = new Float32Array(analyser.fftSize);
-                analyser.getFloatTimeDomainData(data);
-                const level = data.reduce((sum, val) => sum + Math.abs(val), 0) / data.length;
-                log('Audio level: ' + level.toFixed(4) + ', sample: ' + data.slice(0, 10).join(', '));
-            }
-        }, 1000);
         track.onmute = () => {
             log('Track muted: kind=' + track.kind + ', id=' + track.id + ' - possible silence or no media flow');
         };
@@ -1692,12 +1684,12 @@ async function sendOfferToServer() {
     }
 }
 async function restartIce() {
-    log('Restarting ICE...');
+    log('Restarting ICE to fix desync or freeze...');
     try {
         const newOffer = await pc.createOffer({ iceRestart: true });
         await pc.setLocalDescription(newOffer);
         log('New offer with ICE restart: ' + newOffer.sdp);
-        sendOfferToServer();
+        await sendOfferToServer();
     } catch (error) {
         log('ICE restart failed: ' + error);
     }
@@ -1736,6 +1728,39 @@ function startStatsLogging() {
         }
     }, 2000);
 }
+const videoElement = document.getElementById('remoteVideo');
+// Detect video freeze and desync
+function checkForDesync() {
+    if (!videoElement.srcObject || videoElement.paused || videoElement.ended) return;
+    const now = performance.now() / 1000; // Current time in seconds
+    const videoTime = videoElement.currentTime;
+    const elapsed = now - lastCheckTime;
+    if (elapsed > 1) { // Check every second
+        if (Math.abs(videoTime - lastVideoTime) < 0.1 && !videoElement.paused) {
+            log('Video freeze detected: currentTime=' + videoTime + ', lastTime=' + lastVideoTime);
+            restartIce(); // Trigger ICE restart to fix freeze/desync
+        } else if (analyser) {
+            const data = new Float32Array(analyser.fftSize);
+            analyser.getFloatTimeDomainData(data);
+            const level = data.reduce((sum, val) => sum + Math.abs(val), 0) / data.length;
+            if (level > 0.01 && Math.abs(videoTime - lastVideoTime - elapsed) > 0.5) {
+                log('Audio-video desync detected: videoTime=' + videoTime + ', expected=' + (lastVideoTime + elapsed) + ', audioLevel=' + level.toFixed(4));
+                restartIce(); // Trigger ICE restart to realign tracks
+            }
+        }
+        lastVideoTime = videoTime;
+        lastCheckTime = now;
+    }
+}
+videoElement.addEventListener('stalled', () => {
+    log('Video stalled - triggering ICE restart');
+    restartIce();
+});
+videoElement.addEventListener('waiting', () => {
+    log('Video waiting for data - triggering ICE restart');
+    restartIce();
+});
+setInterval(checkForDesync, 1000); // Check for desync every second
 document.getElementById('startButton').addEventListener('click', async () => {
     await createOffer();
     startStatsLogging();
