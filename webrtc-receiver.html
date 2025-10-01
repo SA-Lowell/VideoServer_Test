@@ -1,39 +1,47 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>WebRTC Video Receiver</title>
-    <script type="text/javascript">
+<script type="text/javascript">
         var gk_isXlsx = false;
         var gk_xlsxFileLookup = {};
         var gk_fileData = {};
         function filledCell(cell) {
-            return cell !== '' && cell != null;
+          return cell !== '' && cell != null;
         }
         function loadFileData(filename) {
-            if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
-                try {
-                    var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
-                    var firstSheetName = workbook.SheetNames[0];
-                    var worksheet = workbook.Sheets[firstSheetName];
-                    var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
-                    var filteredData = jsonData.filter(row => row.some(filledCell));
-                    var headerRowIndex = filteredData.findIndex((row, index) =>
-                        row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
-                    );
-                    if (headerRowIndex === -1 || headerRowIndex > 25) {
-                        headerRowIndex = 0;
-                    }
-                    var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex));
-                    csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
-                    return csv;
-                } catch (e) {
-                    console.error(e);
-                    return "";
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
                 }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
             }
-            return gk_fileData[filename] || "";
         }
-    </script>
+        return gk_fileData[filename] || "";
+        }
+        </script>
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebRTC Video Receiver</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -66,307 +74,370 @@
         <button onclick="togglePlayPause()">Play/Pause</button>
         <input type="text" id="serverUrl" placeholder="Server URL (e.g., http://192.168.0.60:8081/signal)" value="http://192.168.0.60:8081/signal">
         <input type="text" id="station" placeholder="Station (e.g., channel1, channel2, channel3)" value="Bob's Burgers">
+        <label><input type="checkbox" id="adsEnabled" checked> Enable Ads</label>
         <button onclick="startConnection()">Send Offer to Server</button>
         <button onclick="restartICE()">Restart ICE</button>
     </div>
     <pre id="log"></pre>
-    <script>
-        let pc = null;
-        let audioContext = null;
-        let staticAudioNode = null;
-        let analyser = null;
-        let source = null;
-        let lastVideoTime = 0;
-        let lastCheckTime = 0;
-        const videoElement = document.getElementById('video');
-        const logElement = document.getElementById('log');
-        function log(message) {
-            const timestamp = new Date().toISOString();
-            logElement.textContent += `[${timestamp}] ${message}\n`;
-            logElement.scrollTop = logElement.scrollHeight;
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
         }
-        async function getStatsPeriodically() {
-            if (!pc) return;
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
             try {
-                const stats = await pc.getStats();
-                stats.forEach(report => {
-                    if (report.type === 'inbound-rtp' && report.kind === 'audio') {
-                        log(`Audio stats: packetsReceived=${report.packetsReceived || 0}, ` +
-                            `packetsLost=${report.packetsLost || 0}, ` +
-                            `jitter=${report.jitter || 0}, ` +
-                            `audioLevel=${report.audioLevel || 0}`);
-                        if (report.packetsLost > 0) {
-                            log(`Warning: Audio packet loss detected: ${report.packetsLost}`);
-                        }
-                        if (report.jitter > 0.1) {
-                            log(`Warning: High audio jitter detected: ${report.jitter}`);
-                        }
-                    }
-                    if (report.type === 'inbound-rtp' && report.kind === 'video') {
-                        log(`Video stats: packetsReceived=${report.packetsReceived || 0}, ` +
-                            `packetsLost=${report.packetsLost || 0}, ` +
-                            `jitter=${report.jitter || 0}, ` +
-                            `framesDecoded=${report.framesDecoded || 0}`);
-                        if (report.packetsLost > 0) {
-                            log(`Warning: Video packet loss detected: ${report.packetsLost}`);
-                        }
-                        if (report.jitter > 0.1) {
-                            log(`Warning: High video jitter detected: ${report.jitter}`);
-                        }
-                    }
-                });
-            } catch (err) {
-                log(`Error getting stats: ${err}`);
-            }
-            setTimeout(getStatsPeriodically, 2000);
-        }
-        function createTVStaticEffect() {
-            const canvas = document.createElement('canvas');
-            canvas.width = 640;
-            canvas.height = 360;
-            const ctx = canvas.getContext('2d');
-            videoElement.srcObject = canvas.captureStream(30);
-            log('Starting TV static effect');
-            function drawStatic() {
-                const imageData = ctx.createImageData(canvas.width, canvas.height);
-                for (let i = 0; i < imageData.data.length; i += 4) {
-                    const noise = Math.random() * 255;
-                    imageData.data[i] = noise;
-                    imageData.data[i + 1] = noise;
-                    imageData.data[i + 2] = noise;
-                    imageData.data[i + 3] = 255;
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
                 }
-                ctx.putImageData(imageData, 0, 0);
-                requestAnimationFrame(drawStatic);
-            }
-            drawStatic();
-        }
-        function startStaticAudio() {
-            if (!audioContext || audioContext.state === 'closed') {
-                audioContext = new AudioContext();
-            }
-            const bufferSize = audioContext.sampleRate * 2;
-            const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
-            const data = buffer.getChannelData(0);
-            for (let i = 0; i < bufferSize; i++) {
-                data[i] = Math.random() * 2 - 1;
-            }
-            const source = audioContext.createBufferSource();
-            source.buffer = buffer;
-            source.loop = true;
-            const gainNode = audioContext.createGain();
-            gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
-            source.connect(gainNode);
-            gainNode.connect(audioContext.destination);
-            source.start();
-            log('Starting static audio');
-            staticAudioNode = source;
-        }
-        function stopStaticAudio() {
-            if (staticAudioNode) {
-                staticAudioNode.stop();
-                staticAudioNode = null;
-                log('Stopping static audio');
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
             }
         }
-        function togglePlayPause() {
-            if (videoElement.paused) {
-                videoElement.play().then(() => {
-                    log('Video playback resumed');
-                    if (audioContext && audioContext.state === 'suspended') {
-                        audioContext.resume().then(() => {
-                            log('AudioContext resumed');
-                        });
-                    }
-                }).catch(err => {
-                    log(`Video playback error: ${err}`);
-                });
-            } else {
-                videoElement.pause();
-                log('Video playback paused');
-                if (audioContext && audioContext.state === 'running') {
-                    audioContext.suspend().then(() => {
-                        log('AudioContext suspended');
-                    });
-                }
-            }
+        return gk_fileData[filename] || "";
         }
-        async function startConnection() {
-            if (pc) {
-                pc.close();
-                log('Closed existing connection to switch channels');
-                if (audioContext) {
-                    audioContext.close().then(() => {
-                        log('Closed existing AudioContext');
-                        audioContext = null;
-                        analyser = null;
-                        source = null;
-                    });
-                }
+        </script><script>
+let pc = null;
+let audioContext = null;
+let staticAudioNode = null;
+let analyser = null;
+let source = null;
+let lastVideoTime = 0;
+let lastCheckTime = 0;
+let freezeCount = 0;
+const maxFreezeRestarts = 3;
+const videoElement = document.getElementById('video');
+const logElement = document.getElementById('log');
+
+function log(message) {
+    const timestamp = new Date().toISOString();
+    logElement.textContent += `[${timestamp}] ${message}\n`;
+    logElement.scrollTop = logElement.scrollHeight;
+}
+
+async function getStatsPeriodically() {
+    if (!pc || pc.connectionState !== 'connected') return;
+    try {
+        const stats = await pc.getStats();
+        stats.forEach(report => {
+            if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+                log(`Audio stats: packetsReceived=${report.packetsReceived || 0}, packetsLost=${report.packetsLost || 0}, jitter=${report.jitter || 0}, audioLevel=${report.audioLevel || 0}`);
+                if (report.packetsLost > 0) log(`Warning: Audio packet loss detected: ${report.packetsLost}`);
+                if (report.jitter > 0.1) log(`Warning: High audio jitter detected: ${report.jitter}`);
             }
-            createTVStaticEffect();
-            startStaticAudio();
-            pc = new RTCPeerConnection({
-                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                log(`Video stats: packetsReceived=${report.packetsReceived || 0}, packetsLost=${report.packetsLost || 0}, jitter=${report.jitter || 0}, framesDecoded=${report.framesDecoded || 0}`);
+                if (report.packetsLost > 0) log(`Warning: Video packet loss detected: ${report.packetsLost}`);
+                if (report.jitter > 0.1) log(`Warning: High video jitter detected: ${report.jitter}`);
+            }
+        });
+    } catch (err) {
+        log(`Error getting stats: ${err}`);
+    }
+    setTimeout(getStatsPeriodically, 2000);
+}
+
+function createTVStaticEffect() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 360;
+    const ctx = canvas.getContext('2d');
+    let animationFrameId = null;
+    videoElement.srcObject = canvas.captureStream(30);
+    log('Starting TV static effect');
+    function drawStatic() {
+        const imageData = ctx.createImageData(canvas.width, canvas.height);
+        for (let i = 0; i < imageData.data.length; i += 4) {
+            const noise = Math.random() * 255;
+            imageData.data[i] = noise;
+            imageData.data[i + 1] = noise;
+            imageData.data[i + 2] = noise;
+            imageData.data[i + 3] = 255;
+        }
+        ctx.putImageData(imageData, 0, 0);
+        animationFrameId = requestAnimationFrame(drawStatic);
+    }
+    drawStatic();
+    return () => {
+        if (animationFrameId) {
+            cancelAnimationFrame(animationFrameId);
+            log('Stopped TV static effect');
+        }
+    };
+}
+
+function startStaticAudio() {
+    if (!audioContext || audioContext.state === 'closed') {
+        audioContext = new AudioContext({ sampleRate: 48000 });
+    }
+    const bufferSize = audioContext.sampleRate * 2;
+    const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+        data[i] = (Math.random() * 2 - 1) * 0.1;
+    }
+    const source = audioContext.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
+    const gainNode = audioContext.createGain();
+    gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+    source.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    source.start();
+    log('Starting static audio');
+    staticAudioNode = source;
+}
+
+function stopStaticAudio() {
+    if (staticAudioNode) {
+        staticAudioNode.stop();
+        staticAudioNode = null;
+        log('Stopping static audio');
+    }
+}
+
+function togglePlayPause() {
+    if (videoElement.paused) {
+        videoElement.play().then(() => {
+            log('Video playback resumed');
+            if (audioContext && audioContext.state === 'suspended') {
+                audioContext.resume().then(() => log('AudioContext resumed for analysis'));
+            }
+        }).catch(err => log(`Video playback error: ${err}`));
+    } else {
+        videoElement.pause();
+        log('Video playback paused');
+        if (audioContext && audioContext.state === 'running') {
+            audioContext.suspend().then(() => log('AudioContext suspended'));
+        }
+    }
+}
+
+async function startConnection() {
+    if (pc) {
+        pc.close();
+        log('Closed existing PeerConnection');
+        pc = null;
+        if (audioContext) {
+            audioContext.close().then(() => {
+                log('Closed existing AudioContext');
+                audioContext = null;
+                analyser = null;
+                source = null;
             });
-            pc.onicecandidate = event => {
-                if (event.candidate) {
-                    log(`New ICE candidate: ${JSON.stringify(event.candidate)}`);
-                } else {
-                    log('All ICE candidates gathered (end-of-candidates)');
-                }
-            };
-            pc.oniceconnectionstatechange = () => {
-                log(`ICE connection state: ${pc.iceConnectionState}`);
-                if (pc.iceConnectionState === 'connected') {
-                    log('ICE connected - assigned stream to video element.');
-                    setTimeout(getStatsPeriodically, 1000);
-                }
-                if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
-                    log(`ICE ${pc.iceConnectionState} - attempting automatic restart in 3 seconds...`);
-                    setTimeout(restartICE, 3000);
-                }
-            };
-            let remoteStream = null;
-            pc.ontrack = event => {
-                const track = event.track;
-                log(`Track received: kind=${track.kind}, id=${track.id}, readyState=${track.readyState}, enabled=${track.enabled}, muted=${track.muted}`);
-                if (!remoteStream) {
-                    remoteStream = event.streams[0];
-                    log('Initialized remoteStream with first track');
-                }
-                if (track.kind === 'video') {
-                    videoElement.srcObject = remoteStream;
-                    stopStaticAudio();
-                    log('Stopping TV static effect');
-                    log('Video started playing');
-                    videoElement.play().then(() => {
-                        log('Video playback started');
-                        log(`Video element state: paused=${videoElement.paused}, ended=${videoElement.ended}, error=${videoElement.error ? videoElement.error.message : 'none'}`);
-                    }).catch(err => {
-                        log(`Video playback error: ${err}`);
-                    });
-                    track.onunmute = () => log(`Video unmuted - media flowing`);
-                }
-                if (track.kind === 'audio') {
-                    if (source) {
-                        log(`Warning: Received additional audio track (id=${track.id}), disconnecting previous source`);
-                        source.disconnect();
-                        analyser.disconnect();
-                    }
-                    if (!audioContext || audioContext.state === 'closed') {
-                        audioContext = new AudioContext({ sampleRate: 48000 });
-                        log('Created new AudioContext');
-                    }
-                    source = audioContext.createMediaStreamSource(new MediaStream([track]));
-                    analyser = audioContext.createAnalyser();
-                    analyser.fftSize = 2048;
-                    source.connect(analyser);
-                    log(`Connected audio track to AnalyserNode for analysis, sampleRate=${audioContext.sampleRate}, channels=${source.channelCount}`);
-                    setInterval(() => {
-                        if (analyser) {
-                            const data = new Float32Array(analyser.fftSize);
-                            analyser.getFloatTimeDomainData(data);
-                            const level = data.reduce((sum, val) => sum + Math.abs(val), 0) / data.length;
-                            const maxAmplitude = Math.max(...data.map(Math.abs));
-                            log(`Audio level: ${level.toFixed(4)}, maxAmplitude: ${maxAmplitude.toFixed(4)}, sample: ${data.slice(0, 10).map(x => x.toFixed(4)).join(', ')}`);
-                            if (maxAmplitude > 1.0) {
-                                log('Warning: Audio clipping detected, maxAmplitude exceeds 1.0');
-                            }
-                            if (level < 0.001) {
-                                log('Warning: Audio level very low, possible silence or decoding issue');
-                            }
-                        }
-                    }, 1000);
-                    track.onmute = () => log(`Audio track muted: id=${track.id} - possible silence or no media flow`);
-                    track.onunmute = () => log(`Audio track unmuted: id=${track.id} - media flowing`);
-                    track.onended = () => log(`Audio track ended: id=${track.id}`);
-                }
-            };
-            pc.onconnectionstatechange = () => {
-                log(`Peer connection state: ${pc.connectionState}`);
-                if (pc.connectionState === 'failed') {
-                    log('Peer connection failed - attempting ICE restart');
+        }
+    }
+    const stopStaticEffect = createTVStaticEffect();
+    startStaticAudio();
+    pc = new RTCPeerConnection({
+        iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+            { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' }
+        ]
+    });
+    let remoteStream = null;
+    pc.ontrack = event => {
+        const track = event.track;
+        log(`Track received: kind=${track.kind}, id=${track.id}, readyState=${track.readyState}, enabled=${track.enabled}, muted=${track.muted}`);
+        if (!remoteStream) {
+            remoteStream = event.streams[0];
+            log('Initialized remoteStream with first track');
+        }
+        if (track.kind === 'video') {
+            videoElement.srcObject = remoteStream;
+            stopStaticAudio();
+            stopStaticEffect();
+            log('Video started playing');
+            videoElement.play().then(() => {
+                log('Video playback started');
+                log(`Video element state: paused=${videoElement.paused}, ended=${videoElement.ended}, error=${videoElement.error ? videoElement.error.message : 'none'}`);
+            }).catch(err => log(`Video playback error: ${err}`));
+            track.onunmute = () => log(`Video unmuted - media flowing`);
+            track.onmute = () => log(`Video track muted: id=${track.id} - possible no media flow`);
+        }
+        if (track.kind === 'audio') {
+            if (!audioContext || audioContext.state === 'closed') {
+                audioContext = new AudioContext({ sampleRate: 48000 });
+                log('Created new AudioContext for analysis');
+            }
+            if (source) {
+                source.disconnect();
+                analyser.disconnect();
+                log(`Disconnected previous audio source for analysis`);
+            }
+            source = audioContext.createMediaStreamSource(new MediaStream([track]));
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 2048;
+            source.connect(analyser);
+            // Do NOT connect analyser to audioContext.destination to avoid playback
+            log(`Connected audio track to AnalyserNode for analysis, sampleRate=${audioContext.sampleRate}, channels=${source.channelCount}`);
+            track.onunmute = () => log(`Audio track unmuted: id=${track.id} - media flowing`);
+            track.onmute = () => log(`Audio track muted: id=${track.id} - possible silence or no media flow`);
+            track.onended = () => log(`Audio track ended: id=${track.id}`);
+        }
+    };
+    pc.onicecandidate = event => {
+        if (event.candidate) {
+            log(`New ICE candidate: ${JSON.stringify(event.candidate)}`);
+        } else {
+            log('All ICE candidates gathered (end-of-candidates)');
+        }
+    };
+    pc.oniceconnectionstatechange = () => {
+        log(`ICE connection state: ${pc.iceConnectionState}`);
+        if (pc.iceConnectionState === 'connected') {
+            log('ICE connected - assigned stream to video element.');
+            setTimeout(getStatsPeriodically, 1000);
+            freezeCount = 0;
+        }
+        if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
+            log(`ICE ${pc.iceConnectionState} - attempting automatic restart in 5 seconds...`);
+            setTimeout(() => {
+                if (pc && (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed')) {
                     restartICE();
                 }
-            };
-            // Detect video freeze and desync
-            function checkForDesync() {
-                if (!videoElement.srcObject || videoElement.paused || videoElement.ended) return;
-                const now = performance.now() / 1000; // Current time in seconds
-                const videoTime = videoElement.currentTime;
-                const elapsed = now - lastCheckTime;
-                if (elapsed > 1) { // Check every second
-                    if (Math.abs(videoTime - lastVideoTime) < 0.1 && !videoElement.paused) {
-                        log('Video freeze detected: currentTime=' + videoTime + ', lastTime=' + lastVideoTime);
-                        restartICE();
-                    } else if (analyser) {
-                        const data = new Float32Array(analyser.fftSize);
-                        analyser.getFloatTimeDomainData(data);
-                        const level = data.reduce((sum, val) => sum + Math.abs(val), 0) / data.length;
-                        if (level > 0.01 && Math.abs(videoTime - lastVideoTime - elapsed) > 0.5) {
-                            log('Audio-video desync detected: videoTime=' + videoTime + ', expected=' + (lastVideoTime + elapsed) + ', audioLevel=' + level.toFixed(4));
-                            restartICE();
-                        }
-                    }
-                    lastVideoTime = videoTime;
-                    lastCheckTime = now;
-                }
-            }
-            videoElement.addEventListener('stalled', () => {
-                log('Video stalled - triggering ICE restart');
-                restartICE();
-            });
-            videoElement.addEventListener('waiting', () => {
-                log('Video waiting for data - triggering ICE restart');
-                restartICE();
-            });
-            setInterval(checkForDesync, 1000); // Check for desync every second
-            const audioTransceiver = pc.addTransceiver('audio', { direction: 'recvonly' });
-            const videoTransceiver = pc.addTransceiver('video', { direction: 'recvonly' });
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            log(`Local Offer SDP:\n${offer.sdp}`);
-            const serverUrl = document.getElementById('serverUrl').value;
-            const station = document.getElementById('station').value;
-            const response = await fetch(`${serverUrl}?station=${encodeURIComponent(station)}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(offer)
-            });
-            if (response.ok) {
-                const answer = await response.json();
-                log(`Remote Answer SDP:\n${answer.sdp}`);
-                await pc.setRemoteDescription(answer);
-            } else {
-                log(`Error sending offer: ${response.statusText}`);
-            }
+            }, 5000);
         }
-        async function restartICE() {
-            if (!pc) return;
-            log('Restarting ICE to fix desync or freeze...');
-            try {
-                const offer = await pc.createOffer({ iceRestart: true });
-                await pc.setLocalDescription(offer);
-                log(`Restart ICE Offer SDP:\n${offer.sdp}`);
-                const serverUrl = document.getElementById('serverUrl').value;
-                const station = document.getElementById('station').value;
-                const response = await fetch(`${serverUrl}?station=${encodeURIComponent(station)}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(offer)
-                });
-                if (response.ok) {
-                    const answer = await response.json();
-                    log(`Remote Answer SDP:\n${answer.sdp}`);
-                    await pc.setRemoteDescription(answer);
+    };
+    pc.onconnectionstatechange = () => {
+        log(`Peer connection state: ${pc.connectionState}`);
+        if (pc.connectionState === 'failed') {
+            log('Peer connection failed - attempting ICE restart');
+            restartICE();
+        }
+    };
+    function checkForDesync() {
+        if (!videoElement.srcObject || videoElement.paused || videoElement.ended) return;
+        const now = performance.now() / 1000;
+        const videoTime = videoElement.currentTime;
+        const elapsed = now - lastCheckTime;
+        if (elapsed > 2) {
+            if (Math.abs(videoTime - lastVideoTime) < 0.5 && !videoElement.paused) {
+                log('Video freeze detected: currentTime=' + videoTime + ', lastTime=' + lastVideoTime);
+                freezeCount++;
+                if (freezeCount >= maxFreezeRestarts) {
+                    log('Max freeze restarts reached, reconnecting fully');
+                    startConnection();
+                    freezeCount = 0;
                 } else {
-                    log(`Error restarting ICE: ${response.statusText}`);
+                    restartICE();
                 }
-            } catch (error) {
-                log(`ICE restart failed: ${error}`);
+            } else if (analyser) {
+                const data = new Float32Array(analyser.fftSize);
+                analyser.getFloatTimeDomainData(data);
+                const level = data.reduce((sum, val) => sum + Math.abs(val), 0) / data.length;
+                if (level > 0.05 && Math.abs(videoTime - lastVideoTime - elapsed) > 1.0) {
+                    log('Audio-video desync detected: videoTime=' + videoTime + ', expected=' + (lastVideoTime + elapsed) + ', audioLevel=' + level.toFixed(4));
+                    restartICE();
+                }
+                if (level < 0.001) {
+                    log('Warning: Audio level very low, possible silence or decoding issue');
+                }
             }
+            lastVideoTime = videoTime;
+            lastCheckTime = now;
         }
-    </script>
+    }
+    setInterval(checkForDesync, 2000);
+    videoElement.addEventListener('stalled', () => {
+        log('Video stalled - checking connection state');
+        if (pc && pc.iceConnectionState !== 'connected') {
+            restartICE();
+        }
+    });
+    videoElement.addEventListener('waiting', () => {
+        log('Video waiting for data - checking connection state');
+        if (pc && pc.iceConnectionState !== 'connected') {
+            restartICE();
+        }
+    });
+    const audioTransceiver = pc.addTransceiver('audio', { direction: 'recvonly' });
+    const videoTransceiver = pc.addTransceiver('video', { direction: 'recvonly' });
+    try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        log(`Local Offer SDP:\n${offer.sdp}`);
+        const serverUrl = document.getElementById('serverUrl').value;
+        const station = document.getElementById('station').value;
+        const adsEnabled = document.getElementById('adsEnabled').checked;
+        const response = await fetch(`${serverUrl}?station=${encodeURIComponent(station)}&adsEnabled=${adsEnabled}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(offer)
+        });
+        if (response.ok) {
+            const answer = await response.json();
+            log(`Remote Answer SDP:\n${answer.sdp}`);
+            await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        } else {
+            log(`Error sending offer: ${response.statusText}`);
+        }
+    } catch (error) {
+        log(`Error starting connection: ${error}`);
+    }
+}
+
+async function restartICE() {
+    if (!pc || pc.connectionState === 'closed') {
+        log('PeerConnection closed or null, starting new connection');
+        startConnection();
+        return;
+    }
+    if (pc.signalingState !== 'stable') {
+        log('Cannot restart ICE: signalingState is ' + pc.signalingState + ', waiting for stable state');
+        setTimeout(restartICE, 1000);
+        return;
+    }
+    log('Restarting ICE to fix desync or freeze...');
+    try {
+        const offer = await pc.createOffer({ iceRestart: true });
+        await pc.setLocalDescription(offer);
+        log(`Restart ICE Offer SDP:\n${offer.sdp}`);
+        const serverUrl = document.getElementById('serverUrl').value;
+        const station = document.getElementById('station').value;
+        const adsEnabled = document.getElementById('adsEnabled').checked;
+        const response = await fetch(`${serverUrl}?station=${encodeURIComponent(station)}&adsEnabled=${adsEnabled}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(offer)
+        });
+        if (response.ok) {
+            const answer = await response.json();
+            log(`Remote Answer SDP:\n${answer.sdp}`);
+            await pc.setRemoteDescription(new RTCSessionDescription(answer));
+            freezeCount = 0;
+        } else {
+            log(`Error restarting ICE: ${response.statusText}`);
+            startConnection();
+        }
+    } catch (error) {
+        log(`ICE restart failed: ${error}`);
+        startConnection();
+    }
+}
+</script>
 </body>
 </html>
