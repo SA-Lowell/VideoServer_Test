@@ -1,3 +1,5 @@
+Final Fantasy X Promo Trailer 2 has an issue where it goes to black screen. FIX IT
+
 Start Postgres server:
 	set PGDATA=C:\Program Files\PostgreSQL\17\data
 	pg_ctl start
