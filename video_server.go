@@ -18,7 +18,7 @@ import (
     _ "github.com/lib/pq"
     "github.com/gin-contrib/cors"
     "github.com/gin-gonic/gin"
-    "github.com/pion/rtp"
+    //"github.com/pion/rtp"
     "github.com/pion/webrtc/v3"
     "github.com/pion/webrtc/v3/pkg/media"
     "github.com/pion/webrtc/v3/pkg/media/oggreader"
@@ -255,7 +255,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         opusPath,
     }
     cmdAudio := exec.Command("ffmpeg", args...)
-    log.Printf("Station %s: Running ffmpeg audio command: %v", st.name, cmdAudio.Args)
+    //log.Printf("Station %s: Running ffmpeg audio command: %v", st.name, cmdAudio.Args)
     outputAudio, err := cmdAudio.CombinedOutput()
     if err != nil {
         log.Printf("Station %s: ffmpeg audio command failed: %v\nOutput: %s", st.name, err, string(outputAudio))
@@ -311,9 +311,9 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             continue
         }
         audioPackets = append(audioPackets, payload)
-        log.Printf("Station %s: Extracted audio packet %d, size: %d", st.name, len(audioPackets)-1, len(payload))
+        //log.Printf("Station %s: Extracted audio packet %d, size: %d", st.name, len(audioPackets)-1, len(payload))
     }
-    log.Printf("Station %s: Ogg page sizes: %v", st.name, pageSizes)
+    //log.Printf("Station %s: Ogg page sizes: %v", st.name, pageSizes)
     if len(audioPackets) == 0 {
         log.Printf("Station %s: No valid audio packets extracted from %s", st.name, opusPath)
         return nil, nil, "", fmt.Errorf("no valid audio packets extracted from %s", opusPath)
@@ -332,7 +332,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         fullSegPath,
     }
     cmdVideo := exec.Command("ffmpeg", args...)
-    log.Printf("Station %s: Running ffmpeg video command: %v", st.name, cmdVideo.Args)
+    //log.Printf("Station %s: Running ffmpeg video command: %v", st.name, cmdVideo.Args)
     outputVideo, err := cmdVideo.CombinedOutput()
     if err != nil {
         log.Printf("Station %s: ffmpeg video command failed: %v\nOutput: %s", st.name, err, string(outputVideo))
@@ -743,7 +743,8 @@ func sender(st *Station, db *sql.DB) {
                 log.Printf("Station %s: Failed to create ogg reader for %s: %v", st.name, audioPath, err)
             } else {
                 for {
-                    payload, header, err := ogg.ParseNextPage()
+                    //payload, header, err := ogg.ParseNextPage()
+                    payload, _, err := ogg.ParseNextPage()
                     if err == io.EOF {
                         break
                     }
@@ -760,7 +761,7 @@ func sender(st *Station, db *sql.DB) {
                         continue
                     }
                     audioPackets = append(audioPackets, payload)
-                    log.Printf("Station %s: Parsed audio packet %d for %s, size: %d, granule: %d", st.name, len(audioPackets)-1, audioPath, len(payload), header.GranulePosition)
+                    //log.Printf("Station %s: Parsed audio packet %d for %s, size: %d, granule: %d", st.name, len(audioPackets)-1, audioPath, len(payload), header.GranulePosition)
                 }
                 log.Printf("Station %s: Parsed %d audio packets for %s", st.name, len(audioPackets), audioPath)
             }
@@ -803,6 +804,7 @@ func sender(st *Station, db *sql.DB) {
                         }
                         boundChecked = true
                     }
+/*
                     rtpPkt := &rtp.Packet{
                         Header: rtp.Header{
                             Version: 2,
@@ -814,6 +816,7 @@ func sender(st *Station, db *sql.DB) {
                         Payload: pkt,
                     }
                     log.Printf("Station %s: Sending RTP audio packet: seq=%d, ts=%d, size=%d, duration=%dms", st.name, rtpPkt.Header.SequenceNumber, rtpPkt.Header.Timestamp, len(rtpPkt.Payload), baseFrameDurationMs)
+*/
                     sample := media.Sample{
                         Data: pkt,
                         Duration: time.Duration(baseFrameDurationMs) * time.Millisecond,
