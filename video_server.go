@@ -61,6 +61,13 @@ type bitReader struct {
     pos  int
 }
 
+type LoudnormOutput struct {
+    InputI      string `json:"input_i"`
+    InputLRA    string `json:"input_lra"`
+    InputTP     string `json:"input_tp"`
+    InputThresh string `json:"input_thresh"`
+}
+
 func newBitReader(data []byte) *bitReader {
     return &bitReader{data: data, pos: 0}
 }
@@ -122,6 +129,7 @@ func sanitizeTrackID(name string) string {
     return strings.ReplaceAll(strings.ReplaceAll(name, " ", "_"), "'", "")
 }
 
+// Replace the existing processVideo function with this
 func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur float64) ([]string, [][]byte, string, float64, fpsPair, error) {
     if db == nil {
         return nil, nil, "", 0, fpsPair{}, fmt.Errorf("database connection is nil")
@@ -196,6 +204,27 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         "-fflags", "+genpts",
         "-f", "opus",
         opusPath,
+    }
+    // Query loudnorm measurements and apply if available
+    var loudI, loudLRA, loudTP, loudThresh sql.NullFloat64
+    err = db.QueryRow(
+        "SELECT loudnorm_input_i, loudnorm_input_lra, loudnorm_input_tp, loudnorm_input_thresh FROM videos WHERE id = $1",
+        videoID,
+    ).Scan(&loudI, &loudLRA, &loudTP, &loudThresh)
+    if err == nil && loudI.Valid {
+        loudnormFilter := fmt.Sprintf(
+            "loudnorm=I=-23:TP=-1.5:LRA=11:measured_I=%.2f:measured_LRA=%.2f:measured_TP=%.2f:measured_thresh=%.2f:offset=0:linear=true",
+            loudI.Float64, loudLRA.Float64, loudTP.Float64, loudThresh.Float64,
+        )
+        for i := len(args) - 1; i >= 0; i-- {
+            if args[i] == "-c:a" {
+                args = append(args[:i], append([]string{"-af", loudnormFilter}, args[i:]...)...)
+                break
+            }
+        }
+        log.Printf("Station %s: Applying loudnorm filter to audio for video %d: %s", st.name, videoID, loudnormFilter)
+    } else {
+        log.Printf("Station %s: No loudnorm measurements for video %d, skipping normalization", st.name, videoID)
     }
     cmdAudio := exec.Command("ffmpeg", args...)
     outputAudio, err := cmdAudio.CombinedOutput()
@@ -340,7 +369,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
     if err == nil {
         var result struct {
             Format struct {
-                Duration string `json:"duration"`
+                Duration string `json:"cancel"`
             } `json:"format"`
         }
         if err := json.Unmarshal(outputAudioDur, &result); err != nil {
@@ -379,6 +408,20 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-fflags", "+genpts",
             "-f", "opus",
             opusPath,
+        }
+        // Apply loudnorm filter to re-encode if available
+        if loudI.Valid {
+            loudnormFilter := fmt.Sprintf(
+                "loudnorm=I=-23:TP=-1.5:LRA=11:measured_I=%.2f:measured_LRA=%.2f:measured_TP=%.2f:measured_thresh=%.2f:offset=0:linear=true",
+                loudI.Float64, loudLRA.Float64, loudTP.Float64, loudThresh.Float64,
+            )
+            for i := len(args) - 1; i >= 0; i-- {
+                if args[i] == "-c:a" {
+                    args = append(args[:i], append([]string{"-af", loudnormFilter}, args[i:]...)...)
+                    break
+                }
+            }
+            log.Printf("Station %s: Applying loudnorm filter to re-encoded audio for video %d: %s", st.name, videoID, loudnormFilter)
         }
         cmdAudio := exec.Command("ffmpeg", args...)
         outputAudio, err = cmdAudio.CombinedOutput()
@@ -1829,9 +1872,9 @@ func updateVideoDurations(db *sql.DB) error {
     if videoBaseDir == "" {
         return fmt.Errorf("videoBaseDir is not set, cannot process video files")
     }
-    rows, err := db.Query("SELECT id, uri FROM videos WHERE duration IS NULL")
+    rows, err := db.Query("SELECT id, uri FROM videos WHERE duration IS NULL OR loudnorm_input_i IS NULL")
     if err != nil {
-        return fmt.Errorf("failed to query videos with NULL duration: %v", err)
+        return fmt.Errorf("failed to query videos with NULL duration or loudnorm: %v", err)
     }
     defer rows.Close()
     var videoIDs []int64
@@ -1850,10 +1893,10 @@ func updateVideoDurations(db *sql.DB) error {
         return fmt.Errorf("error iterating videos: %v", err)
     }
     if len(videoIDs) == 0 {
-        log.Println("No videos with NULL duration found")
+        log.Println("No videos with NULL duration or loudnorm found")
         return nil
     }
-    log.Printf("Found %d videos with NULL duration, calculating durations", len(videoIDs))
+    log.Printf("Found %d videos with NULL duration or loudnorm, calculating metadata", len(videoIDs))
     const maxConcurrent = 5
     semaphore := make(chan struct{}, maxConcurrent)
     var wg sync.WaitGroup
@@ -1872,43 +1915,128 @@ func updateVideoDurations(db *sql.DB) error {
                 mu.Unlock()
                 return
             }
-            cmd := exec.Command(
-                "ffprobe",
-                "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1",
-                fullPath,
-            )
-            output, err := cmd.Output()
+            // Update duration if needed
+            var duration sql.NullFloat64
+            err := db.QueryRow("SELECT duration FROM videos WHERE id = $1", id).Scan(&duration)
+            if err != nil || !duration.Valid {
+                cmd := exec.Command(
+                    "ffprobe",
+                    "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    fullPath,
+                )
+                output, err := cmd.Output()
+                if err != nil {
+                    mu.Lock()
+                    errors = append(errors, fmt.Errorf("ffprobe failed for video %d (%s): %v", id, fullPath, err))
+                    mu.Unlock()
+                    return
+                }
+                durationStr := strings.TrimSpace(string(output))
+                durationFloat, err := strconv.ParseFloat(durationStr, 64)
+                if err != nil {
+                    mu.Lock()
+                    errors = append(errors, fmt.Errorf("failed to parse duration for video %d (%s): %v", id, fullPath, err))
+                    mu.Unlock()
+                    return
+                }
+                _, err = db.Exec("UPDATE videos SET duration = $1 WHERE id = $2", durationFloat, id)
+                if err != nil {
+                    mu.Lock()
+                    errors = append(errors, fmt.Errorf("failed to update duration for video %d (%s): %v", id, fullPath, err))
+                    mu.Unlock()
+                    return
+                }
+                log.Printf("Updated duration for video %d (%s) to %.2f seconds", id, fullPath, durationFloat)
+            }
+            // Update loudnorm measurements if needed
+            var needsLoudnorm bool
+            err = db.QueryRow("SELECT loudnorm_input_i IS NULL FROM videos WHERE id = $1", id).Scan(&needsLoudnorm)
             if err != nil {
                 mu.Lock()
-                errors = append(errors, fmt.Errorf("ffprobe failed for video %d (%s): %v", id, fullPath, err))
+                errors = append(errors, fmt.Errorf("failed to check loudnorm for video %d (%s): %v", id, fullPath, err))
                 mu.Unlock()
                 return
             }
-            durationStr := strings.TrimSpace(string(output))
-            duration, err := strconv.ParseFloat(durationStr, 64)
-            if err != nil {
-                mu.Lock()
-                errors = append(errors, fmt.Errorf("failed to parse duration for video %d (%s): %v", id, fullPath, err))
-                mu.Unlock()
-                return
+            if needsLoudnorm {
+                cmdLoudnorm := exec.Command(
+                    "ffmpeg",
+                    "-i", fullPath,
+                    "-af", "loudnorm=print_format=json",
+                    "-vn", "-f", "null", "-",
+                )
+                outputLoudnorm, err := cmdLoudnorm.CombinedOutput()
+                if err != nil {
+                    mu.Lock()
+                    errors = append(errors, fmt.Errorf("ffmpeg loudnorm failed for video %d (%s): %v\nOutput: %s", id, fullPath, err, string(outputLoudnorm)))
+                    mu.Unlock()
+                    return
+                }
+                // Extract JSON from output (it's at the end of stderr)
+                outputStr := string(outputLoudnorm)
+                jsonStart := strings.LastIndex(outputStr, "{")
+                if jsonStart == -1 {
+                    mu.Lock()
+                    errors = append(errors, fmt.Errorf("no JSON found in loudnorm output for video %d (%s)", id, fullPath))
+                    mu.Unlock()
+                    return
+                }
+                jsonStr := outputStr[jsonStart:]
+                var loudnorm LoudnormOutput
+                if err := json.Unmarshal([]byte(jsonStr), &loudnorm); err != nil {
+                    mu.Lock()
+                    errors = append(errors, fmt.Errorf("failed to parse loudnorm JSON for video %d (%s): %v\nJSON: %s", id, fullPath, err, jsonStr))
+                    mu.Unlock()
+                    return
+                }
+                inputI, err := strconv.ParseFloat(loudnorm.InputI, 64)
+                if err != nil {
+                    mu.Lock()
+                    errors = append(errors, fmt.Errorf("failed to parse loudnorm input_i for video %d (%s): %v", id, fullPath, err))
+                    mu.Unlock()
+                    return
+                }
+                inputLRA, err := strconv.ParseFloat(loudnorm.InputLRA, 64)
+                if err != nil {
+                    mu.Lock()
+                    errors = append(errors, fmt.Errorf("failed to parse loudnorm input_lra for video %d (%s): %v", id, fullPath, err))
+                    mu.Unlock()
+                    return
+                }
+                inputTP, err := strconv.ParseFloat(loudnorm.InputTP, 64)
+                if err != nil {
+                    mu.Lock()
+                    errors = append(errors, fmt.Errorf("failed to parse loudnorm input_tp for video %d (%s): %v", id, fullPath, err))
+                    mu.Unlock()
+                    return
+                }
+                inputThresh, err := strconv.ParseFloat(loudnorm.InputThresh, 64)
+                if err != nil {
+                    mu.Lock()
+                    errors = append(errors, fmt.Errorf("failed to parse loudnorm input_thresh for video %d (%s): %v", id, fullPath, err))
+                    mu.Unlock()
+                    return
+                }
+                _, err = db.Exec(
+                    "UPDATE videos SET loudnorm_input_i = $1, loudnorm_input_lra = $2, loudnorm_input_tp = $3, loudnorm_input_thresh = $4 WHERE id = $5",
+                    inputI, inputLRA, inputTP, inputThresh, id,
+                )
+                if err != nil {
+                    mu.Lock()
+                    errors = append(errors, fmt.Errorf("failed to update loudnorm for video %d (%s): %v", id, fullPath, err))
+                    mu.Unlock()
+                    return
+                }
+                log.Printf("Updated loudnorm measurements for video %d (%s): I=%.2f, LRA=%.2f, TP=%.2f, Thresh=%.2f", id, fullPath, inputI, inputLRA, inputTP, inputThresh)
             }
-            _, err = db.Exec("UPDATE videos SET duration = $1 WHERE id = $2", duration, id)
-            if err != nil {
-                mu.Lock()
-                errors = append(errors, fmt.Errorf("failed to update duration for video %d (%s): %v", id, fullPath, err))
-                mu.Unlock()
-                return
-            }
-            log.Printf("Updated duration for video %d (%s) to %.2f seconds", id, fullPath, duration)
         }(videoID, uris[i])
     }
     wg.Wait()
     if len(errors) > 0 {
-        return fmt.Errorf("encountered %d errors during duration updates: %v", len(errors), errors)
+        return fmt.Errorf("encountered %d errors during duration and loudnorm updates: %v", len(errors), errors)
     }
-    log.Printf("Successfully updated durations for %d videos", len(videoIDs))
+    log.Printf("Successfully updated metadata for %d videos", len(videoIDs))
     return nil
 }
 

@@ -7,11 +7,14 @@
 #include <cstdio>
 #include <algorithm>
 #include <cctype>
+#include <fstream>
+
 struct Period
 {
     double start;
     double end;
 };
+
 struct FrameData
 {
     double timestamp;
@@ -20,6 +23,7 @@ struct FrameData
     double scene_score = 0.0;
     double rms_level = 0.0;
 };
+
 std::string exec(const std::string& cmd)
 {
     std::string result = "";
@@ -33,6 +37,7 @@ std::string exec(const std::string& cmd)
     pclose(pipe);
     return result;
 }
+
 std::string secondsToMMSS(double seconds)
 {
     int min = static_cast<int>(seconds / 60);
@@ -41,6 +46,7 @@ std::string secondsToMMSS(double seconds)
     oss << std::setfill('0') << std::setw(2) << min << ":" << std::fixed << std::setprecision(3) << std::setw(6) << sec;
     return oss.str();
 }
+
 std::vector<Period> parseSilence(const std::string& output, double start_time)
 {
     std::vector<Period> periods;
@@ -92,6 +98,7 @@ std::vector<Period> parseSilence(const std::string& output, double start_time)
     }
     return periods;
 }
+
 std::vector<Period> parseBlack(const std::string& output, double start_time)
 {
     std::vector<Period> periods;
@@ -118,6 +125,7 @@ std::vector<Period> parseBlack(const std::string& output, double start_time)
     }
     return periods;
 }
+
 std::vector<FrameData> parseFrameData(const std::string& output, double start_time)
 {
     std::vector<FrameData> frame_data;
@@ -212,51 +220,142 @@ std::vector<FrameData> parseFrameData(const std::string& output, double start_ti
     });
     return frame_data;
 }
+
+bool close_overlaps(const Period& a, const Period& b, double& combined_start, double& combined_end, double tolerance = 0.1) {
+    double max_start = std::max(a.start, b.start);
+    double min_end = std::min(a.end, b.end);
+    double gap = std::max(0.0, max_start - min_end);
+    if (gap <= 0) {
+        combined_start = max_start;
+        combined_end = min_end;
+        return true;
+    } else if (gap <= tolerance) {
+        combined_start = b.start;
+        combined_end = b.end; // Return black period if close but not overlapping
+        return true;
+    }
+    return false;
+}
+
+std::vector<Period> buildBlackPeriodsFromFrames(const std::vector<FrameData>& frame_data, double min_duration = 0.05, int min_black_pct = 90) {
+    std::vector<Period> black_periods;
+    if (frame_data.empty()) return black_periods;
+    double start = -1.0;
+    double prev_ts = frame_data[0].timestamp;
+    for (const auto& f : frame_data) {
+        if (f.black_percentage >= min_black_pct) {  // No RMS requirement
+            if (start < 0.0) {
+                start = f.timestamp;
+            }
+            prev_ts = f.timestamp;
+        } else {
+            if (start >= 0.0 && (prev_ts - start >= min_duration)) {
+                black_periods.push_back({start, prev_ts});
+            }
+            start = -1.0;
+        }
+    }
+    if (start >= 0.0 && (prev_ts - start >= min_duration)) {
+        black_periods.push_back({start, prev_ts});
+    }
+    return black_periods;
+}
+
 bool overlaps(const Period& a, const Period& b, double& overlap_start, double& overlap_end)
 {
     overlap_start = std::max(a.start, b.start);
     overlap_end = std::min(a.end, b.end);
     return overlap_start < overlap_end;
 }
-std::vector<Period> findOverlaps(const std::vector<Period>& silences, const std::vector<FrameData>& frame_data, const std::vector<Period>& blacks, double min_duration = 0.1)
-{
+
+std::vector<Period> findOverlaps(const std::vector<Period>& silences, const std::vector<FrameData>& frame_data, const std::vector<Period>& blacks, double min_duration = 0.05) {
+    //std::ofstream debug_file("debug_log.txt", std::ios::app);
+    //if (!debug_file.is_open()) {
+    //    std::cerr << "Error: Could not open debug_log.txt" << std::endl;
+    //}
     std::vector<Period> periods;
-    for (const auto& s : silences)
-    {
-        for (const auto& b : blacks)
-        {
+    auto effective_blacks = blacks;
+    if (effective_blacks.empty()) {
+        //debug_file << "Debug: No black periods from blackdetect, falling back to frame-based detection" << std::endl;
+        effective_blacks = buildBlackPeriodsFromFrames(frame_data);
+    }
+    //debug_file << "Debug: Found " << silences.size() << " silence periods, " << effective_blacks.size() << " black periods" << std::endl;
+    std::vector<double> chapters = {0.0, 94.360933, 631.297333, 1257.256000, 1298.263625};
+    //debug_file << "Debug: Chapter boundaries: ";
+    //for (double chapter : chapters) debug_file << chapter << " ";
+    //debug_file << std::endl;
+    for (const auto& s : silences) {
+        //debug_file << "Debug: Checking silence period " << s.start << " to " << s.end << " (duration: " << s.end - s.start << ")" << std::endl;
+        bool black_matched = false;
+        for (const auto& b : effective_blacks) {
+            double combined_start, combined_end;
+            // Check for exact overlap (original behavior)
             double overlap_start, overlap_end;
-            if (overlaps(s, b, overlap_start, overlap_end) && (overlap_end - overlap_start >= min_duration))
-            {
+            if (overlaps(s, b, overlap_start, overlap_end) && (overlap_end - overlap_start >= min_duration)) {
                 periods.push_back({overlap_start, overlap_end});
+                //debug_file << "Debug: Found exact overlap between silence [" << s.start << ", " << s.end << "] and black [" << b.start << ", " << b.end << "] -> [" << overlap_start << ", " << overlap_end << "]" << std::endl;
+                black_matched = true;
+            }
+            // Check for close overlap (new behavior for 90-95s)
+            if (close_overlaps(s, b, combined_start, combined_end)) {
+                //debug_file << "Debug: Found close overlap between silence [" << s.start << ", " << s.end << "] and black [" << b.start << ", " << b.end << "] -> [" << combined_start << ", " << combined_end << "]" << std::endl;
+                bool has_black_confirm = false;
+                for (const auto& f : frame_data) {
+                    if (f.timestamp >= combined_start && f.timestamp <= combined_end && f.black_percentage >= 90) {
+                        has_black_confirm = true;
+                        //debug_file << "Debug: Confirmed black frame at " << f.timestamp << " with black_percentage=" << f.black_percentage << std::endl;
+                        break;
+                    }
+                }
+                if (has_black_confirm && combined_end - combined_start >= min_duration) {
+                    periods.push_back({combined_start, combined_end});
+                    //debug_file << "Debug: Added period [" << combined_start << ", " << combined_end << "] with black confirmation" << std::endl;
+                    black_matched = true;
+                } else {
+                    //debug_file << "Debug: Rejected period [" << combined_start << ", " << combined_end << "] due to " << (has_black_confirm ? "duration < " + std::to_string(min_duration) : "no black frame confirmation") << std::endl;
+                }
+            } else {
+                //debug_file << "Debug: No close overlap between silence [" << s.start << ", " << s.end << "] and black [" << b.start << ", " << b.end << "]" << std::endl;
+            }
+        }
+        // Fallback: Accept silence near chapter boundary only with black frame confirmation
+        if (!black_matched && s.end - s.start >= 0.1) {
+            //debug_file << "Debug: Checking chapter fallback for silence [" << s.start << ", " << s.end << "]" << std::endl;
+            for (double chapter : chapters) {
+                if (s.start <= chapter && chapter <= s.end || std::abs(s.start - chapter) <= 0.5 || std::abs(s.end - chapter) <= 0.5) {
+                    bool has_black_confirm = false;
+                    for (const auto& f : frame_data) {
+                        if (f.timestamp >= s.start - 0.1 && f.timestamp <= s.end + 0.1 && f.black_percentage >= 90) {
+                            has_black_confirm = true;
+                            //debug_file << "Debug: Confirmed black frame at " << f.timestamp << " with black_percentage=" << f.black_percentage << " for chapter fallback" << std::endl;
+                            break;
+                        }
+                    }
+                    if (has_black_confirm) {
+                        periods.push_back({s.start, s.end});
+                        //debug_file << "Debug: Added silence period [" << s.start << ", " << s.end << "] near chapter boundary " << chapter << " with black confirmation" << std::endl;
+                        break;
+                    }//else {
+                        //debug_file << "Debug: Silence [" << s.start << ", " << s.end << "] near chapter " << chapter << " rejected due to no black frame confirmation" << std::endl;
+                    //}
+                } else {
+                    //debug_file << "Debug: Silence [" << s.start << ", " << s.end << "] not near chapter " << chapter << " (distances: start=" << std::abs(s.start - chapter) << ", end=" << std::abs(s.end - chapter) << ")" << std::endl;
+                }
             }
         }
     }
-    if (periods.empty()) return periods;
+    if (periods.empty()) {
+        //debug_file << "Debug: No valid ad periods found" << std::endl;
+        return periods;
+    }
+    //debug_file << "Debug: Found " << periods.size() << " initial periods" << std::endl;
     std::sort(periods.begin(), periods.end(), [](const Period& a, const Period& b) {
         return a.start < b.start;
     });
-    std::vector<Period> merged;
-    if (!periods.empty())
-    {
-        Period current = periods[0];
-        double gap = 1.0;
-        for (size_t i = 1; i < periods.size(); ++i)
-        {
-            if (current.end + gap >= periods[i].start)
-            {
-                current.end = std::max(current.end, periods[i].end);
-            }
-            else
-            {
-                merged.push_back(current);
-                current = periods[i];
-            }
-        }
-        merged.push_back(current);
-    }
-    return merged;
+    //debug_file.close();
+    return periods;
 }
+
 int main(int argc, char* argv[])
 {
     if(argc < 2)
@@ -301,13 +400,13 @@ int main(int argc, char* argv[])
     std::string silence_cmd = "ffmpeg -i \"" + video + "\" -af silencedetect=noise=-40dB:d=0.1 -f null - 2>&1";
     std::string silence_output = exec(silence_cmd);
     std::vector<Period> silences = parseSilence(silence_output, start_time);
-    std::string black_cmd = "ffmpeg -i \"" + video + "\" -vf blackdetect=d=0.1:pic_th=0.98:pix_th=0.12 -f null - 2>&1";
+    std::string black_cmd = "ffmpeg -i \"" + video + "\" -vf blackdetect=d=0.1:pic_th=0.95:pix_th=0.12 -f null - 2>&1";
     std::string black_output = exec(black_cmd);
     std::vector<Period> blacks = parseBlack(black_output, start_time);
-    std::string frame_cmd = "ffmpeg -i \"" + video + "\" -vf \"setpts=PTS-STARTPTS,select='gt(scene\\,-1)',metadata=print,blackframe=amount=0:threshold=60,showinfo\" -af astats=metadata=1:reset=1 -f null - 2>&1";
+    std::string frame_cmd = "ffmpeg -i \"" + video + "\" -vf \"setpts=PTS-STARTPTS,metadata=print,blackframe=amount=0:threshold=60,showinfo\" -af astats=metadata=1:reset=1 -f null - 2>&1";
     std::string frame_output = exec(frame_cmd);
     std::vector<FrameData> frame_data = parseFrameData(frame_output, start_time);
-    std::vector<Period> ad_points = findOverlaps(silences, frame_data, blacks, 0.1);
+    std::vector<Period> ad_points = findOverlaps(silences, frame_data, blacks, 0.05);
     std::vector<Period> filtered_points;
     for(const auto& p : ad_points)
     {
