@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <regex>
 
 struct Period
 {
@@ -53,47 +54,46 @@ std::vector<Period> parseSilence(const std::string& output, double start_time)
     std::istringstream iss(output);
     std::string line;
     double current_start = -1.0;
+    std::regex time_regex(R"((-?[\d.]+))");
     while(std::getline(iss, line))
     {
         size_t pos_start = line.find("[silencedetect @");
         if(pos_start == std::string::npos) continue;
         size_t pos_silence_start = line.find("silence_start: ");
         size_t pos_silence_end = line.find("silence_end: ");
+        std::smatch match;
         if(pos_silence_start != std::string::npos)
         {
-            size_t num_pos = pos_silence_start + 15;
-            std::string num_str;
-            while(num_pos < line.size() && (std::isdigit(line[num_pos]) || line[num_pos] == '.' || line[num_pos] == '-'))
-            {
-                num_str += line[num_pos];
-                ++num_pos;
-            }
-            try {
-                current_start = start_time + std::stod(num_str);
-            } catch (...) {
-                continue;
+            std::string substr = line.substr(pos_silence_start + 15);
+            if (std::regex_search(substr, match, time_regex) && match.size() > 1) {
+                try {
+                    current_start = start_time + std::stod(match[1].str());
+                } catch (...) {
+                    std::cerr << "Warning: Failed to parse silence_start time in line: " << line << std::endl;
+                    continue;
+                }
+            } else {
+                std::cerr << "Warning: No time match for silence_start in line: " << line << std::endl;
             }
         }
         else if(pos_silence_end != std::string::npos && current_start >= start_time)
         {
-            size_t end_pos = pos_silence_end + 13;
-            std::string end_str;
-            while(end_pos < line.size() && (std::isdigit(line[end_pos]) || line[end_pos] == '.' || line[end_pos] == '-'))
-            {
-                end_str += line[end_pos];
-                ++end_pos;
+            std::string substr = line.substr(pos_silence_end + 13);
+            if (std::regex_search(substr, match, time_regex) && match.size() > 1) {
+                try {
+                    double end = start_time + std::stod(match[1].str());
+                    if(end - current_start >= 0.005)
+                    {
+                        periods.push_back({current_start, end});
+                    }
+                    current_start = -1.0;
+                } catch (...) {
+                    std::cerr << "Warning: Failed to parse silence_end time in line: " << line << std::endl;
+                    continue;
+                }
+            } else {
+                std::cerr << "Warning: No time match for silence_end in line: " << line << std::endl;
             }
-            double end;
-            try {
-                end = start_time + std::stod(end_str);
-            } catch (...) {
-                continue;
-            }
-            if(end - current_start >= 0.005)
-            {
-                periods.push_back({current_start, end});
-            }
-            current_start = -1.0;
         }
     }
     return periods;
@@ -237,7 +237,7 @@ bool close_overlaps(const Period& a, const Period& b, double& combined_start, do
     return false;
 }
 
-std::vector<Period> buildBlackPeriodsFromFrames(const std::vector<FrameData>& frame_data, double min_duration = 0.05, int min_black_pct = 90) {
+std::vector<Period> buildBlackPeriodsFromFrames(const std::vector<FrameData>& frame_data, double min_duration = 0.01, int min_black_pct = 90) {
     std::vector<Period> black_periods;
     if (frame_data.empty()) return black_periods;
     double start = -1.0;
@@ -268,91 +268,60 @@ bool overlaps(const Period& a, const Period& b, double& overlap_start, double& o
     return overlap_start < overlap_end;
 }
 
-std::vector<Period> findOverlaps(const std::vector<Period>& silences, const std::vector<FrameData>& frame_data, const std::vector<Period>& blacks, double min_duration = 0.05) {
-    //std::ofstream debug_file("debug_log.txt", std::ios::app);
-    //if (!debug_file.is_open()) {
-    //    std::cerr << "Error: Could not open debug_log.txt" << std::endl;
-    //}
+std::vector<Period> findOverlaps(const std::vector<Period>& silences, const std::vector<FrameData>& frame_data, const std::vector<Period>& blacks, double min_duration = 0.01) {
     std::vector<Period> periods;
     auto effective_blacks = blacks;
     if (effective_blacks.empty()) {
-        //debug_file << "Debug: No black periods from blackdetect, falling back to frame-based detection" << std::endl;
         effective_blacks = buildBlackPeriodsFromFrames(frame_data);
     }
-    //debug_file << "Debug: Found " << silences.size() << " silence periods, " << effective_blacks.size() << " black periods" << std::endl;
     std::vector<double> chapters = {0.0, 94.360933, 631.297333, 1257.256000, 1298.263625};
-    //debug_file << "Debug: Chapter boundaries: ";
-    //for (double chapter : chapters) debug_file << chapter << " ";
-    //debug_file << std::endl;
     for (const auto& s : silences) {
-        //debug_file << "Debug: Checking silence period " << s.start << " to " << s.end << " (duration: " << s.end - s.start << ")" << std::endl;
         bool black_matched = false;
         for (const auto& b : effective_blacks) {
             double combined_start, combined_end;
-            // Check for exact overlap (original behavior)
             double overlap_start, overlap_end;
             if (overlaps(s, b, overlap_start, overlap_end) && (overlap_end - overlap_start >= min_duration)) {
                 periods.push_back({overlap_start, overlap_end});
-                //debug_file << "Debug: Found exact overlap between silence [" << s.start << ", " << s.end << "] and black [" << b.start << ", " << b.end << "] -> [" << overlap_start << ", " << overlap_end << "]" << std::endl;
                 black_matched = true;
             }
-            // Check for close overlap (new behavior for 90-95s)
             if (close_overlaps(s, b, combined_start, combined_end)) {
-                //debug_file << "Debug: Found close overlap between silence [" << s.start << ", " << s.end << "] and black [" << b.start << ", " << b.end << "] -> [" << combined_start << ", " << combined_end << "]" << std::endl;
                 bool has_black_confirm = false;
                 for (const auto& f : frame_data) {
                     if (f.timestamp >= combined_start && f.timestamp <= combined_end && f.black_percentage >= 90) {
                         has_black_confirm = true;
-                        //debug_file << "Debug: Confirmed black frame at " << f.timestamp << " with black_percentage=" << f.black_percentage << std::endl;
                         break;
                     }
                 }
                 if (has_black_confirm && combined_end - combined_start >= min_duration) {
                     periods.push_back({combined_start, combined_end});
-                    //debug_file << "Debug: Added period [" << combined_start << ", " << combined_end << "] with black confirmation" << std::endl;
                     black_matched = true;
-                } else {
-                    //debug_file << "Debug: Rejected period [" << combined_start << ", " << combined_end << "] due to " << (has_black_confirm ? "duration < " + std::to_string(min_duration) : "no black frame confirmation") << std::endl;
                 }
-            } else {
-                //debug_file << "Debug: No close overlap between silence [" << s.start << ", " << s.end << "] and black [" << b.start << ", " << b.end << "]" << std::endl;
             }
         }
-        // Fallback: Accept silence near chapter boundary only with black frame confirmation
-        if (!black_matched && s.end - s.start >= 0.1) {
-            //debug_file << "Debug: Checking chapter fallback for silence [" << s.start << ", " << s.end << "]" << std::endl;
+        if (!black_matched && s.end - s.start >= 0.01) {
             for (double chapter : chapters) {
                 if (s.start <= chapter && chapter <= s.end || std::abs(s.start - chapter) <= 0.5 || std::abs(s.end - chapter) <= 0.5) {
                     bool has_black_confirm = false;
                     for (const auto& f : frame_data) {
                         if (f.timestamp >= s.start - 0.1 && f.timestamp <= s.end + 0.1 && f.black_percentage >= 90) {
                             has_black_confirm = true;
-                            //debug_file << "Debug: Confirmed black frame at " << f.timestamp << " with black_percentage=" << f.black_percentage << " for chapter fallback" << std::endl;
                             break;
                         }
                     }
                     if (has_black_confirm) {
                         periods.push_back({s.start, s.end});
-                        //debug_file << "Debug: Added silence period [" << s.start << ", " << s.end << "] near chapter boundary " << chapter << " with black confirmation" << std::endl;
                         break;
-                    }//else {
-                        //debug_file << "Debug: Silence [" << s.start << ", " << s.end << "] near chapter " << chapter << " rejected due to no black frame confirmation" << std::endl;
-                    //}
-                } else {
-                    //debug_file << "Debug: Silence [" << s.start << ", " << s.end << "] not near chapter " << chapter << " (distances: start=" << std::abs(s.start - chapter) << ", end=" << std::abs(s.end - chapter) << ")" << std::endl;
+                    }
                 }
             }
         }
     }
     if (periods.empty()) {
-        //debug_file << "Debug: No valid ad periods found" << std::endl;
         return periods;
     }
-    //debug_file << "Debug: Found " << periods.size() << " initial periods" << std::endl;
     std::sort(periods.begin(), periods.end(), [](const Period& a, const Period& b) {
         return a.start < b.start;
     });
-    //debug_file.close();
     return periods;
 }
 
@@ -360,18 +329,28 @@ int main(int argc, char* argv[])
 {
     if(argc < 2)
     {
-        std::cerr << "Usage: " << argv[0] << " <video_file> [--no-format] [--hide-decimal] [--hide-mmss] [--hide-start] [--hide-midpoint] [--hide-end]" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <video_file> [start] [end] [--no-format] [--hide-decimal] [--hide-mmss] [--hide-start] [--hide-midpoint] [--hide-end]" << std::endl;
         return 1;
     }
     std::string video = argv[1];
-    const double start_time = 0.0;
+    double start_time = 0.0;
+    double duration = 0.0;  // 0 means whole video
+    if (argc >= 4) {
+        try {
+            start_time = std::stod(argv[2]);
+            duration = std::stod(argv[3]) - start_time;
+        } catch (...) {
+            std::cerr << "Invalid start or end time." << std::endl;
+            return 1;
+        }
+    }
     bool show_decimal = true;
     bool no_format = false;
     bool show_mmss = true;
     bool show_start = true;
     bool show_midpoint = true;
     bool show_end = true;
-    for(int i = 2; i < argc; ++i)
+    for(int i = (argc >= 4 ? 4 : 2); i < argc; ++i)
     {
         std::string arg = argv[i];
         if(arg == "--hide-decimal") show_decimal = false;
@@ -386,6 +365,10 @@ int main(int argc, char* argv[])
             return 1;
         }
     }
+    std::string ss_t = "";
+    if (duration > 0.0) {
+        ss_t = "-ss " + std::to_string(start_time) + " -t " + std::to_string(duration) + " ";
+    }
     std::string duration_cmd = "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"" + video + "\"";
     std::string duration_output = exec(duration_cmd);
     duration_output.erase(std::remove(duration_output.begin(), duration_output.end(), '\n'), duration_output.end());
@@ -397,16 +380,16 @@ int main(int argc, char* argv[])
     }
     double video_duration = std::stod(duration_output);
     if(!no_format) std::cout << "Video duration: " << std::fixed << std::setprecision(3) << video_duration << std::endl;
-    std::string silence_cmd = "ffmpeg -i \"" + video + "\" -af silencedetect=noise=-40dB:d=0.1 -f null - 2>&1";
+    std::string silence_cmd = "ffmpeg " + ss_t + "-i \"" + video + "\" -af silencedetect=noise=-30dB:d=0.05 -f null - 2>&1";
     std::string silence_output = exec(silence_cmd);
     std::vector<Period> silences = parseSilence(silence_output, start_time);
-    std::string black_cmd = "ffmpeg -i \"" + video + "\" -vf blackdetect=d=0.1:pic_th=0.95:pix_th=0.12 -f null - 2>&1";
+    std::string black_cmd = "ffmpeg " + ss_t + "-i \"" + video + "\" -vf blackdetect=d=0.05:pic_th=0.90:pix_th=0.10 -f null - 2>&1";
     std::string black_output = exec(black_cmd);
     std::vector<Period> blacks = parseBlack(black_output, start_time);
-    std::string frame_cmd = "ffmpeg -i \"" + video + "\" -vf \"setpts=PTS-STARTPTS,metadata=print,blackframe=amount=0:threshold=60,showinfo\" -af astats=metadata=1:reset=1 -f null - 2>&1";
+    std::string frame_cmd = "ffmpeg " + ss_t + "-i \"" + video + "\" -vf \"setpts=PTS-STARTPTS,select='gt(scene\\,0.3)',metadata=print,blackframe=amount=0:threshold=32,showinfo\" -af astats=metadata=1:reset=1 -f null - 2>&1";
     std::string frame_output = exec(frame_cmd);
     std::vector<FrameData> frame_data = parseFrameData(frame_output, start_time);
-    std::vector<Period> ad_points = findOverlaps(silences, frame_data, blacks, 0.05);
+    std::vector<Period> ad_points = findOverlaps(silences, frame_data, blacks, 0.01);
     std::vector<Period> filtered_points;
     for(const auto& p : ad_points)
     {
