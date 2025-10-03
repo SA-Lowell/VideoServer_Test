@@ -1,5 +1,7 @@
 Final Fantasy X Promo Trailer 2 has an issue where it goes to black screen. FIX IT
 
+ffprobe -i "Z:\Videos\Commercials\PS2\Final Fantasy X\Final Fantasy X Promo Trailer 2.mp4" -show_streams -show_format
+
 Start Postgres server:
 	set PGDATA=C:\Program Files\PostgreSQL\17\data
 	pg_ctl start

@@ -237,7 +237,7 @@ bool close_overlaps(const Period& a, const Period& b, double& combined_start, do
     return false;
 }
 
-std::vector<Period> buildBlackPeriodsFromFrames(const std::vector<FrameData>& frame_data, double min_duration = 0.01, int min_black_pct = 90) {
+std::vector<Period> buildBlackPeriodsFromFrames(const std::vector<FrameData>& frame_data, double min_duration = 0.01, int min_black_pct = 95) {
     std::vector<Period> black_periods;
     if (frame_data.empty()) return black_periods;
     double start = -1.0;
@@ -287,7 +287,7 @@ std::vector<Period> findOverlaps(const std::vector<Period>& silences, const std:
             if (close_overlaps(s, b, combined_start, combined_end)) {
                 bool has_black_confirm = false;
                 for (const auto& f : frame_data) {
-                    if (f.timestamp >= combined_start && f.timestamp <= combined_end && f.black_percentage >= 90) {
+                    if (f.timestamp >= combined_start && f.timestamp <= combined_end && f.black_percentage >= 95) {
                         has_black_confirm = true;
                         break;
                     }
@@ -303,7 +303,7 @@ std::vector<Period> findOverlaps(const std::vector<Period>& silences, const std:
                 if (s.start <= chapter && chapter <= s.end || std::abs(s.start - chapter) <= 0.5 || std::abs(s.end - chapter) <= 0.5) {
                     bool has_black_confirm = false;
                     for (const auto& f : frame_data) {
-                        if (f.timestamp >= s.start - 0.1 && f.timestamp <= s.end + 0.1 && f.black_percentage >= 90) {
+                        if (f.timestamp >= s.start - 0.1 && f.timestamp <= s.end + 0.1 && f.black_percentage >= 95) {
                             has_black_confirm = true;
                             break;
                         }
@@ -383,7 +383,7 @@ int main(int argc, char* argv[])
     std::string silence_cmd = "ffmpeg " + ss_t + "-i \"" + video + "\" -af silencedetect=noise=-30dB:d=0.05 -f null - 2>&1";
     std::string silence_output = exec(silence_cmd);
     std::vector<Period> silences = parseSilence(silence_output, start_time);
-    std::string black_cmd = "ffmpeg " + ss_t + "-i \"" + video + "\" -vf blackdetect=d=0.05:pic_th=0.90:pix_th=0.10 -f null - 2>&1";
+    std::string black_cmd = "ffmpeg " + ss_t + "-i \"" + video + "\" -vf blackdetect=d=0.05:pic_th=0.95:pix_th=0.1 -f null - 2>&1";
     std::string black_output = exec(black_cmd);
     std::vector<Period> blacks = parseBlack(black_output, start_time);
     std::string frame_cmd = "ffmpeg " + ss_t + "-i \"" + video + "\" -vf \"setpts=PTS-STARTPTS,select='gt(scene\\,0.3)',metadata=print,blackframe=amount=0:threshold=32,showinfo\" -af astats=metadata=1:reset=1 -f null - 2>&1";
