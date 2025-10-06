@@ -130,7 +130,6 @@ func sanitizeTrackID(name string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(name, " ", "_"), "'", "")
 }
 
-// Replace the existing processVideo function with this
 func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur float64) ([]string, [][]byte, string, float64, fpsPair, error) {
 	if db == nil {
 		return nil, nil, "", 0, fpsPair{}, fmt.Errorf("database connection is nil")
@@ -1589,12 +1588,15 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
 			if st.viewers == 0 {
 				close(st.stopCh)
 				st.stopCh = make(chan struct{})
+				mu.Lock()
 				if !st.adsEnabled {
-					mu.Lock()
 					delete(noAdsStations, stationName)
 					log.Printf("Removed no-ads station %s due to no viewers", stationName)
-					mu.Unlock()
+				} else {
+					delete(stations, stationName)
+					log.Printf("Removed station %s due to no viewers", stationName)
 				}
+				mu.Unlock()
 			}
 			st.mu.Unlock()
 			if err := pc.Close(); err != nil {
@@ -1714,7 +1716,7 @@ async function createOffer() {
             analyser = audioContext.createAnalyser();
             source.connect(analyser);
             analyser.connect(audioContext.destination);
-            log('Connected audio track to AudioContext, channels=' + source.channelCount);
+            log('Connected audio audio track to AudioContext, channels=' + source.channelCount);
             track.onmute = () => log('Track muted: kind=' + track.kind + ', id=' + track.id + ' - possible silence or no media flow');
             track.onunmute = () => {
                 log('Track unmuted: kind=' + track.kind + ', id=' + track.id + ' - media flowing');
@@ -2122,6 +2124,6 @@ func main() {
 	r.GET("/hls/*path", func(c *gin.Context) {
 		c.String(404, "Use WebRTC")
 	})
-	log.Printf("WebRTC TV server on %s. Stations: %v", Port, stations)
+	log.Printf("WebRTC TV server on %s. Stations will be loaded on demand.", Port)
 	log.Fatal(r.Run(Port))
 }
