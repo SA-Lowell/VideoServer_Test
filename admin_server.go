@@ -1053,8 +1053,10 @@ func apiVideosHandler(c *gin.Context) {
     search := strings.TrimSpace(c.Query("search"))
     titleIDStr := c.Query("title_id")
     stationIDStr := c.Query("station_id")
+	notInStationIDStr := c.Query("not_in_station_id")
     limitStr := c.Query("limit")
     offsetStr := c.Query("offset")
+	orderBy := c.Query("order_by")
     limit := 10
     if limitStr != "" {
         if l, err := strconv.Atoi(limitStr); err == nil {
@@ -1067,6 +1069,12 @@ func apiVideosHandler(c *gin.Context) {
             offset = o
         }
     }
+	var orderField string
+	if orderBy == "uri" {
+		orderField = "v.uri"
+	} else {
+		orderField = "v.id"
+	}
     query := `SELECT v.id, v.uri FROM videos v`
     args := []interface{}{}
     whereClauses := []string{}
@@ -1077,17 +1085,22 @@ func apiVideosHandler(c *gin.Context) {
             args = append(args, titleID)
         }
     }
-    if stationIDStr != "" {
-        stationID, err := strconv.ParseInt(stationIDStr, 10, 64)
-        if err == nil {
-            query += ` JOIN station_videos sv ON v.id = sv.video_id`
-            whereClauses = append(whereClauses, `sv.station_id = $`+strconv.Itoa(len(args)+1))
-            args = append(args, stationID)
-        }
-    } else {
-        // Ensure all videos are included when no station_id is provided
-        // No additional join or filter needed
-    }
+	if stationIDStr != "" {
+		stationID, err := strconv.ParseInt(stationIDStr, 10, 64)
+		if err == nil {
+			query += ` JOIN station_videos sv ON v.id = sv.video_id`
+			whereClauses = append(whereClauses, `sv.station_id = $`+strconv.Itoa(len(args)+1))
+			args = append(args, stationID)
+		}
+	}
+	if notInStationIDStr != "" {
+		notInStationID, err := strconv.ParseInt(notInStationIDStr, 10, 64)
+		if err == nil {
+			query += ` LEFT JOIN station_videos svx ON v.id = svx.video_id AND svx.station_id = $`+strconv.Itoa(len(args)+1)
+			whereClauses = append(whereClauses, `svx.station_id IS NULL`)
+			args = append(args, notInStationID)
+		}
+	}
     if search != "" {
         whereClauses = append(whereClauses, `v.uri ILIKE $`+strconv.Itoa(len(args)+1))
         args = append(args, "%"+search+"%")
@@ -1095,7 +1108,7 @@ func apiVideosHandler(c *gin.Context) {
     if len(whereClauses) > 0 {
         query += ` WHERE ` + strings.Join(whereClauses, " AND ")
     }
-    query += ` ORDER BY v.uri LIMIT $` + strconv.Itoa(len(args)+1) + ` OFFSET $` + strconv.Itoa(len(args)+2)
+    query += ` ORDER BY ` + orderField + ` LIMIT $` + strconv.Itoa(len(args)+1) + ` OFFSET $` + strconv.Itoa(len(args)+2)
     args = append(args, limit, offset)
     log.Printf("Executing query: %s with args: %v", query, args)
     rows, err := db.Query(query, args...)

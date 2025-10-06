@@ -78,6 +78,10 @@
         
         <div class="subsection">
             <h3>Assigned Videos</h3>
+            Order by: <select id="assigned-order-by">
+                <option value="id">ID</option>
+                <option value="uri">URI (ABC)</option>
+            </select>
             <table>
                 <thead>
                     <tr>
@@ -99,6 +103,10 @@
         <div class="subsection">
             <h3>Add Videos (Search Available Videos)</h3>
             <label>Search Videos: <input type="text" id="video-search" oninput="loadAvailableVideos(0)"></label>
+            Order by: <select id="video-order-by">
+                <option value="id">ID</option>
+                <option value="uri">URI (ABC)</option>
+            </select>
             <table>
                 <thead>
                     <tr>
@@ -184,8 +192,9 @@
 function loadAssignedVideos(page) {
     if (!selectedChannelId) return;
     currentAssignedPage = page < 0 ? 0 : page;
+    const orderBy = $('#assigned-order-by').val();
     $('#assigned-error').text('');
-    $.get('/api/videos', { station_id: selectedChannelId, limit, offset: currentAssignedPage * limit }, function(data) {
+    $.get('/api/videos', { station_id: selectedChannelId, limit, offset: currentAssignedPage * limit, order_by: orderBy }, function(data) {
         $('#assigned-videos-body').empty();
         console.log('Raw API response for assigned videos:', data); // Debug log
         if (!Array.isArray(data) || data.length === 0) {
@@ -214,6 +223,7 @@ function loadAssignedVideos(page) {
 function loadAvailableVideos(page) {
     currentAvailablePage = page < 0 ? 0 : page;
     const search = $('#video-search').val();
+    const orderBy = $('#video-order-by').val();
     $('#available-error').text('');
     console.log('Loading available videos, search:', search, 'page:', currentAvailablePage, 'selectedChannelId:', selectedChannelId);
     if (!selectedChannelId) {
@@ -221,48 +231,28 @@ function loadAvailableVideos(page) {
         console.error('No channel selected for available videos.');
         return;
     }
-    $.get('/api/videos', { search, limit, offset: currentAvailablePage * limit }, function(allVideos) {
-        console.log('All videos response:', allVideos);
-        if (!Array.isArray(allVideos)) {
-            $('#available-error').text('Invalid response for all videos.');
-            console.error('API /api/videos (all) failed:', allVideos);
+    $.get('/api/videos', { not_in_station_id: selectedChannelId, search, limit, offset: currentAvailablePage * limit, order_by: orderBy }, function(availableVideos) {
+        console.log('Available videos response:', availableVideos);
+        $('#available-videos-body').empty();
+        if (!Array.isArray(availableVideos) || availableVideos.length === 0) {
+            $('#available-error').text('No available videos to add.');
             return;
         }
-        $.get('/api/videos', { station_id: selectedChannelId }, function(assignedVideos) {
-            console.log('Assigned videos response:', assignedVideos);
-            // Treat null as empty array if no videos are assigned
-            assignedVideos = Array.isArray(assignedVideos) ? assignedVideos : [];
-            if (assignedVideos.length === 0) {
-                console.warn('No assigned videos returned, proceeding with empty set.');
-            }
-            const assignedIds = new Set(assignedVideos.map(v => v.ID));
-            console.log('Assigned IDs set:', Array.from(assignedIds));
-            const available = allVideos.filter(v => !assignedIds.has(v.ID));
-            console.log('Available videos after filtering:', available);
-            $('#available-videos-body').empty();
-            if (available.length === 0) {
-                $('#available-error').text('No available videos to add.');
-                return;
-            }
-            available.forEach(video => {
-                $('#available-videos-body').append(`
-                    <tr>
-                        <td>${video.ID || 'N/A'}</td>
-                        <td>${escapeHtml(video.URI || 'No URI')}</td>
-                        <td><button onclick="addVideoToChannel(${video.ID || 0})">Add</button></td>
-                    </tr>
-                `);
-            });
-            $('#available-prev').prop('disabled', currentAvailablePage === 0);
-            $('#available-next').prop('disabled', available.length < limit);
-            $('#available-page-info').text(`Page ${currentAvailablePage + 1}`);
-        }).fail(function(xhr) {
-            $('#available-error').text('Error filtering available videos: ' + (xhr.responseJSON?.error || 'Unknown error'));
-            console.error('API /api/videos (assigned) failed:', xhr.responseText, 'Status:', xhr.status);
+        availableVideos.forEach(video => {
+            $('#available-videos-body').append(`
+                <tr>
+                    <td>${video.ID || 'N/A'}</td>
+                    <td>${escapeHtml(video.URI || 'No URI')}</td>
+                    <td><button onclick="addVideoToChannel(${video.ID || 0})">Add</button></td>
+                </tr>
+            `);
         });
+        $('#available-prev').prop('disabled', currentAvailablePage === 0);
+        $('#available-next').prop('disabled', availableVideos.length < limit);
+        $('#available-page-info').text(`Page ${currentAvailablePage + 1}`);
     }).fail(function(xhr) {
         $('#available-error').text('Error loading available videos: ' + (xhr.responseJSON?.error || 'Unknown error'));
-        console.error('API /api/videos (all) failed:', xhr.responseText, 'Status:', xhr.status);
+        console.error('API /api/videos (available) failed:', xhr.responseText, 'Status:', xhr.status);
     });
 }
         
@@ -295,7 +285,11 @@ function removeVideoFromChannel(videoId) {
     }
 }
         
-        $(document).ready(function() { loadChannels(); });
+        $(document).ready(function() { 
+            loadChannels(); 
+            $('#assigned-order-by').on('change', function() { loadAssignedVideos(0); });
+            $('#video-order-by').on('change', function() { loadAvailableVideos(0); });
+        });
     </script>
 </body>
 </html>
