@@ -37,7 +37,8 @@
         }
         return gk_fileData[filename] || "";
         }
-        </script><!DOCTYPE html>
+</script>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -143,16 +144,13 @@
             videosData[id] = {
                 detectedBreaks: [],
                 selectedBreaks: [],
-                existingBreaks: metadataBreaks.map(parseFloat).filter(time => !isNaN(time)).sort((a, b) => a - b),
+                existingBreaks: metadataBreaks,
                 uri: uri
             };
             videoIds.push(id);
+            currentVideoIndex = videoIds.length - 1; // Set to the newly added video
             createSection(id, uri);
             updatePagination();
-            if (currentVideoIndex === -1) {
-                currentVideoIndex = 0;
-                showVideoSection(id);
-            }
         }
 
         function createSection(id, uri) {
@@ -293,22 +291,24 @@
             });
         }
 
-function updatePagination() {
-    const prevButton = document.getElementById('prev-button');
-    const nextButton = document.getElementById('next-button');
-    const paginationInfo = document.getElementById('pagination-info');
-    if (videoIds.length === 0) {
-        prevButton.disabled = true;
-        nextButton.disabled = true;
-        paginationInfo.textContent = '';
-        currentVideoIndex = -1;
-        return;
-    }
-    prevButton.disabled = currentVideoIndex <= 0;
-    nextButton.disabled = currentVideoIndex >= videoIds.length - 1;
-    paginationInfo.textContent = `Video ${currentVideoIndex + 1} of ${videoIds.length}`;
-    showVideoSection(videoIds[currentVideoIndex]);
-}
+        function updatePagination() {
+            const prevButton = document.getElementById('prev-button');
+            const nextButton = document.getElementById('next-button');
+            const paginationInfo = document.getElementById('pagination-info');
+            if (videoIds.length === 0) {
+                prevButton.disabled = true;
+                nextButton.disabled = true;
+                paginationInfo.textContent = '';
+                currentVideoIndex = -1;
+            } else {
+                // Ensure currentVideoIndex is valid
+                currentVideoIndex = Math.max(0, Math.min(currentVideoIndex, videoIds.length - 1));
+                prevButton.disabled = currentVideoIndex <= 0;
+                nextButton.disabled = currentVideoIndex >= videoIds.length - 1;
+                paginationInfo.textContent = `Video ${currentVideoIndex + 1} of ${videoIds.length}`;
+                showVideoSection(videoIds[currentVideoIndex]);
+            }
+        }
 
         function showVideoSection(id) {
             document.querySelectorAll('.video-section').forEach(section => {
@@ -404,7 +404,22 @@ function updatePagination() {
                     return res.json();
                 })
                 .then(data => {
-                    const metadataBreaks = data.Metadata.filter(m => m.TypeName === 'break_point').map(m => parseFloat(m.Value));
+                    const metadataBreaks = data.Metadata.filter(m => m.TypeName === 'break_point')
+                        .map(m => {
+                            const time = parseFloat(m.Value);
+                            if (isNaN(time)) return null;
+                            const start = Math.max(0, time - 1);
+                            const end = start + 2;
+                            return {
+                                start,
+                                mid: time,
+                                end,
+                                originalMid: time,
+                                metaId: m.ID
+                            };
+                        })
+                        .filter(b => b !== null)
+                        .sort((a, b) => a.mid - b.mid);
                     selectVideo(id, path, metadataBreaks);
                 })
                 .catch(err => {
@@ -504,6 +519,46 @@ function updatePagination() {
                 };
                 div.appendChild(timeInput);
 
+                const stepBackwardBtn = document.createElement('button');
+                stepBackwardBtn.textContent = 'Step Backward';
+                stepBackwardBtn.onclick = () => {
+                    const breakPoint = videosData[id].selectedBreaks[idx];
+                    const duration = breakPoint.end - breakPoint.start;
+                    let newEnd = breakPoint.start;
+                    let newStart = newEnd - duration;
+                    if (newStart < 0) {
+                        newStart = 0;
+                        newEnd = duration;
+                    }
+                    breakPoint.start = newStart;
+                    breakPoint.end = newEnd;
+                    breakPoint.mid = Math.min(breakPoint.end, Math.max(breakPoint.start, breakPoint.mid));
+                    slider.min = breakPoint.start;
+                    slider.max = breakPoint.end;
+                    slider.value = breakPoint.mid;
+                    timeInput.value = formatTime(breakPoint.mid);
+                    displaySpan.innerHTML = `Start: ${formatTime(breakPoint.start)}, Mid: ${formatTime(breakPoint.mid)}, End: ${formatTime(breakPoint.end)}`;
+                };
+                div.appendChild(stepBackwardBtn);
+
+                const stepForwardBtn = document.createElement('button');
+                stepForwardBtn.textContent = 'Step Forward';
+                stepForwardBtn.onclick = () => {
+                    const breakPoint = videosData[id].selectedBreaks[idx];
+                    const duration = breakPoint.end - breakPoint.start;
+                    let newStart = breakPoint.end;
+                    let newEnd = newStart + duration;
+                    breakPoint.start = newStart;
+                    breakPoint.end = newEnd;
+                    breakPoint.mid = Math.min(breakPoint.end, Math.max(breakPoint.start, breakPoint.mid));
+                    slider.min = breakPoint.start;
+                    slider.max = breakPoint.end;
+                    slider.value = breakPoint.mid;
+                    timeInput.value = formatTime(breakPoint.mid);
+                    displaySpan.innerHTML = `Start: ${formatTime(breakPoint.start)}, Mid: ${formatTime(breakPoint.mid)}, End: ${formatTime(breakPoint.end)}`;
+                };
+                div.appendChild(stepForwardBtn);
+
                 const resetBtn = document.createElement('button');
                 resetBtn.textContent = 'Reset Midpoint';
                 resetBtn.onclick = () => {
@@ -536,15 +591,138 @@ function updatePagination() {
         function updateExistingBreaksList(id) {
             const list = document.getElementById(`existing-breaks-list-${id}`);
             list.innerHTML = '';
-            videosData[id].existingBreaks.forEach((time) => {
+            videosData[id].existingBreaks.forEach((b, idx) => {
                 const div = document.createElement('div');
                 div.className = 'break-item';
-                div.innerHTML = `Break Point: ${formatTime(time)}`;
+
+                const displaySpan = document.createElement('span');
+                displaySpan.className = 'display-span';
+                displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(b.mid)}, End: ${formatTime(b.end)}`;
+                div.appendChild(displaySpan);
+
+                const slider = document.createElement('input');
+                slider.type = 'range';
+                slider.min = b.start;
+                slider.max = b.end;
+                slider.step = 0.0001;
+                slider.value = b.mid;
+                slider.oninput = () => {
+                    const newMid = parseFloat(slider.value);
+                    videosData[id].existingBreaks[idx].mid = newMid;
+                    timeInput.value = formatTime(newMid);
+                    displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(newMid)}, End: ${formatTime(b.end)}`;
+                };
+                div.appendChild(slider);
+
+                const timeInput = document.createElement('input');
+                timeInput.type = 'text';
+                timeInput.value = formatTime(b.mid);
+                timeInput.size = 12;
+                timeInput.onchange = () => {
+                    const newTime = parseTime(timeInput.value);
+                    if (!isNaN(newTime) && newTime >= b.start && newTime <= b.end) {
+                        videosData[id].existingBreaks[idx].mid = newTime;
+                        slider.value = newTime;
+                        displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(newTime)}, End: ${formatTime(b.end)}`;
+                    } else {
+                        alert('Invalid time or out of range');
+                        timeInput.value = formatTime(videosData[id].existingBreaks[idx].mid);
+                    }
+                };
+                div.appendChild(timeInput);
+
+                const shiftBackwardBtn = document.createElement('button');
+                shiftBackwardBtn.textContent = 'Shift -1s';
+                shiftBackwardBtn.onclick = () => {
+                    const breakPoint = videosData[id].existingBreaks[idx];
+                    const rangeDuration = breakPoint.end - breakPoint.start;
+                    breakPoint.start = Math.max(0, breakPoint.start - 1);
+                    breakPoint.end = breakPoint.start + rangeDuration;
+                    breakPoint.mid = Math.min(breakPoint.end, Math.max(breakPoint.start, breakPoint.mid));
+                    slider.min = breakPoint.start;
+                    slider.max = breakPoint.end;
+                    slider.value = breakPoint.mid;
+                    timeInput.value = formatTime(breakPoint.mid);
+                    displaySpan.innerHTML = `Start: ${formatTime(breakPoint.start)}, Mid: ${formatTime(breakPoint.mid)}, End: ${formatTime(breakPoint.end)}`;
+                };
+                div.appendChild(shiftBackwardBtn);
+
+                const shiftForwardBtn = document.createElement('button');
+                shiftForwardBtn.textContent = 'Shift +1s';
+                shiftForwardBtn.onclick = () => {
+                    const breakPoint = videosData[id].existingBreaks[idx];
+                    const rangeDuration = breakPoint.end - breakPoint.start;
+                    breakPoint.start += 1;
+                    breakPoint.end = breakPoint.start + rangeDuration;
+                    breakPoint.mid = Math.min(breakPoint.end, Math.max(breakPoint.start, breakPoint.mid));
+                    slider.min = breakPoint.start;
+                    slider.max = breakPoint.end;
+                    slider.value = breakPoint.mid;
+                    timeInput.value = formatTime(breakPoint.mid);
+                    displaySpan.innerHTML = `Start: ${formatTime(breakPoint.start)}, Mid: ${formatTime(breakPoint.mid)}, End: ${formatTime(breakPoint.end)}`;
+                };
+                div.appendChild(shiftForwardBtn);
+
+                const resetBtn = document.createElement('button');
+                resetBtn.textContent = 'Reset Midpoint';
+                resetBtn.onclick = () => {
+                    const originalMid = videosData[id].existingBreaks[idx].originalMid;
+                    videosData[id].existingBreaks[idx].mid = originalMid;
+                    slider.value = originalMid;
+                    timeInput.value = formatTime(originalMid);
+                    displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(originalMid)}, End: ${formatTime(b.end)}`;
+                };
+                div.appendChild(resetBtn);
+
+                const updateBtn = document.createElement('button');
+                updateBtn.textContent = 'Update';
+                updateBtn.onclick = () => updateExistingBreak(id, idx);
+                div.appendChild(updateBtn);
+
+                const removeBtn = document.createElement('button');
+                removeBtn.textContent = 'Remove';
+                removeBtn.onclick = () => deleteExistingBreak(id, idx);
+                div.appendChild(removeBtn);
+
                 const previewBtn = document.createElement('button');
                 previewBtn.textContent = 'Preview Break';
-                previewBtn.onclick = () => previewBreak(id, time);
+                previewBtn.onclick = () => previewBreak(id, videosData[id].existingBreaks[idx].mid);
                 div.appendChild(previewBtn);
+
                 list.appendChild(div);
+            });
+        }
+
+        function updateExistingBreak(id, idx) {
+            const breakPoint = videosData[id].existingBreaks[idx];
+            const data = { id: breakPoint.metaId, time: breakPoint.mid };
+            fetch('/update-break', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            }).then(res => res.json()).then(resp => {
+                if (resp.success) {
+                    alert('Breakpoint updated successfully');
+                    videosData[id].existingBreaks[idx].originalMid = breakPoint.mid;
+                }
+            }).catch(err => {
+                alert('Error updating breakpoint: ' + err.message);
+            });
+        }
+
+        function deleteExistingBreak(id, idx) {
+            const metaId = videosData[id].existingBreaks[idx].metaId;
+            fetch('/delete-break', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: metaId })
+            }).then(res => res.json()).then(resp => {
+                if (resp.success) {
+                    videosData[id].existingBreaks.splice(idx, 1);
+                    updateExistingBreaksList(id);
+                }
+            }).catch(err => {
+                alert('Error deleting breakpoint: ' + err.message);
             });
         }
 
@@ -581,17 +759,49 @@ function updatePagination() {
             }).then(res => res.json()).then(data => {
                 if (data.success) {
                     alert('Breakpoints saved successfully');
-                    videosData[id].existingBreaks.push(...videosData[id].selectedBreaks.map(b => b.mid));
-                    videosData[id].existingBreaks.sort((a, b) => a - b);
-                    updateExistingBreaksList(id);
-                    videosData[id].selectedBreaks = [];
-                    updateSelectedBreaksList(id);
-                    document.getElementById(`save-breaks-button-${id}`).disabled = true;
+                    // Refresh metadata to get new IDs
+                    fetchMetadataForUpdate(id);
                 }
             }).catch(err => {
                 console.error(err);
                 alert('Error saving breakpoints: ' + err.message);
             });
+        }
+
+        function fetchMetadataForUpdate(id) {
+            fetch(`/get-video-metadata/${id}`)
+                .then(res => {
+                    if (!res.ok) {
+                        throw new Error(`HTTP error! Status: ${res.status}`);
+                    }
+                    return res.json();
+                })
+                .then(data => {
+                    const metadataBreaks = data.Metadata.filter(m => m.TypeName === 'break_point')
+                        .map(m => {
+                            const time = parseFloat(m.Value);
+                            if (isNaN(time)) return null;
+                            const start = Math.max(0, time - 1);
+                            const end = start + 2;
+                            return {
+                                start,
+                                mid: time,
+                                end,
+                                originalMid: time,
+                                metaId: m.ID
+                            };
+                        })
+                        .filter(b => b !== null)
+                        .sort((a, b) => a.mid - b.mid);
+                    videosData[id].existingBreaks = metadataBreaks;
+                    videosData[id].selectedBreaks = [];
+                    updateSelectedBreaksList(id);
+                    updateExistingBreaksList(id);
+                    document.getElementById(`save-breaks-button-${id}`).disabled = true;
+                })
+                .catch(err => {
+                    console.error('Error refreshing metadata:', err);
+                });
         }
 
         function seekBackward(id) {
@@ -624,37 +834,37 @@ function updatePagination() {
             video.play();
         }
 
-function removeSection(id) {
-    document.getElementById(`video-section-${id}`).remove();
-    delete videosData[id];
-    
-    // Find the index of the video to be removed before filtering
-    const removedIndex = videoIds.indexOf(id);
-    
-    // Remove the video ID from the array
-    videoIds = videoIds.filter(vid => vid !== id);
-    
-    // Adjust currentVideoIndex
-    if (videoIds.length === 0) {
-        // No videos left, reset index
-        currentVideoIndex = -1;
-    } else {
-        if (removedIndex === currentVideoIndex) {
-            // If the current video was removed, move to the next video if available, else previous
-            if (currentVideoIndex >= videoIds.length) {
-                // If the removed video was the last one, move to the previous video
-                currentVideoIndex = videoIds.length - 1;
+        function removeSection(id) {
+            document.getElementById(`video-section-${id}`).remove();
+            delete videosData[id];
+            
+            // Find the index of the video to be removed before filtering
+            const removedIndex = videoIds.indexOf(id);
+            
+            // Remove the video ID from the array
+            videoIds = videoIds.filter(vid => vid !== id);
+            
+            // Adjust currentVideoIndex
+            if (videoIds.length === 0) {
+                // No videos left, reset index
+                currentVideoIndex = -1;
+            } else {
+                if (removedIndex === currentVideoIndex) {
+                    // If the current video was removed, move to the next video if available, else previous
+                    if (currentVideoIndex >= videoIds.length) {
+                        // If the removed video was the last one, move to the previous video
+                        currentVideoIndex = videoIds.length - 1;
+                    }
+                    // Otherwise, stay at the same index to select the next video (no change needed)
+                } else if (removedIndex < currentVideoIndex) {
+                    // If a video before the current one was removed, shift the index
+                    currentVideoIndex = Math.max(0, currentVideoIndex - 1);
+                }
+                // If removedIndex > currentVideoIndex, no change is needed
             }
-            // Otherwise, stay at the same index to select the next video (no change needed)
-        } else if (removedIndex < currentVideoIndex) {
-            // If a video before the current one was removed, shift the index
-            currentVideoIndex = Math.max(0, currentVideoIndex - 1);
+            
+            updatePagination();
         }
-        // If removedIndex > currentVideoIndex, no change is needed
-    }
-    
-    updatePagination();
-}
 
         document.getElementById('clear-all-button').addEventListener('click', () => {
             document.getElementById('selected-videos-container').innerHTML = '';

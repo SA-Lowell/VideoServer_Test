@@ -39,6 +39,7 @@ type Video struct {
 }
 
 type Metadata struct {
+	ID       int64
 	TypeName string
 	Value    string
 }
@@ -66,6 +67,15 @@ type Station struct {
 	ID        int64  `json:"id"`
 	Name      string `json:"name"`
 	UnixStart int64  `json:"unix_start"`
+}
+
+type UpdateBreakReq struct {
+	ID   int64   `json:"id"`
+	Time float64 `json:"time"`
+}
+
+type DeleteBreakReq struct {
+	ID int64 `json:"id"`
 }
 
 var db *sql.DB
@@ -126,6 +136,8 @@ func main() {
 	r.POST("/add-breaks", addBreaksHandler)
 	r.POST("/repair-video", repairVideoHandler)
 	r.POST("/fix-audio", fixAudioHandler)
+	r.POST("/update-break", updateBreakHandler)
+	r.POST("/delete-break", deleteBreakHandler)
 
 	r.GET("/manage-titles", manageTitlesHandler)
 	r.GET("/manage-channels", manageChannelsHandler)
@@ -242,7 +254,7 @@ func getVideoMetadataHandler(c *gin.Context) {
 	}
 
 	mrows, err := db.Query(`
-		SELECT mt.name, vm.value::text
+		SELECT vm.id, mt.name, vm.value::text
 		FROM video_metadata vm
 		JOIN metadata_types mt ON vm.metadata_type_id = mt.id
 		WHERE vm.video_id = $1
@@ -256,7 +268,7 @@ func getVideoMetadataHandler(c *gin.Context) {
 
 	for mrows.Next() {
 		var m Metadata
-		if err := mrows.Scan(&m.TypeName, &m.Value); err != nil {
+		if err := mrows.Scan(&m.ID, &m.TypeName, &m.Value); err != nil {
 			log.Printf("Video metadata scan error: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -674,6 +686,34 @@ func fixAudioHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"temp_uri": tempURI})
 }
 
+func updateBreakHandler(c *gin.Context) {
+	var req UpdateBreakReq
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	_, err := db.Exec("UPDATE video_metadata SET value = to_jsonb($1::numeric) WHERE id = $2 AND metadata_type_id = 1", req.Time, req.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+func deleteBreakHandler(c *gin.Context) {
+	var req DeleteBreakReq
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	_, err := db.Exec("DELETE FROM video_metadata WHERE id = $1 AND metadata_type_id = 1", req.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
 func updateAdBreaksHandler(c *gin.Context) {
 	rows, err := db.Query(`
 		SELECT t.id, t.name, t.description
@@ -741,7 +781,7 @@ func updateAdBreaksHandler(c *gin.Context) {
 			}
 
 			mrows, err := db.Query(`
-				SELECT mt.name, vm.value::text
+				SELECT vm.id, mt.name, vm.value::text
 				FROM video_metadata vm
 				JOIN metadata_types mt ON vm.metadata_type_id = mt.id
 				WHERE vm.video_id = $1
@@ -755,7 +795,7 @@ func updateAdBreaksHandler(c *gin.Context) {
 
 			for mrows.Next() {
 				var m Metadata
-				if err := mrows.Scan(&m.TypeName, &m.Value); err != nil {
+				if err := mrows.Scan(&m.ID, &m.TypeName, &m.Value); err != nil {
 					log.Printf("Video metadata scan error: %v", err)
 					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 					return
