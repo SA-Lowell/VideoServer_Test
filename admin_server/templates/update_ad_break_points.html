@@ -1,33 +1,25 @@
 <script type="text/javascript">
-        var gk_isXlsx = false;
-        var gk_xlsxFileLookup = {};
-        var gk_fileData = {};
-        function filledCell(cell) {
-          return cell !== '' && cell != null;
-        }
-        function loadFileData(filename) {
+    var gk_isXlsx = false;
+    var gk_xlsxFileLookup = {};
+    var gk_fileData = {};
+    function filledCell(cell) {
+        return cell !== '' && cell != null;
+    }
+    function loadFileData(filename) {
         if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
             try {
                 var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
                 var firstSheetName = workbook.SheetNames[0];
                 var worksheet = workbook.Sheets[firstSheetName];
-
-                // Convert sheet to JSON to filter blank rows
                 var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
-                // Filter out blank rows (rows where all cells are empty, null, or undefined)
                 var filteredData = jsonData.filter(row => row.some(filledCell));
-
-                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
                 var headerRowIndex = filteredData.findIndex((row, index) =>
-                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                    row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
                 );
-                // Fallback
                 if (headerRowIndex === -1 || headerRowIndex > 25) {
-                  headerRowIndex = 0;
+                    headerRowIndex = 0;
                 }
-
-                // Convert filtered JSON back to CSV
-                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex));
                 csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
                 return csv;
             } catch (e) {
@@ -36,7 +28,7 @@
             }
         }
         return gk_fileData[filename] || "";
-        }
+    }
 </script>
 <!DOCTYPE html>
 <html lang="en">
@@ -87,6 +79,8 @@
         .break-item .display-span { display: block; margin-bottom: 5px; }
         .break-item input[type="range"] { width: 300px; margin-right: 10px; }
         .break-item input[type="text"] { width: 120px; margin-right: 10px; }
+        .fix-options { margin-left: 10px; }
+        .fix-options label { margin-right: 10px; }
     </style>
 </head>
 <body>
@@ -157,7 +151,16 @@
             const container = document.getElementById('selected-videos-container');
             const sectionHtml = `
                 <div class="video-section" id="video-section-${id}">
-                    <div>Video ID: ${id}, URI: ${uri} <button id="remove-button-${id}">Remove</button> <button id="remux-button-${id}">Remux Video</button> <button id="fix-audio-button-${id}">Temp Fix Audio</button></div>
+                    <div>
+                        Video ID: ${id}, URI: ${uri}
+                        <button id="remove-button-${id}">Remove</button>
+                        <span class="fix-options">
+                            <label><input type="checkbox" id="remux-checkbox-${id}"> Remux</label>
+                            <label><input type="checkbox" id="audio-checkbox-${id}"> Audio</label>
+                            <label><input type="checkbox" id="video-checkbox-${id}"> Video</label>
+                            <button id="fix-video-button-${id}">Fix Video</button>
+                        </span>
+                    </div>
                     <video class="video-player" id="video-player-${id}" controls></video>
                     <div class="seek-controls" id="seek-controls-${id}">
                         <input type="number" class="seek-seconds" id="seek-seconds-${id}" value="10" min="0"> seconds
@@ -201,13 +204,21 @@
             document.getElementById(`seek-backward-button-${id}`).addEventListener('click', () => seekBackward(id));
             document.getElementById(`seek-forward-button-${id}`).addEventListener('click', () => seekForward(id));
             document.getElementById(`remove-button-${id}`).addEventListener('click', () => removeSection(id));
-            document.getElementById(`remux-button-${id}`).addEventListener('click', () => remuxVideo(id));
-            document.getElementById(`fix-audio-button-${id}`).addEventListener('click', () => fixAudio(id));
+            document.getElementById(`fix-video-button-${id}`).addEventListener('click', () => fixVideo(id));
         }
 
-        function fixAudio(id) {
+        function fixVideo(id) {
             const video = document.getElementById(`video-player-${id}`);
-            const fixButton = document.getElementById(`fix-audio-button-${id}`);
+            const fixButton = document.getElementById(`fix-video-button-${id}`);
+            const remuxCheckbox = document.getElementById(`remux-checkbox-${id}`);
+            const audioCheckbox = document.getElementById(`audio-checkbox-${id}`);
+            const videoCheckbox = document.getElementById(`video-checkbox-${id}`);
+
+            if (!remuxCheckbox.checked && !audioCheckbox.checked && !videoCheckbox.checked) {
+                alert('Please select at least one fix option (Remux, Audio, Video).');
+                return;
+            }
+
             fixButton.disabled = true;
 
             // Pause the video to release any file locks
@@ -216,10 +227,17 @@
                 video.pause();
             }
 
-            fetch('/fix-audio', {
+            const body = {
+                id: id,
+                remux: remuxCheckbox.checked,
+                audio: audioCheckbox.checked,
+                video: videoCheckbox.checked
+            };
+
+            fetch('/fix-video', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: id })
+                body: JSON.stringify(body)
             }).then(res => {
                 if (!res.ok) {
                     throw new Error(`HTTP error! Status: ${res.status}`);
@@ -236,58 +254,15 @@
                             video.play();
                         }
                     }, { once: true });
-                    alert('Audio fixed successfully (temporary version loaded)');
+                    alert('Video fixed successfully (temporary version loaded)');
                 } else {
-                    throw new Error(data.error || 'Unknown error during audio fix');
+                    throw new Error(data.error || 'Unknown error during video fix');
                 }
                 fixButton.disabled = false;
             }).catch(err => {
                 fixButton.disabled = false;
-                console.error('Error fixing audio:', err);
-                alert('Error fixing audio: ' + err.message);
-            });
-        }
-
-        function remuxVideo(id) {
-            const video = document.getElementById(`video-player-${id}`);
-            const remuxButton = document.getElementById(`remux-button-${id}`);
-            remuxButton.disabled = true;
-            const uri = videosData[id].uri;
-
-            // Pause the video to release any file locks
-            if (!video.paused) {
-                video.pause();
-            }
-
-            fetch('/remux-video', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: id })
-            }).then(res => {
-                if (!res.ok) {
-                    throw new Error(`HTTP error! Status: ${res.status}`);
-                }
-                return res.json();
-            }).then(data => {
-                remuxButton.disabled = false;
-                if (data.success) {
-                    // Reload the video to use the remuxed version
-                    const currentTime = video.currentTime;
-                    video.src = `/videos/${uri}?t=${new Date().getTime()}`; // Add timestamp to avoid caching
-                    video.load();
-                    video.currentTime = currentTime;
-                    alert('Video remuxed successfully');
-                } else {
-                    throw new Error(data.error || 'Unknown error during remux');
-                }
-            }).catch(err => {
-                remuxButton.disabled = false;
-                console.error('Error remuxing video:', err);
-                if (err.message.includes('Input/output error')) {
-                    alert('Error remuxing video: The file may be in use. Please ensure the video is not playing or being accessed by another application and try again.');
-                } else {
-                    alert('Error remuxing video: ' + err.message);
-                }
+                console.error('Error fixing video:', err);
+                alert('Error fixing video: ' + err.message);
             });
         }
 
@@ -301,7 +276,6 @@
                 paginationInfo.textContent = '';
                 currentVideoIndex = -1;
             } else {
-                // Ensure currentVideoIndex is valid
                 currentVideoIndex = Math.max(0, Math.min(currentVideoIndex, videoIds.length - 1));
                 prevButton.disabled = currentVideoIndex <= 0;
                 nextButton.disabled = currentVideoIndex >= videoIds.length - 1;
@@ -482,12 +456,10 @@
             videosData[id].selectedBreaks.forEach((b, idx) => {
                 const div = document.createElement('div');
                 div.className = 'break-item';
-
                 const displaySpan = document.createElement('span');
                 displaySpan.className = 'display-span';
                 displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(b.mid)}, End: ${formatTime(b.end)}`;
                 div.appendChild(displaySpan);
-
                 const slider = document.createElement('input');
                 slider.type = 'range';
                 slider.min = b.start;
@@ -501,7 +473,6 @@
                     displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(newMid)}, End: ${formatTime(b.end)}`;
                 };
                 div.appendChild(slider);
-
                 const timeInput = document.createElement('input');
                 timeInput.type = 'text';
                 timeInput.value = formatTime(b.mid);
@@ -518,7 +489,6 @@
                     }
                 };
                 div.appendChild(timeInput);
-
                 const stepBackwardBtn = document.createElement('button');
                 stepBackwardBtn.textContent = 'Step Backward';
                 stepBackwardBtn.onclick = () => {
@@ -540,7 +510,6 @@
                     displaySpan.innerHTML = `Start: ${formatTime(breakPoint.start)}, Mid: ${formatTime(breakPoint.mid)}, End: ${formatTime(breakPoint.end)}`;
                 };
                 div.appendChild(stepBackwardBtn);
-
                 const stepForwardBtn = document.createElement('button');
                 stepForwardBtn.textContent = 'Step Forward';
                 stepForwardBtn.onclick = () => {
@@ -558,7 +527,6 @@
                     displaySpan.innerHTML = `Start: ${formatTime(breakPoint.start)}, Mid: ${formatTime(breakPoint.mid)}, End: ${formatTime(breakPoint.end)}`;
                 };
                 div.appendChild(stepForwardBtn);
-
                 const resetBtn = document.createElement('button');
                 resetBtn.textContent = 'Reset Midpoint';
                 resetBtn.onclick = () => {
@@ -569,7 +537,6 @@
                     displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(originalMid)}, End: ${formatTime(b.end)}`;
                 };
                 div.appendChild(resetBtn);
-
                 const removeBtn = document.createElement('button');
                 removeBtn.textContent = 'Remove';
                 removeBtn.onclick = () => {
@@ -578,12 +545,10 @@
                     document.getElementById(`save-breaks-button-${id}`).disabled = videosData[id].selectedBreaks.length === 0;
                 };
                 div.appendChild(removeBtn);
-
                 const previewBtn = document.createElement('button');
                 previewBtn.textContent = 'Preview Break';
                 previewBtn.onclick = () => previewBreak(id, videosData[id].selectedBreaks[idx].mid);
                 div.appendChild(previewBtn);
-
                 list.appendChild(div);
             });
         }
@@ -594,12 +559,10 @@
             videosData[id].existingBreaks.forEach((b, idx) => {
                 const div = document.createElement('div');
                 div.className = 'break-item';
-
                 const displaySpan = document.createElement('span');
                 displaySpan.className = 'display-span';
                 displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(b.mid)}, End: ${formatTime(b.end)}`;
                 div.appendChild(displaySpan);
-
                 const slider = document.createElement('input');
                 slider.type = 'range';
                 slider.min = b.start;
@@ -613,7 +576,6 @@
                     displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(newMid)}, End: ${formatTime(b.end)}`;
                 };
                 div.appendChild(slider);
-
                 const timeInput = document.createElement('input');
                 timeInput.type = 'text';
                 timeInput.value = formatTime(b.mid);
@@ -630,7 +592,6 @@
                     }
                 };
                 div.appendChild(timeInput);
-
                 const shiftBackwardBtn = document.createElement('button');
                 shiftBackwardBtn.textContent = 'Shift -1s';
                 shiftBackwardBtn.onclick = () => {
@@ -646,7 +607,6 @@
                     displaySpan.innerHTML = `Start: ${formatTime(breakPoint.start)}, Mid: ${formatTime(breakPoint.mid)}, End: ${formatTime(breakPoint.end)}`;
                 };
                 div.appendChild(shiftBackwardBtn);
-
                 const shiftForwardBtn = document.createElement('button');
                 shiftForwardBtn.textContent = 'Shift +1s';
                 shiftForwardBtn.onclick = () => {
@@ -662,7 +622,6 @@
                     displaySpan.innerHTML = `Start: ${formatTime(breakPoint.start)}, Mid: ${formatTime(breakPoint.mid)}, End: ${formatTime(breakPoint.end)}`;
                 };
                 div.appendChild(shiftForwardBtn);
-
                 const resetBtn = document.createElement('button');
                 resetBtn.textContent = 'Reset Midpoint';
                 resetBtn.onclick = () => {
@@ -673,22 +632,18 @@
                     displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(originalMid)}, End: ${formatTime(b.end)}`;
                 };
                 div.appendChild(resetBtn);
-
                 const updateBtn = document.createElement('button');
                 updateBtn.textContent = 'Update';
                 updateBtn.onclick = () => updateExistingBreak(id, idx);
                 div.appendChild(updateBtn);
-
                 const removeBtn = document.createElement('button');
                 removeBtn.textContent = 'Remove';
                 removeBtn.onclick = () => deleteExistingBreak(id, idx);
                 div.appendChild(removeBtn);
-
                 const previewBtn = document.createElement('button');
                 previewBtn.textContent = 'Preview Break';
                 previewBtn.onclick = () => previewBreak(id, videosData[id].existingBreaks[idx].mid);
                 div.appendChild(previewBtn);
-
                 list.appendChild(div);
             });
         }
@@ -732,7 +687,6 @@
             if (selectedIndex >= 0) {
                 const breakPoint = videosData[id].detectedBreaks[selectedIndex];
                 if (!videosData[id].selectedBreaks.some(b => b.mid === breakPoint.mid)) {
-                    // Store original midpoint for reset
                     videosData[id].selectedBreaks.push({ ...breakPoint, originalMid: breakPoint.mid });
                     updateSelectedBreaksList(id);
                     document.getElementById(`save-breaks-button-${id}`).disabled = false;
@@ -759,7 +713,6 @@
             }).then(res => res.json()).then(data => {
                 if (data.success) {
                     alert('Breakpoints saved successfully');
-                    // Refresh metadata to get new IDs
                     fetchMetadataForUpdate(id);
                 }
             }).catch(err => {
@@ -837,32 +790,19 @@
         function removeSection(id) {
             document.getElementById(`video-section-${id}`).remove();
             delete videosData[id];
-            
-            // Find the index of the video to be removed before filtering
             const removedIndex = videoIds.indexOf(id);
-            
-            // Remove the video ID from the array
             videoIds = videoIds.filter(vid => vid !== id);
-            
-            // Adjust currentVideoIndex
             if (videoIds.length === 0) {
-                // No videos left, reset index
                 currentVideoIndex = -1;
             } else {
                 if (removedIndex === currentVideoIndex) {
-                    // If the current video was removed, move to the next video if available, else previous
                     if (currentVideoIndex >= videoIds.length) {
-                        // If the removed video was the last one, move to the previous video
                         currentVideoIndex = videoIds.length - 1;
                     }
-                    // Otherwise, stay at the same index to select the next video (no change needed)
                 } else if (removedIndex < currentVideoIndex) {
-                    // If a video before the current one was removed, shift the index
                     currentVideoIndex = Math.max(0, currentVideoIndex - 1);
                 }
-                // If removedIndex > currentVideoIndex, no change is needed
             }
-            
             updatePagination();
         }
 

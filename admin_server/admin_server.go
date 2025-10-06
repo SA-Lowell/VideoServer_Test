@@ -17,10 +17,9 @@ import (
 )
 
 const (
-	videoBaseDir                    = "Z:/Videos"
-	adBreakFadeToBlackDetectorPath  = "./ad_break_fade_to_black_detector.exe"
-	adBreakHardCutDetectorPath      = "./ad_break_hard_cut_detector.exe"
-	remuxVideoPath                 = "./remux_video.exe"
+	videoBaseDir                   = "Z:/Videos"
+	adBreakFadeToBlackDetectorPath = "./ad_break_fade_to_black_detector.exe"
+	adBreakHardCutDetectorPath     = "./ad_break_hard_cut_detector.exe"
 )
 
 type Title struct {
@@ -59,8 +58,11 @@ type AddBreakReq struct {
 	Time float64 `json:"time"`
 }
 
-type RemuxVideoReq struct {
-	ID int64 `json:"id"`
+type FixVideoReq struct {
+	ID     int64 `json:"id"`
+	Remux  bool  `json:"remux"`
+	Audio  bool  `json:"audio"`
+	Video  bool  `json:"video"`
 }
 
 type Station struct {
@@ -134,8 +136,7 @@ func main() {
 	r.POST("/detect-breaks", detectBreaksHandler)
 	r.POST("/add-break", addBreakHandler)
 	r.POST("/add-breaks", addBreaksHandler)
-	r.POST("/remux-video", remuxVideoHandler)
-	r.POST("/fix-audio", fixAudioHandler)
+	r.POST("/fix-video", fixVideoHandler) // Consolidated endpoint
 	r.POST("/update-break", updateBreakHandler)
 	r.POST("/delete-break", deleteBreakHandler)
 
@@ -564,10 +565,10 @@ func addBreaksHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
-func remuxVideoHandler(c *gin.Context) {
-	var req RemuxVideoReq
+func fixVideoHandler(c *gin.Context) {
+	var req FixVideoReq
 	if err := c.BindJSON(&req); err != nil {
-		log.Printf("BindJSON error for remux-video: %v", err)
+		log.Printf("BindJSON error for fix-video: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body: " + err.Error()})
 		return
 	}
@@ -578,64 +579,9 @@ func remuxVideoHandler(c *gin.Context) {
 		return
 	}
 
-	var uri string
-	err := db.QueryRow("SELECT uri FROM videos WHERE id = $1", req.ID).Scan(&uri)
-	if err == sql.ErrNoRows {
-		log.Printf("No video found for ID %d", req.ID)
-		c.JSON(http.StatusNotFound, gin.H{"error": "Video not found"})
-		return
-	} else if err != nil {
-		log.Printf("Video query error for ID %d: %v", req.ID, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error: " + err.Error()})
-		return
-	}
-
-	fullPath := filepath.Join(videoBaseDir, uri)
-	fullPath = filepath.Clean(fullPath)
-	log.Printf("Checking file: %s", fullPath)
-	if _, err := os.Stat(fullPath); err != nil {
-		log.Printf("File not found: %s, error: %v", fullPath, err)
-		c.JSON(http.StatusNotFound, gin.H{"error": "File not found: " + fullPath})
-		return
-	}
-
-	absRemuxPath, err := filepath.Abs(remuxVideoPath)
-	if err != nil {
-		log.Printf("Failed to resolve absolute path for %s: %v", remuxVideoPath, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Cannot resolve remux video executable path"})
-		return
-	}
-	log.Printf("Resolved remux executable path: %s", absRemuxPath)
-	if _, err := os.Stat(absRemuxPath); err != nil {
-		log.Printf("Remux executable not found at %s: %v", absRemuxPath, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Remux executable not found at " + absRemuxPath})
-		return
-	}
-
-	log.Printf("Running remux on %s", fullPath)
-	cmd := exec.Command(absRemuxPath, fullPath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("Remux failed: %v, output: %s", err, string(output))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Video remux failed: " + string(output)})
-		return
-	}
-
-	log.Printf("Remux output: %s", string(output))
-	c.JSON(http.StatusOK, gin.H{"success": true})
-}
-
-func fixAudioHandler(c *gin.Context) {
-	var req RemuxVideoReq
-	if err := c.BindJSON(&req); err != nil {
-		log.Printf("BindJSON error for fix-audio: %v", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body: " + err.Error()})
-		return
-	}
-
-	if req.ID == 0 {
-		log.Printf("Invalid request: video ID is empty")
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Must provide video ID"})
+	if !req.Remux && !req.Audio && !req.Video {
+		log.Printf("Invalid request: at least one fix option must be selected")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "At least one fix option (remux, audio, video) must be selected"})
 		return
 	}
 
@@ -667,7 +613,7 @@ func fixAudioHandler(c *gin.Context) {
 		return
 	}
 
-	tempFileName := fmt.Sprintf("%d_fixed_audio.mp4", req.ID)
+	tempFileName := fmt.Sprintf("%d_fixed.mp4", req.ID)
 	tempPath := filepath.Join(tempDir, tempFileName)
 
 	if _, err := os.Stat(tempPath); err == nil {
@@ -677,12 +623,25 @@ func fixAudioHandler(c *gin.Context) {
 		return
 	}
 
-	log.Printf("Running FFmpeg to fix audio on %s", fullPath)
-	cmd := exec.Command("ffmpeg", "-i", fullPath, "-c:v", "copy", "-c:a", "aac", tempPath)
+	var cmd *exec.Cmd
+	logMsg := "Running FFmpeg to fix video %s with options: remux=%v, audio=%v, video=%v"
+	log.Printf(logMsg, fullPath, req.Remux, req.Audio, req.Video)
+
+	if req.Video {
+		// If video is selected, re-encode to H.264/AAC/MP4, ignoring remux and audio
+		cmd = exec.Command("ffmpeg", "-i", fullPath, "-c:v", "libx264", "-preset", "fast", "-c:a", "aac", "-f", "mp4", tempPath)
+	} else if req.Audio {
+		// If audio is selected (and video is not), re-encode audio to AAC, copy video, use MP4
+		cmd = exec.Command("ffmpeg", "-i", fullPath, "-c:v", "copy", "-c:a", "aac", "-f", "mp4", tempPath)
+	} else if req.Remux {
+		// If only remux is selected, copy both streams, use MP4
+		cmd = exec.Command("ffmpeg", "-i", fullPath, "-c", "copy", "-f", "mp4", tempPath)
+	}
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("FFmpeg failed: %v, output: %s", err, string(output))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fix audio: " + string(output)})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fix video: " + string(output)})
 		return
 	}
 
@@ -1055,41 +1014,41 @@ func apiDeleteStationHandler(c *gin.Context) {
 }
 
 func apiVideosHandler(c *gin.Context) {
-    search := strings.TrimSpace(c.Query("search"))
-    titleIDStr := c.Query("title_id")
-    stationIDStr := c.Query("station_id")
+	search := strings.TrimSpace(c.Query("search"))
+	titleIDStr := c.Query("title_id")
+	stationIDStr := c.Query("station_id")
 	notInStationIDStr := c.Query("not_in_station_id")
-    limitStr := c.Query("limit")
-    offsetStr := c.Query("offset")
+	limitStr := c.Query("limit")
+	offsetStr := c.Query("offset")
 	orderBy := c.Query("order_by")
-    limit := 10
-    if limitStr != "" {
-        if l, err := strconv.Atoi(limitStr); err == nil {
-            limit = l
-        }
-    }
-    offset := 0
-    if offsetStr != "" {
-        if o, err := strconv.Atoi(offsetStr); err == nil {
-            offset = o
-        }
-    }
+	limit := 10
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil {
+			limit = l
+		}
+	}
+	offset := 0
+	if offsetStr != "" {
+		if o, err := strconv.Atoi(offsetStr); err == nil {
+			offset = o
+		}
+	}
 	var orderField string
 	if orderBy == "uri" {
 		orderField = "v.uri"
 	} else {
 		orderField = "v.id"
 	}
-    query := `SELECT v.id, v.uri FROM videos v`
-    args := []interface{}{}
-    whereClauses := []string{}
-    if titleIDStr != "" {
-        titleID, err := strconv.ParseInt(titleIDStr, 10, 64)
-        if err == nil {
-            whereClauses = append(whereClauses, `v.title_id = $`+strconv.Itoa(len(args)+1))
-            args = append(args, titleID)
-        }
-    }
+	query := `SELECT v.id, v.uri FROM videos v`
+	args := []interface{}{}
+	whereClauses := []string{}
+	if titleIDStr != "" {
+		titleID, err := strconv.ParseInt(titleIDStr, 10, 64)
+		if err == nil {
+			whereClauses = append(whereClauses, `v.title_id = $`+strconv.Itoa(len(args)+1))
+			args = append(args, titleID)
+		}
+	}
 	if stationIDStr != "" {
 		stationID, err := strconv.ParseInt(stationIDStr, 10, 64)
 		if err == nil {
@@ -1106,36 +1065,36 @@ func apiVideosHandler(c *gin.Context) {
 			args = append(args, notInStationID)
 		}
 	}
-    if search != "" {
-        whereClauses = append(whereClauses, `v.uri ILIKE $`+strconv.Itoa(len(args)+1))
-        args = append(args, "%"+search+"%")
-    }
-    if len(whereClauses) > 0 {
-        query += ` WHERE ` + strings.Join(whereClauses, " AND ")
-    }
-    query += ` ORDER BY ` + orderField + ` LIMIT $` + strconv.Itoa(len(args)+1) + ` OFFSET $` + strconv.Itoa(len(args)+2)
-    args = append(args, limit, offset)
-    log.Printf("Executing query: %s with args: %v", query, args)
-    rows, err := db.Query(query, args...)
-    if err != nil {
-        log.Printf("Query execution error: %v", err)
-        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-        return
-    }
-    defer rows.Close()
-    var videos []Video
-    for rows.Next() {
-        var v Video
-        if err := rows.Scan(&v.ID, &v.URI); err != nil {
-            log.Printf("Scan error: %v", err)
-            c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-            return
-        }
-        log.Printf("Fetched video: ID=%d, URI=%s", v.ID, v.URI)
-        videos = append(videos, v)
-    }
-    log.Printf("Returning %d videos", len(videos))
-    c.JSON(http.StatusOK, videos)
+	if search != "" {
+		whereClauses = append(whereClauses, `v.uri ILIKE $`+strconv.Itoa(len(args)+1))
+		args = append(args, "%"+search+"%")
+	}
+	if len(whereClauses) > 0 {
+		query += ` WHERE ` + strings.Join(whereClauses, " AND ")
+	}
+	query += ` ORDER BY ` + orderField + ` LIMIT $` + strconv.Itoa(len(args)+1) + ` OFFSET $` + strconv.Itoa(len(args)+2)
+	args = append(args, limit, offset)
+	log.Printf("Executing query: %s with args: %v", query, args)
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		log.Printf("Query execution error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+	var videos []Video
+	for rows.Next() {
+		var v Video
+		if err := rows.Scan(&v.ID, &v.URI); err != nil {
+			log.Printf("Scan error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		log.Printf("Fetched video: ID=%d, URI=%s", v.ID, v.URI)
+		videos = append(videos, v)
+	}
+	log.Printf("Returning %d videos", len(videos))
+	c.JSON(http.StatusOK, videos)
 }
 
 func apiAssignVideoToTitleHandler(c *gin.Context) {
