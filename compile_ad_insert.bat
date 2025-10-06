@@ -1,1 +1,0 @@
-g++ -std=c++17 -O0 -g -Wall -Wextra -o ad_insert ad_insert.cpp -lstdc++fs

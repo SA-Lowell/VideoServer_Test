@@ -20,7 +20,7 @@ const (
 	videoBaseDir                    = "Z:/Videos"
 	adBreakFadeToBlackDetectorPath  = "./ad_break_fade_to_black_detector.exe"
 	adBreakHardCutDetectorPath      = "./ad_break_hard_cut_detector.exe"
-	repairVideoPath                 = "./repair_video.exe"
+	remuxVideoPath                 = "./remux_video.exe"
 )
 
 type Title struct {
@@ -59,7 +59,7 @@ type AddBreakReq struct {
 	Time float64 `json:"time"`
 }
 
-type RepairVideoReq struct {
+type RemuxVideoReq struct {
 	ID int64 `json:"id"`
 }
 
@@ -134,7 +134,7 @@ func main() {
 	r.POST("/detect-breaks", detectBreaksHandler)
 	r.POST("/add-break", addBreakHandler)
 	r.POST("/add-breaks", addBreaksHandler)
-	r.POST("/repair-video", repairVideoHandler)
+	r.POST("/remux-video", remuxVideoHandler)
 	r.POST("/fix-audio", fixAudioHandler)
 	r.POST("/update-break", updateBreakHandler)
 	r.POST("/delete-break", deleteBreakHandler)
@@ -318,8 +318,13 @@ func listContentsHandler(c *gin.Context) {
 			contents = append(contents, DirEntry{Type: "dir", Name: entry.Name(), Path: entryPath})
 		} else {
 			ext := strings.ToLower(filepath.Ext(entry.Name()))
-			if ext == ".mp4" || ext == ".mkv" {
-				contents = append(contents, DirEntry{Type: "file", Name: entry.Name(), Path: entryPath})
+			supportedExtensions := []string{".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".mpeg", ".mpg", ".m4v", ".3gp", ".3g2", ".ogv", ".rm", ".rmvb", ".vob", ".ts", ".m2ts", ".mts", ".divx", ".asf"}
+
+			for _, supportedExt := range supportedExtensions {
+				if ext == supportedExt {
+					contents = append(contents, DirEntry{Type: "file", Name: entry.Name(), Path: entryPath})
+					break
+				}
 			}
 		}
 	}
@@ -559,10 +564,10 @@ func addBreaksHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
-func repairVideoHandler(c *gin.Context) {
-	var req RepairVideoReq
+func remuxVideoHandler(c *gin.Context) {
+	var req RemuxVideoReq
 	if err := c.BindJSON(&req); err != nil {
-		log.Printf("BindJSON error for repair-video: %v", err)
+		log.Printf("BindJSON error for remux-video: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body: " + err.Error()})
 		return
 	}
@@ -594,34 +599,34 @@ func repairVideoHandler(c *gin.Context) {
 		return
 	}
 
-	absRepairPath, err := filepath.Abs(repairVideoPath)
+	absRemuxPath, err := filepath.Abs(remuxVideoPath)
 	if err != nil {
-		log.Printf("Failed to resolve absolute path for %s: %v", repairVideoPath, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Cannot resolve repair video executable path"})
+		log.Printf("Failed to resolve absolute path for %s: %v", remuxVideoPath, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Cannot resolve remux video executable path"})
 		return
 	}
-	log.Printf("Resolved repair executable path: %s", absRepairPath)
-	if _, err := os.Stat(absRepairPath); err != nil {
-		log.Printf("Repair executable not found at %s: %v", absRepairPath, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Repair executable not found at " + absRepairPath})
+	log.Printf("Resolved remux executable path: %s", absRemuxPath)
+	if _, err := os.Stat(absRemuxPath); err != nil {
+		log.Printf("Remux executable not found at %s: %v", absRemuxPath, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Remux executable not found at " + absRemuxPath})
 		return
 	}
 
-	log.Printf("Running repair on %s", fullPath)
-	cmd := exec.Command(absRepairPath, fullPath)
+	log.Printf("Running remux on %s", fullPath)
+	cmd := exec.Command(absRemuxPath, fullPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Printf("Repair failed: %v, output: %s", err, string(output))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Video repair failed: " + string(output)})
+		log.Printf("Remux failed: %v, output: %s", err, string(output))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Video remux failed: " + string(output)})
 		return
 	}
 
-	log.Printf("Repair output: %s", string(output))
+	log.Printf("Remux output: %s", string(output))
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
 func fixAudioHandler(c *gin.Context) {
-	var req RepairVideoReq
+	var req RemuxVideoReq
 	if err := c.BindJSON(&req); err != nil {
 		log.Printf("BindJSON error for fix-audio: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body: " + err.Error()})

@@ -157,7 +157,7 @@
             const container = document.getElementById('selected-videos-container');
             const sectionHtml = `
                 <div class="video-section" id="video-section-${id}">
-                    <div>Video ID: ${id}, URI: ${uri} <button id="remove-button-${id}">Remove</button> <button id="repair-button-${id}">Repair Video</button> <button id="fix-audio-button-${id}">Fix Audio</button></div>
+                    <div>Video ID: ${id}, URI: ${uri} <button id="remove-button-${id}">Remove</button> <button id="remux-button-${id}">Remux Video</button> <button id="fix-audio-button-${id}">Temp Fix Audio</button></div>
                     <video class="video-player" id="video-player-${id}" controls></video>
                     <div class="seek-controls" id="seek-controls-${id}">
                         <input type="number" class="seek-seconds" id="seek-seconds-${id}" value="10" min="0"> seconds
@@ -201,7 +201,7 @@
             document.getElementById(`seek-backward-button-${id}`).addEventListener('click', () => seekBackward(id));
             document.getElementById(`seek-forward-button-${id}`).addEventListener('click', () => seekForward(id));
             document.getElementById(`remove-button-${id}`).addEventListener('click', () => removeSection(id));
-            document.getElementById(`repair-button-${id}`).addEventListener('click', () => repairVideo(id));
+            document.getElementById(`remux-button-${id}`).addEventListener('click', () => remuxVideo(id));
             document.getElementById(`fix-audio-button-${id}`).addEventListener('click', () => fixAudio(id));
         }
 
@@ -248,10 +248,10 @@
             });
         }
 
-        function repairVideo(id) {
+        function remuxVideo(id) {
             const video = document.getElementById(`video-player-${id}`);
-            const repairButton = document.getElementById(`repair-button-${id}`);
-            repairButton.disabled = true;
+            const remuxButton = document.getElementById(`remux-button-${id}`);
+            remuxButton.disabled = true;
             const uri = videosData[id].uri;
 
             // Pause the video to release any file locks
@@ -259,7 +259,7 @@
                 video.pause();
             }
 
-            fetch('/repair-video', {
+            fetch('/remux-video', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ id: id })
@@ -269,24 +269,24 @@
                 }
                 return res.json();
             }).then(data => {
-                repairButton.disabled = false;
+                remuxButton.disabled = false;
                 if (data.success) {
-                    // Reload the video to use the repaired version
+                    // Reload the video to use the remuxed version
                     const currentTime = video.currentTime;
                     video.src = `/videos/${uri}?t=${new Date().getTime()}`; // Add timestamp to avoid caching
                     video.load();
                     video.currentTime = currentTime;
-                    alert('Video repaired successfully');
+                    alert('Video remuxed successfully');
                 } else {
-                    throw new Error(data.error || 'Unknown error during repair');
+                    throw new Error(data.error || 'Unknown error during remux');
                 }
             }).catch(err => {
-                repairButton.disabled = false;
-                console.error('Error repairing video:', err);
+                remuxButton.disabled = false;
+                console.error('Error remuxing video:', err);
                 if (err.message.includes('Input/output error')) {
-                    alert('Error repairing video: The file may be in use. Please ensure the video is not playing or being accessed by another application and try again.');
+                    alert('Error remuxing video: The file may be in use. Please ensure the video is not playing or being accessed by another application and try again.');
                 } else {
-                    alert('Error repairing video: ' + err.message);
+                    alert('Error remuxing video: ' + err.message);
                 }
             });
         }

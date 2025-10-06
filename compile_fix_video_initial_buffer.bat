@@ -1,1 +1,0 @@
-g++ -std=c++17 -O3 -march=native -o repair_video repair_video.cpp

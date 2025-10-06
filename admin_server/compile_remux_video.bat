@@ -1,0 +1,1 @@
+g++ -std=c++17 -O3 -march=native -o remux_video remux_video.cpp
