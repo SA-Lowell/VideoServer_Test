@@ -2,12 +2,12 @@
 -- PostgreSQL database dump
 --
 
-\restrict fhhChmVPkfpO10dHQRM6x5ayUpXr2YY9wKj2tdohAXjdLOF13Lpg2VGMxp7JU8H
+\restrict ui8qXSEb81rpXiAuBveVujNfTuKUI5oTvoYTWlLocclCabT67iK4sL7oHfCAumA
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.6
 
--- Started on 2025-09-29 23:20:52
+-- Started on 2025-10-05 16:32:38
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -258,9 +258,9 @@ ALTER TABLE public.titles OWNER TO postgres;
 --
 
 CREATE SEQUENCE public.titles_id_seq
-    START WITH 1
+    START WITH 0
     INCREMENT BY 1
-    NO MINVALUE
+    MINVALUE 0
     NO MAXVALUE
     CACHE 1;
 
@@ -362,7 +362,11 @@ CREATE TABLE public.videos (
     id bigint NOT NULL,
     title_id bigint NOT NULL,
     uri text NOT NULL,
-    duration numeric(18,12)
+    duration numeric(18,12),
+    loudnorm_input_i double precision,
+    loudnorm_input_lra double precision,
+    loudnorm_input_tp double precision,
+    loudnorm_input_thresh double precision
 );
 
 
@@ -508,155 +512,306 @@ COPY public.segments (id, station_id, segment_name, order_num) FROM stdin;
 --
 
 COPY public.station_videos (id, station_id, video_id) FROM stdin;
-101	3	154
-102	3	155
-103	3	156
-104	3	157
-7	3	7
-61	3	114
-62	3	115
-63	3	116
-64	3	117
-65	3	118
-66	3	119
-67	3	120
-105	3	158
-68	3	121
-69	3	122
-70	3	123
-71	3	124
-1	3	1
-2	3	2
-3	3	3
-4	3	4
-5	3	5
-6	3	6
-8	3	8
-9	3	9
-10	3	10
-11	3	11
-12	3	12
-13	3	13
-106	3	159
-107	3	160
-108	3	161
-109	3	162
-110	3	163
-111	3	164
-112	3	165
-113	3	166
-114	3	167
-115	3	168
-116	3	169
-117	3	170
-118	3	171
-119	3	172
-120	3	173
-121	3	174
-122	3	175
-123	3	176
-124	3	177
-125	3	178
-126	3	179
-127	3	180
-128	3	181
-129	3	182
-130	3	183
-131	3	184
-132	3	185
-133	3	186
-134	3	187
-135	3	188
-136	3	189
-137	3	190
-138	3	191
-139	3	192
-140	3	193
-141	3	194
-142	3	195
-143	3	196
-144	3	197
-145	3	198
-146	3	199
-147	3	200
-148	3	201
-149	3	202
-14	3	67
-15	3	68
-16	3	69
-17	3	70
-18	3	71
-19	3	72
-20	3	73
-21	3	74
-22	3	75
-23	3	76
-24	3	77
-25	3	78
-26	3	79
-27	3	80
-28	3	81
-29	3	82
-30	3	83
-31	3	84
-32	3	85
-33	3	86
-34	3	87
-35	3	88
-36	3	89
-37	3	90
-38	3	91
-39	3	92
-40	3	93
-41	3	94
-42	3	95
-43	3	96
-44	3	97
-45	3	98
-46	3	99
-47	3	100
-48	3	101
-49	3	102
-50	3	103
-51	3	104
-52	3	105
-53	3	106
-54	3	107
-55	3	108
-56	3	109
-57	3	110
-58	3	111
-59	3	112
-60	3	113
-72	3	125
-73	3	126
-74	3	127
-75	3	128
-76	3	129
-77	3	130
-78	3	131
-79	3	132
-80	3	133
-81	3	134
-82	3	135
-83	3	136
-84	3	137
-85	3	138
-86	3	139
-87	3	140
-88	3	141
-89	3	142
-90	3	143
-91	3	144
-92	3	145
-93	3	146
-94	3	147
-95	3	148
-96	3	149
-97	3	150
-98	3	151
-99	3	152
-100	3	153
+150	2	203
+152	2	205
+154	2	207
+156	2	209
+158	2	211
+161	2	214
+163	2	216
+165	2	218
+166	2	219
+168	2	221
+170	2	223
+172	2	225
+174	2	227
+175	2	228
+176	2	229
+177	2	230
+178	2	231
+179	2	232
+180	2	233
+181	2	234
+182	2	235
+183	2	236
+184	2	237
+185	2	238
+186	2	239
+187	2	240
+188	2	241
+189	2	242
+190	2	243
+191	2	244
+192	2	245
+193	2	246
+194	2	247
+195	2	248
+196	2	249
+197	2	250
+198	2	251
+199	2	252
+200	2	253
+201	2	254
+202	2	255
+203	2	256
+204	2	257
+205	2	258
+206	2	259
+207	2	260
+208	2	261
+209	2	262
+210	2	263
+211	2	264
+212	2	265
+213	2	266
+214	2	267
+215	2	268
+216	2	269
+217	2	270
+218	2	271
+219	2	272
+220	2	273
+221	2	274
+222	2	275
+223	2	276
+224	2	277
+225	2	278
+226	2	279
+227	2	280
+228	2	281
+229	2	282
+230	2	283
+231	2	284
+232	2	285
+233	2	286
+234	2	287
+235	2	288
+236	2	289
+237	2	290
+238	2	291
+239	2	292
+240	2	293
+241	2	294
+242	2	295
+243	2	296
+101	1	154
+102	1	155
+103	1	156
+104	1	157
+244	2	297
+245	2	298
+246	2	299
+247	2	300
+248	2	301
+249	2	302
+250	2	303
+251	2	304
+252	2	305
+253	2	306
+254	2	307
+255	2	308
+256	2	309
+257	2	310
+258	2	311
+259	2	312
+260	2	313
+261	2	314
+262	2	315
+263	2	316
+264	2	317
+265	2	318
+266	2	319
+267	2	320
+268	2	321
+269	2	322
+270	2	323
+271	2	324
+272	2	325
+273	2	326
+274	2	327
+275	2	328
+276	2	329
+277	2	330
+278	2	331
+279	2	332
+280	2	333
+281	2	334
+282	2	335
+283	2	336
+284	2	337
+285	2	338
+286	2	339
+287	2	340
+288	2	341
+289	2	342
+290	2	343
+291	2	344
+292	2	345
+293	2	346
+294	2	347
+295	2	348
+296	2	349
+297	2	350
+298	2	351
+299	2	352
+300	2	353
+7	1	7
+61	1	114
+62	1	115
+63	1	116
+64	1	117
+65	1	118
+66	1	119
+67	1	120
+105	1	158
+68	1	121
+69	1	122
+70	1	123
+71	1	124
+1	1	1
+2	1	2
+3	1	3
+4	1	4
+5	1	5
+6	1	6
+8	1	8
+9	1	9
+10	1	10
+11	1	11
+12	1	12
+13	1	13
+106	1	159
+107	1	160
+108	1	161
+109	1	162
+110	1	163
+111	1	164
+112	1	165
+113	1	166
+114	1	167
+115	1	168
+116	1	169
+117	1	170
+118	1	171
+119	1	172
+120	1	173
+121	1	174
+122	1	175
+123	1	176
+124	1	177
+125	1	178
+126	1	179
+127	1	180
+128	1	181
+129	1	182
+130	1	183
+131	1	184
+132	1	185
+133	1	186
+134	1	187
+135	1	188
+136	1	189
+137	1	190
+138	1	191
+139	1	192
+140	1	193
+141	1	194
+142	1	195
+143	1	196
+144	1	197
+145	1	198
+146	1	199
+147	1	200
+148	1	201
+149	1	202
+14	1	67
+15	1	68
+16	1	69
+17	1	70
+18	1	71
+19	1	72
+20	1	73
+21	1	74
+22	1	75
+23	1	76
+24	1	77
+25	1	78
+26	1	79
+27	1	80
+28	1	81
+29	1	82
+30	1	83
+31	1	84
+32	1	85
+33	1	86
+34	1	87
+35	1	88
+36	1	89
+37	1	90
+38	1	91
+39	1	92
+40	1	93
+41	1	94
+42	1	95
+43	1	96
+44	1	97
+45	1	98
+46	1	99
+47	1	100
+48	1	101
+49	1	102
+50	1	103
+51	1	104
+52	1	105
+53	1	106
+54	1	107
+55	1	108
+56	1	109
+57	1	110
+58	1	111
+59	1	112
+60	1	113
+72	1	125
+73	1	126
+74	1	127
+75	1	128
+76	1	129
+77	1	130
+78	1	131
+79	1	132
+80	1	133
+81	1	134
+82	1	135
+83	1	136
+84	1	137
+85	1	138
+86	1	139
+87	1	140
+88	1	141
+89	1	142
+90	1	143
+91	1	144
+92	1	145
+93	1	146
+94	1	147
+95	1	148
+96	1	149
+97	1	150
+98	1	151
+99	1	152
+100	1	153
+151	2	204
+153	2	206
+155	2	208
+157	2	210
+159	2	212
+160	2	213
+162	2	215
+164	2	217
+167	2	220
+169	2	222
+171	2	224
+173	2	226
 \.
 
 
@@ -667,9 +822,9 @@ COPY public.station_videos (id, station_id, video_id) FROM stdin;
 --
 
 COPY public.stations (id, name, unix_start) FROM stdin;
-1	channel1	0
-2	channel2	0
-3	Bob's Burgers	0
+1	Bob's Burgers	0
+2	Malcolm in the Middle	0
+3	UNTITLED	0
 \.
 
 
@@ -704,8 +859,9 @@ COPY public.title_metadata (id, title_id, metadata_type_id, value) FROM stdin;
 --
 
 COPY public.titles (id, name, description) FROM stdin;
-1	Bob's Burgers	Bob has a burger!!!!
 0	N/A	N/A
+2	Malcolm in the Middle	MALCOLM IS RIGHT IN THE MIDDLE
+1	Bob's Burgers	Bob has a burger!!!!
 \.
 
 
@@ -1196,6 +1352,446 @@ COPY public.video_metadata (id, video_id, metadata_type_id, value) FROM stdin;
 484	217	1	1280.89
 485	218	1	58.22
 486	218	1	621.705
+487	219	1	85.533
+488	219	1	514.611
+489	219	1	818.482
+490	220	1	88.18
+491	220	1	732.564
+492	221	1	631.31
+493	221	1	1257.77
+494	222	1	79.049
+495	222	1	654.673
+496	223	1	455.221
+497	223	1	919.282
+498	224	1	75.88
+499	224	1	782.971
+500	224	1	1296.225
+501	225	1	82.828
+502	225	1	392.228
+503	225	1	818.646
+504	226	1	68.254
+505	226	1	410.68
+506	226	1	820.723
+507	226	1	1297.695
+508	227	1	59.784
+509	227	1	760.592
+510	227	1	1296.135
+511	228	1	65.911
+512	228	1	641.522
+513	228	1	1296.135
+514	229	1	87.018
+515	229	1	376.4
+516	229	1	888.88
+517	229	1	1287.45
+518	230	1	80.205
+519	230	1	641.948
+520	230	1	1297.055
+521	231	1	56.298
+522	231	1	486.837
+523	231	1	823.958
+524	231	1	1294.88
+525	232	1	49.566
+526	232	1	424.425
+527	232	1	854.531
+528	232	1	1297.25
+529	233	1	60.529
+530	233	1	539.413
+531	233	1	984.244
+532	233	1	1291.95
+533	234	1	72.436
+534	234	1	666.75
+535	234	1	1298.14
+536	235	1	66.122
+537	235	1	618.605
+538	235	1	1298.34
+539	236	1	76.81
+540	236	1	713.679
+541	236	1	1296.345
+542	237	1	72.371
+543	237	1	584.055
+544	237	1	1293.4
+545	238	1	58.598
+546	238	1	643.399
+547	238	1	1293.76
+548	239	1	539.992
+549	239	1	934.671
+550	239	1	1201.23
+551	240	1	80.227
+552	240	1	589.698
+553	240	1	1294.375
+554	241	1	87.872
+555	241	1	645.046
+556	241	1	1290.665
+557	242	1	64.141
+558	242	1	429.707
+559	242	1	846.716
+560	242	1	1286.96
+561	243	1	78.213
+562	243	1	545.183
+563	243	1	1295.875
+564	244	1	57.379
+565	244	1	595.024
+566	244	1	1292.35
+567	245	1	148.025
+568	245	1	478.864
+569	245	1	867.543
+570	245	1	1290.935
+571	246	1	47.617
+572	246	1	380.632
+573	246	1	968.918
+574	246	1	1282.94
+575	247	1	78.205
+576	247	1	393.091
+577	247	1	899.8
+578	247	1	1276.74
+579	248	1	67.238
+580	248	1	346.758
+581	248	1	752.049
+582	248	1	1290.19
+583	249	1	76.951
+584	249	1	324.957
+585	249	1	904.536
+586	249	1	1289.725
+587	250	1	80.864
+588	250	1	381.363
+589	250	1	860.042
+590	250	1	1291.225
+591	251	1	70.136
+592	251	1	421.749
+593	251	1	762.396
+594	251	1	1290.345
+595	252	1	68.67
+596	252	1	621.954
+597	252	1	1287.795
+598	253	1	71.02
+599	253	1	401.615
+600	253	1	740.984
+601	253	1	1289.115
+602	254	1	82.472
+603	254	1	831.594
+604	254	1	1258.415
+605	255	1	96.496
+606	255	1	296.794
+607	255	1	680.125
+608	255	1	1289.9
+609	256	1	68.71
+610	256	1	676.149
+611	256	1	1290.475
+612	257	1	70.061
+613	257	1	391.46
+614	257	1	748.025
+615	257	1	1289.385
+616	258	1	68.048
+617	258	1	704.792
+618	258	1	1255.245
+619	259	1	54.401
+620	259	1	711.867
+621	259	1	1230.315
+622	260	1	69.778
+623	260	1	398.084
+624	260	1	876.565
+625	260	1	1289.615
+626	261	1	71.055
+627	261	1	440.85
+628	261	1	1290.27
+629	262	1	75.26
+630	262	1	664.734
+631	262	1	1291.04
+632	263	1	77.394
+633	263	1	393.584
+634	263	1	783.963
+635	263	1	1288.58
+636	264	1	63.656
+637	264	1	668.072
+638	264	1	1290.175
+639	265	1	74.575
+640	265	1	430.277
+641	265	1	775.864
+642	265	1	1289.34
+643	266	1	63.381
+644	266	1	604.158
+645	266	1	1275.905
+646	267	1	68.645
+647	267	1	576.023
+648	267	1	1275.95
+649	268	1	73.015
+650	268	1	694.663
+651	268	1	1275.535
+652	269	1	65.314
+653	269	1	627.727
+654	269	1	1275.92
+655	270	1	66.676
+656	270	1	484.43
+657	270	1	721.964
+658	270	1	1275.85
+659	271	1	60.07
+660	271	1	415.474
+661	271	1	727.688
+662	271	1	1275.56
+663	272	1	14.331
+664	272	1	516.527
+665	272	1	770.099
+666	272	1	1275.71
+667	273	1	509.464
+668	273	1	921.953
+669	273	1	1275.275
+670	274	1	353.387
+671	274	1	803.69
+672	274	1	1243.02
+673	275	1	65.103
+674	275	1	563.207
+675	275	1	1276.88
+676	276	1	51.071
+677	276	1	619.95
+678	276	1	1276.92
+679	277	1	53.415
+680	277	1	526.42
+681	277	1	902.104
+682	277	1	1276.51
+683	278	1	57.943
+684	278	1	558.597
+685	278	1	1276.605
+686	279	1	60.651
+687	279	1	658.102
+688	279	1	1276.895
+689	280	1	62.343
+690	280	1	616.717
+691	280	1	1277.485
+692	281	1	47.703
+693	281	1	639.623
+694	281	1	1175.825
+695	281	1	1276.625
+696	282	1	71.388
+697	282	1	661.403
+698	282	1	1174.9
+699	282	1	1276.895
+700	283	1	70.787
+701	283	1	584.279
+702	283	1	1277.21
+703	284	1	68.418
+704	284	1	650.236
+705	284	1	1276.88
+706	285	1	32.455
+707	285	1	631.039
+708	285	1	1311.515
+709	286	1	69.88
+710	286	1	624.612
+711	286	1	1285.84
+712	287	1	60.736
+713	287	1	647.226
+714	287	1	1249.25
+715	288	1	69.315
+716	288	1	540.059
+717	288	1	1308.54
+718	289	1	67.193
+719	289	1	556.702
+720	289	1	1276.71
+721	290	1	433.493
+722	290	1	773.224
+723	290	1	1275.705
+724	291	1	65.426
+725	291	1	346.176
+726	291	1	692.85
+727	291	1	1281.995
+728	292	1	40.092
+729	292	1	422.401
+730	292	1	767.755
+731	292	1	1259.85
+732	293	1	62.311
+733	293	1	540.702
+734	293	1	770.904
+735	293	1	1251.665
+736	294	1	64.716
+737	294	1	697.863
+738	294	1	1262.565
+739	295	1	57.02
+740	295	1	421.946
+741	295	1	1277.325
+742	296	1	22.286
+743	296	1	671.602
+744	296	1	1276.725
+745	297	1	338.371
+746	297	1	746.769
+747	297	1	1276.15
+748	298	1	420.965
+749	298	1	846.32
+750	298	1	1274.47
+751	299	1	72.788
+752	299	1	656.81
+753	299	1	1276.325
+754	300	1	40.66
+755	300	1	587.897
+756	301	1	31.818
+757	301	1	649.921
+758	301	1	1277.375
+759	302	1	59.887
+760	302	1	409.368
+761	302	1	798.418
+762	302	1	1276.275
+763	303	1	71.889
+764	303	1	603.692
+765	303	1	1277.405
+766	304	1	51.406
+767	304	1	676.81
+768	304	1	1276.475
+769	305	1	81.177
+770	305	1	438.172
+771	305	1	797.279
+772	305	1	1276.725
+773	306	1	71.681
+774	306	1	575.43
+775	306	1	1264.86
+776	307	1	59.326
+777	307	1	493.524
+778	307	1	872.688
+779	307	1	1306.255
+780	308	1	30.755
+781	308	1	439.399
+782	308	1	816.926
+783	308	1	1276.015
+784	309	1	87.289
+785	309	1	540.87
+786	309	1	1277.015
+787	310	1	71.875
+788	310	1	496.505
+789	310	1	831.379
+790	310	1	1263.755
+791	311	1	66.994
+792	311	1	683.086
+793	311	1	1278.36
+794	312	1	71.675
+795	312	1	520.813
+796	312	1	1278.845
+797	313	1	53.803
+798	313	1	650.333
+799	313	1	1305.705
+800	314	1	83.566
+801	314	1	458.502
+802	314	1	763.615
+803	314	1	1276.62
+804	315	1	59.242
+805	315	1	610.165
+806	315	1	948.929
+807	315	1	1276.7
+808	316	1	71.954
+809	316	1	646.535
+810	316	1	1277.93
+811	317	1	65.081
+812	317	1	420.457
+813	317	1	702.119
+814	317	1	1275.295
+815	318	1	59.147
+816	318	1	619.736
+817	318	1	1276.11
+818	319	1	63.751
+819	319	1	541.024
+820	319	1	1278.5
+821	320	1	51.558
+822	320	1	661.849
+823	320	1	1306.73
+824	321	1	59.803
+825	321	1	549.658
+826	321	1	1277.8
+827	322	1	68.269
+828	322	1	746.35
+829	322	1	1275.715
+830	323	1	51.071
+831	323	1	629.241
+832	323	1	1278.64
+833	324	1	57.684
+834	324	1	718.476
+835	324	1	1276.38
+836	325	1	63.048
+837	325	1	582.767
+838	325	1	1276.53
+839	326	1	60.54
+840	326	1	578.588
+841	326	1	1269.02
+842	327	1	58.339
+843	327	1	475.195
+844	327	1	734.149
+845	327	1	1278.575
+846	328	1	53.028
+847	328	1	679.885
+848	328	1	1276.195
+849	329	1	70.154
+850	329	1	573.013
+851	329	1	1328.44
+852	330	1	68.539
+853	330	1	588.451
+854	330	1	1278.115
+855	331	1	52.755
+856	331	1	635.946
+857	331	1	1307.645
+858	332	1	53.09
+859	332	1	660.349
+860	332	1	1277.945
+861	333	1	57.824
+862	333	1	718.59
+863	333	1	1257.215
+864	334	1	64.132
+865	334	1	622.692
+866	334	1	1281.405
+867	335	1	57.392
+868	335	1	708.725
+869	335	1	1281.64
+870	336	1	65.026
+871	336	1	485.974
+872	336	1	867.741
+873	336	1	1282.365
+874	337	1	69.361
+875	337	1	690.16
+876	337	1	1282.495
+877	338	1	64.761
+878	338	1	485.36
+879	338	1	906.044
+880	338	1	1311.985
+881	339	1	64.877
+882	339	1	677.633
+883	339	1	1280.785
+884	340	1	71.681
+885	340	1	689.529
+886	340	1	1282.475
+887	341	1	63.183
+888	341	1	686.792
+889	341	1	1274.5
+890	342	1	57.563
+891	342	1	577.951
+892	342	1	1311.035
+893	343	1	61.377
+894	343	1	579.398
+895	343	1	1280.92
+896	344	1	57.084
+897	344	1	667.567
+898	344	1	1283.085
+899	345	1	77.393
+900	345	1	712.022
+901	345	1	1311.92
+902	346	1	63.488
+903	346	1	729.281
+904	346	1	1279.73
+905	347	1	64.625
+906	347	1	444.385
+907	347	1	706.396
+908	347	1	1280.79
+909	348	1	51.596
+910	348	1	728.831
+911	348	1	1247.775
+912	349	1	48.02
+913	349	1	553.531
+914	349	1	1283.745
+915	350	1	73.147
+916	350	1	555.656
+917	350	1	1283.51
+918	351	1	71.516
+919	351	1	681.028
+920	351	1	1281.535
+921	352	1	58.141
+922	352	1	564.093
+923	352	1	1282.825
+924	353	1	57.441
+925	353	1	575.566
+926	353	1	1314.24
 \.
 
 
@@ -1268,360 +1864,380 @@ COPY public.video_tags (id, video_id, tag_id) FROM stdin;
 -- Data for Name: videos; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
-COPY public.videos (id, title_id, uri, duration) FROM stdin;
-18	0	Commercials/N64/Console/Nintendo 64 It's Coming Right At Us.mp4	28.536667000000
-19	0	Commercials/N64/Diddy Kong Racing/Diddy Kong Racing Meet the Fastest Monkey in the Jungle.mp4	49.851667000000
-20	0	Commercials/N64/Donkey Kong 64/Donkey Kong 64 Promotional Trailer.mp4	60.720000000000
-21	0	Commercials/N64/Extreme-G/Extreme-G Beta Trailer.mp4	18.970000000000
-22	0	Commercials/N64/Goldeneye/Goldeneye 007 Promotional Trailer.mp4	30.510000000000
-23	0	Commercials/N64/Kirby 64/U.S Kirby 64 commercial.mp4	15.650000000000
-24	0	Commercials/N64/Mario Kart 64/Mario Kart 64 Commercial.mp4	30.531000000000
-25	0	Commercials/N64/Paper Mario/Paper Mario Debut Commercial.mp4	29.836667000000
-26	0	Commercials/N64/Perfect Dark/Perfect Dark Commercial Full.mkv	60.021000000000
-27	0	Commercials/N64/Super Mario 64/Super Mario 64 Commercial.mp4	27.538333000000
-28	0	Commercials/N64/Super Smash Bros/Super Smash Bros. Commercial.mp4	30.348333000000
-29	0	Commercials/N64/The Legend of Zelda Majora's Mask/The Legend of Zelda Majora's Mask Trailer.mp4	60.433333000000
-1	1	Bob's Burgers/1/Bob's Burgers 0101 Human Flesh.mkv	1291.164750000000
-2	1	Bob's Burgers/1/Bob's Burgers 0102 Crawl Space.mkv	1291.164750000000
-3	1	Bob's Burgers/1/Bob's Burgers 0103 Sacred Cow.mkv	1296.294750000000
-30	0	Commercials/N64/The Legend of Zelda Ocarina of Time/The Legend of Zelda Ocarina of Time Trailer.mp4	62.368333000000
-31	0	Commercials/N64/Turok 2 Seeds of Evil/Turok 2 Seeds of Evil Commercial.mp4	30.068333000000
-32	0	Commercials/N64/Turok Dinosaur Hunter/Turok Dinosaur Hunter Commercial.mp4	30.741667000000
-33	0	Commercials/N64/Turok Dinosaur Hunter/Turok Dinosaur Hunter German Commercial.mp4	76.160000000000
-34	0	Commercials/PS1/Vigilante 8/Vigilante 8 Banned Commercial.mp4	32.067000000000
-35	0	Commercials/PS1/Duke Nukem/Duke Nukem Commercial.mp4	14.883333000000
-36	0	Commercials/PS1/Duke Nukem Time to Kill/Duke Nukem Time to Kill Commercial.mp4	30.091667000000
-37	0	Commercials/PS1/Resident Evil 2/Resident Evil 2 Commercial 30sec.mp4	30.325267000000
-38	0	Commercials/PS1/Resident Evil 2/Biohazard 2 TV Spot George Romero.mp4	31.196000000000
-39	0	Commercials/PS1/Resident Evil 2/Biohazard 2 Commercial George Romero.mp4	24.960000000000
-14	0	Commercials/N64/Banjo-Kazooie/Banjo-Kazooie Nintendo 64 Fruit by the Foot.mp4	30.603333000000
-15	0	Commercials/N64/Banjo-Kazooie/Banjo-Kazooie Nintendo 64 Cartoon Network Giveaway.mp4	32.901667000000
-16	0	Commercials/N64/Banjo-Kazooie/Banjo-Kazooie Promotional Trailer.mp4	35.641667000000
-17	0	Commercials/N64/Banjo-Kazooie/Banjo-Kazooie Commercial US.mp4	29.906667000000
-4	1	Bob's Burgers/1/Bob's Burgers 0104 Sexy Dance Fighting.mkv	1296.127750000000
-5	1	Bob's Burgers/1/Bob's Burgers 0105 Hamburger Dinner Theater.mkv	1276.441750000000
-6	1	Bob's Burgers/1/Bob's Burgers 0106 Sheesh Cab Bob.mkv	1294.125750000000
-7	1	Bob's Burgers/1/Bob's Burgers 0107 Bed & Breakfast.mkv	1280.904000000000
-8	1	Bob's Burgers/1/Bob's Burgers 0108 Art Crawl.mkv	1301.925750000000
-9	1	Bob's Burgers/1/Bob's Burgers 0109 Spaghetti Western and Meatballs.mkv	1300.173750000000
-10	1	Bob's Burgers/1/Bob's Burgers 0110 Burger War.mkv	1293.625750000000
-11	1	Bob's Burgers/1/Bob's Burgers 0111 Weekend at Mort's.mkv	1276.608750000000
-12	1	Bob's Burgers/1/Bob's Burgers 0112 Lobsterfest.mkv	1293.959750000000
-13	1	Bob's Burgers/1/Bob's Burgers 0113 Torpedo.mkv	1294.459750000000
-40	0	Commercials/PS1/Resident Evil 2/Biohazard 2 Promotional Trailer.mp4	113.151000000000
-41	0	Commercials/PS1/Resident Evil 3/Resident Evil 3- Nemesis Commercial.mp4	29.866667000000
-42	0	Commercials/PS2/Final Fantasy X/Final Fantasy X Promo Trailer.mp4	154.955000000000
-43	0	Commercials/PS2/Grand Theft Auto III/Grand Theft Auto III Trailer.mp4	60.463333000000
-44	0	Commercials/PS2/Grand Theft Auto Vice City/Grand Theft Auto Vice City Trailer 1.mp4	64.968333000000
-45	0	Commercials/PS2/Grand Theft Auto Vice City/Grand Theft Auto Vice City Trailer Flock of Seagulls.mp4	60.000000000000
-46	0	Commercials/PS2/Xenosaga Episode I Der Wille zur Macht/Xenosaga Episode I Der Wille zur Macht Commercial.mp4	31.695234000000
-47	0	Commercials/N64/The Legend of Zelda Ocarina of Time/The Legend of Zelda Ocarina Of Time E3 Promo Trailer.mp4	56.261667000000
-48	0	Commercials/Gamecube/Metroid Prime/Metroid Prime Live Action TV Spot V1.mp4	70.448333000000
-49	0	Commercials/Gamecube/Pikmin/Pikmin Promo Trailer.mp4	119.605000000000
-50	0	Commercials/Gamecube/Resident Evil (Remake)/Resident Evil (Remake) Commercial.mp4	32.265000000000
-51	0	Commercials/Gamecube/Resident Evil (Remake)/Resident Evil (Remake) Promo.mp4	90.858333000000
-52	0	Commercials/Gamecube/Resident Evil 0/Resident Evil 0 Commercial.mp4	30.208333000000
-53	0	Commercials/Gamecube/Resident Evil 0/Resident Evil 0 Promo.mp4	134.071667000000
-54	0	Commercials/Gamecube/Resident Evil 0/Resident Evil 0 Commercial 2.mp4	67.314633000000
-55	0	Commercials/Gamecube/The Legend of Zelda The Wind Waker/The Legend of Zelda The Wind Waker With Ocarina of Time Master Quest.mp4	30.000000000000
-56	0	Commercials/SNES/Donkey Kong Country/Donkey Kong Country Commercial.mp4	60.580000000000
-57	0	Commercials/SNES/Super Mario Kart/Super Mario Kart Commercial.mp4	30.115000000000
-58	0	Commercials/SNES/Super Mario World/Super Mario World Commercial.mp4	30.486667000000
-59	0	Commercials/NES/Super Mario Bros. 2/Super Mario Bros. 2 Commercial.mp4	29.675000000000
-60	0	Commercials/Gameboy/Kirby's Dream Land/Kirby's Dream Land Commercial.mp4	30.000000000000
-61	0	Commercials/Dreamcast/Half-Life/Half-Life Unreleased Commercial.mp4	45.741667000000
-62	0	Commercials/64 Bit Jaguar/DOOM/DOOM Commercial.mp4	34.550000000000
-63	0	Commercials/NES/Konami/Konami Commercial.mp4	31.346667000000
-64	0	Commercials/PS2/Final Fantasy X/Final Fantasy X Promo Trailer 2.mp4	170.225000000000
-65	0	Commercials/PS2/Final Fantasy X/Final Fantasy X Promo Trailer 3.mp4	103.188333000000
-66	0	Commercials/PS2/Final Fantasy X-2/Final Fantasy X-2 Promo Japanese.mp4	180.975000000000
-69	0	Bob's Burgers/2/Bob's Burgers 0203 Synchronized Swimming.mkv	1272.384000000000
-68	0	Bob's Burgers/2/Bob's Burgers 0202 Bob Day Afternoon.mkv	1291.488000000000
-70	0	Bob's Burgers/2/Bob's Burgers 0204 Burgerboss.mkv	1295.832000000000
-71	0	Bob's Burgers/2/Bob's Burgers 0205 Food Truckin'.mkv	1272.192000000000
-67	0	Bob's Burgers/2/Bob's Burgers 0201 The Belchies.mkv	1287.024000000000
-72	0	Bob's Burgers/2/Bob's Burgers 0206 Dr Yap.mkv	1292.136000000000
-74	0	Bob's Burgers/2/Bob's Burgers 0208 Bad Tina.mkv	1290.216000000000
-73	0	Bob's Burgers/2/Bob's Burgers 0207 Moody Foodie.mkv	1282.056000000000
-75	0	Bob's Burgers/2/Bob's Burgers 0209 Beefsquatch.mkv	1292.808000000000
-77	0	Bob's Burgers/3/Bob's Burgers 0302 Full Bars.mkv	1284.115750000000
-76	0	Bob's Burgers/3/Bob's Burgers 0301 Ear-sy Rider.mkv	1292.958750000000
-79	0	Bob's Burgers/3/Bob's Burgers 0304 Mutiny on the Windbreaker.mkv	1291.915750000000
-78	0	Bob's Burgers/3/Bob's Burgers 0303 Bob Fires the Kids.mkv	1292.249750000000
-80	0	Bob's Burgers/3/Bob's Burgers 0305 An Indecent Thanksgiving Proposal.mkv	1292.165750000000
-82	0	Bob's Burgers/3/Bob's Burgers 0307 Tina-Rannosaurus Wrecks.mkv	1292.123750000000
-81	0	Bob's Burgers/3/Bob's Burgers 0306 The Deepening.mkv	1271.853750000000
-83	0	Bob's Burgers/3/Bob's Burgers 0308 The Unbearable Like-Likeness of Gene.mkv	1289.287750000000
-84	0	Bob's Burgers/3/Bob's Burgers 0309 God Rest Ye Merry Gentle-Mannequins.mkv	1292.374750000000
-85	0	Bob's Burgers/3/Bob's Burgers 0310 Mother Daughter Laser Razor.mkv	1298.046750000000
-86	0	Bob's Burgers/3/Bob's Burgers 0311 Nude Beach.mkv	1297.546750000000
-88	0	Bob's Burgers/3/Bob's Burgers 0313 My Fuzzy Valentine.mkv	1286.952750000000
-87	0	Bob's Burgers/3/Bob's Burgers 0312 Broadcast Wagstaff School News.mkv	1282.155750000000
-90	0	Bob's Burgers/3/Bob's Burgers 0315 O T The Outside Toilet.mkv	1272.145750000000
-89	0	Bob's Burgers/3/Bob's Burgers 0314 Lindapendant Woman.mkv	1271.978750000000
-91	0	Bob's Burgers/3/Bob's Burgers 0316 Topsy.mkv	1292.457750000000
-92	0	Bob's Burgers/3/Bob's Burgers 0317 Two for Tina.mkv	1292.249750000000
-95	0	Bob's Burgers/3/Bob's Burgers 0320 The Kids Run the Restaurant.mkv	1287.202750000000
-93	0	Bob's Burgers/3/Bob's Burgers 0318 It Snakes a Village.mkv	1272.479750000000
-94	0	Bob's Burgers/3/Bob's Burgers 0319 Family Fracas.mkv	1293.959750000000
-96	0	Bob's Burgers/3/Bob's Burgers 0321 Boyz 4 Now.mkv	1272.354750000000
-97	0	Bob's Burgers/3/Bob's Burgers 0322 Carpe Museum.mkv	1275.273750000000
-122	0	Bob's Burgers/5/Bob's Burgers 0502 Tina and the Real Ghost.mkv	1295.044000000000
-98	0	Bob's Burgers/3/Bob's Burgers 0323 The Unnatural.mkv	1292.123750000000
-100	0	Bob's Burgers/4/Bob's Burgers 0402 Fort Night.mkv	1293.472000000000
-99	0	Bob's Burgers/4/Bob's Burgers 0401 A River Runs Through Bob.mkv	1290.176000000000
-101	0	Bob's Burgers/4/Bob's Burgers 0403 Seaplane.mkv	1292.750000000000
-102	0	Bob's Burgers/4/Bob's Burgers 0404 My Big Fat Greek Bob.mkv	1282.272000000000
-103	0	Bob's Burgers/4/Bob's Burgers 0405 Turkey in a Can.mkv	1272.063000000000
-104	0	Bob's Burgers/4/Bob's Burgers 0406 Purple Rain-Union.mkv	1289.408000000000
-105	0	Bob's Burgers/4/Bob's Burgers 0407 Bob and Deliver.mkv	1291.374000000000
-106	0	Bob's Burgers/4/Bob's Burgers 0408 Christmas in the Car.mkv	1276.687000000000
-107	0	Bob's Burgers/4/Bob's Burgers 0409 Slumber Party.mkv	1290.808000000000
-108	0	Bob's Burgers/4/Bob's Burgers 0410 Presto Tina-o.mkv	1278.068000000000
-109	0	Bob's Burgers/4/Bob's Burgers 0411 Easy Com-mercial, Easy Go-mercial.mkv	1286.368000000000
-110	0	Bob's Burgers/4/Bob's Burgers 0412 The Frond Files.mkv	1295.776000000000
-111	0	Bob's Burgers/4/Bob's Burgers 0413 Mazel-Tina.mkv	1289.705000000000
-113	0	Bob's Burgers/4/Bob's Burgers 0415 The Kids Rob a Train.mkv	1284.576000000000
-112	0	Bob's Burgers/4/Bob's Burgers 0414 Uncle Teddy.mkv	1290.247000000000
-114	0	Bob's Burgers/4/Bob's Burgers 0416 I Get Psy-chic Out of You.mkv	1285.504000000000
-115	0	Bob's Burgers/4/Bob's Burgers 0417 The Equestranauts.mkv	1288.704000000000
-116	0	Bob's Burgers/4/Bob's Burgers 0418 Ambergris.mkv	1267.183000000000
-118	0	Bob's Burgers/4/Bob's Burgers 0420 Gene It On.mkv	1285.696000000000
-117	0	Bob's Burgers/4/Bob's Burgers 0419 The Kids Run Away.mkv	1286.304000000000
-119	0	Bob's Burgers/4/Bob's Burgers 0421 Wharf Horse (or How Bob Saves Destroys the Town - Part I).mkv	1283.824000000000
-120	0	Bob's Burgers/4/Bob's Burgers 0422 World Wharf II The Wharfening (or How Bob Saves Destroys the Town - Part II).mkv	1291.264000000000
-121	0	Bob's Burgers/5/Bob's Burgers 0501 Work Hard Or Die Trying, Girl.mkv	1296.963000000000
-123	0	Bob's Burgers/5/Bob's Burgers 0503 Friends With Burger-Fits.mkv	1294.836000000000
-125	0	Bob's Burgers/5/Bob's Burgers 0505 Best Burger.mkv	1262.845000000000
-124	0	Bob's Burgers/5/Bob's Burgers 0504 Dawn of the Peck.mkv	1281.864000000000
-126	0	Bob's Burgers/5/Bob's Burgers 0506 Father of the Bob.mkv	1292.041000000000
-127	0	Bob's Burgers/5/Bob's Burgers 0507 Tina Tailor Soldier Spy.mkv	1296.879000000000
-128	0	Bob's Burgers/5/Bob's Burgers 0508 Midday Run.mkv	1281.948000000000
-130	0	Bob's Burgers/5/Bob's Burgers 0510 Late Afternoon in the Garden of Bob and Louise.mkv	1294.000000000000
-129	0	Bob's Burgers/5/Bob's Burgers 0509 Speakeasy Rider.mkv	1296.879000000000
-131	0	Bob's Burgers/5/Bob's Burgers 0511 Can't Buy Me Math.mkv	1296.504000000000
-132	0	Bob's Burgers/5/Bob's Burgers 0512 The Millie-Churian Candidate.mkv	1296.921000000000
-133	0	Bob's Burgers/5/Bob's Burgers 0513 The Gayle Tales.mkv	1291.874000000000
-134	0	Bob's Burgers/5/Bob's Burgers 0514 L'il Hard Dad.mkv	1286.828000000000
-135	0	Bob's Burgers/5/Bob's Burgers 0515 Adventures In Chinchilla Sitting.mkv	1281.864000000000
-136	0	Bob's Burgers/5/Bob's Burgers 0516 The Runaway Club.mkv	1291.833000000000
-138	0	Bob's Burgers/5/Bob's Burgers 0518 Eat, Spray, Linda.mkv	1281.572000000000
-137	0	Bob's Burgers/5/Bob's Burgers 0517 The Itty Bitty Ditty Committee.mkv	1296.963000000000
-139	0	Bob's Burgers/5/Bob's Burgers 0519 Housetrap.mkv	1296.713000000000
-140	0	Bob's Burgers/5/Bob's Burgers 0520 Hawk & Chick.mkv	1286.729000000000
-142	0	Bob's Burgers/6/Bob's Burgers 0601 Sliding Bobs.mkv	1294.001000000000
-143	0	Bob's Burgers/6/Bob's Burgers 0602 The Land Ship.mkv	1298.005000000000
-141	0	Bob's Burgers/5/Bob's Burgers 0521 The Oeder Games.mkv	1296.754000000000
-144	0	Bob's Burgers/6/Bob's Burgers 0603 The Hauntening.mkv	1277.109000000000
-145	0	Bob's Burgers/6/Bob's Burgers 0604 Gayle Makin' Bob Sled.mkv	1291.999000000000
-146	0	Bob's Burgers/6/Bob's Burgers 0605 Nice-Capades.mkv	1276.984000000000
-153	0	Bob's Burgers/6/Bob's Burgers 0612 Stand by Gene.mkv	1297.012000000000
-148	0	Bob's Burgers/6/Bob's Burgers 0607 The Gene & Courtney Show.mkv	1292.124000000000
-149	0	Bob's Burgers/6/Bob's Burgers 0608 Sexy Dance Healing.mkv	1286.994000000000
-150	0	Bob's Burgers/6/Bob's Burgers 0609 Sacred Couch.mkv	1297.046000000000
-151	0	Bob's Burgers/6/Bob's Burgers 0610 Lice Things Are Lice.mkv	1297.046000000000
-152	0	Bob's Burgers/6/Bob's Burgers 0611 House of 1000 Bounces.mkv	1280.967000000000
-154	0	Bob's Burgers/6/Bob's Burgers 0613 Wag the Hog.mkv	1271.872000000000
-155	0	Bob's Burgers/6/Bob's Burgers 0614 The Hormone-iums.mkv	1297.046000000000
-156	0	Bob's Burgers/6/Bob's Burgers 0615 Pro Tiki Con Tiki.mkv	1295.975000000000
-157	0	Bob's Burgers/6/Bob's Burgers 0616 Bye Bye Boo Boo.mkv	1294.983000000000
-158	0	Bob's Burgers/6/Bob's Burgers 0617 The Horse Rider-er.mkv	1295.985000000000
-159	0	Bob's Burgers/6/Bob's Burgers 0618 Secret Admiral-irer.mp4	1297.926000000000
-160	0	Bob's Burgers/6/Bob's Burgers 0619 Glued, Where's My Bob.mp4	1293.379778000000
-165	0	Bob's Burgers/7/Bob's Burgers 0705 Large Brother, Where Fart Thou.mp4	1298.560000000000
-161	0	Bob's Burgers/7/Bob's Burgers 0701 Flu-ouise.mp4	1322.450556000000
-167	0	Bob's Burgers/7/Bob's Burgers 0707 The Last Gingerbread House on the Left.mp4	1298.539000000000
-166	0	Bob's Burgers/7/Bob's Burgers 0706 The Quirk-ducers.mp4	1293.504000000000
-147	0	Bob's Burgers/6/Bob's Burgers 0606 The Cook, the Steve, the Gayle, & Her Lover.mkv	1287.047000000000
-184	0	Bob's Burgers/8/Bob's Burgers 0802 The Silence of the Louise.mkv	1296.629000000000
-185	0	Bob's Burgers/8/Bob's Burgers 0803 The Wolf of Wharf Street.mkv	1295.424000000000
-192	0	Bob's Burgers/8/Bob's Burgers 0811 Sleeping with the Frenemy.mkv	1296.608000000000
-191	0	Bob's Burgers/8/Bob's Burgers 0810 The Secret Ceramics Room of Secrets.mkv	1291.456000000000
-195	0	Bob's Burgers/8/Bob's Burgers 0814 The Trouble with Doubles.mkv	1286.368000000000
-199	0	Bob's Burgers/8/Bob's Burgers 0818 As I Walk Through the Alley of the Shadow of Ramps.mkv	1291.616000000000
-203	0	Malcolm in the Middle/1/Malcolm in the Middle 0101 Pilot.mkv	1352.317625000000
-204	0	Malcolm in the Middle/1/Malcolm in the Middle 0102 Red Dress.mkv	1330.963000000000
-205	0	Malcolm in the Middle/1/Malcolm in the Middle 0103 Home Alone 4.mkv	1324.957000000000
-170	0	Bob's Burgers/7/Bob's Burgers 0710 There's No Business Like Mr Business Business.mp4	1277.989378000000
-174	0	Bob's Burgers/7/Bob's Burgers 0714 Aquaticism.mp4	1296.555000000000
-173	0	Bob's Burgers/7/Bob's Burgers 0713 The Grand Mama-pest Hotel.mp4	1298.603000000000
-175	0	Bob's Burgers/7/Bob's Burgers 0715 Ain't Miss Debatin'.mp4	1298.539000000000
-177	0	Bob's Burgers/7/Bob's Burgers 0717 Zero Larp Thirty.mp4	1298.603000000000
-176	0	Bob's Burgers/7/Bob's Burgers 0716 Eggs for Days.mp4	1297.600000000000
-179	0	Bob's Burgers/7/Bob's Burgers 0719 Thelma & Louise Except Thelma is Linda.mp4	1298.560000000000
-178	0	Bob's Burgers/7/Bob's Burgers 0718 The Laser-inth.mp4	1293.547000000000
-180	0	Bob's Burgers/7/Bob's Burgers 0720 Mom, Lies, and Videotape.mp4	1283.584000000000
-182	0	Bob's Burgers/7/Bob's Burgers 0722 Into the Mild.mp4	1298.042000000000
-186	0	Bob's Burgers/8/Bob's Burgers 0804 Sit Me Baby One More Time.mkv	1296.544000000000
-183	0	Bob's Burgers/8/Bob's Burgers 0801 Brunchsquatch.mkv	1298.592000000000
-188	0	Bob's Burgers/8/Bob's Burgers 0806+0807 The Bleakening (Parts 1 & 2).mkv	2625.792000000000
-190	0	Bob's Burgers/8/Bob's Burgers 0809 Y Tu Ga-Ga Tambien.mkv	1293.568000000000
-189	0	Bob's Burgers/8/Bob's Burgers 0808 V for Valentine-detta.mkv	1276.448000000000
-193	0	Bob's Burgers/8/Bob's Burgers 0812 The Hurt Soccer.mkv	1291.296000000000
-194	0	Bob's Burgers/8/Bob's Burgers 0813 Cheer Up, Sleepy Gene.mkv	1286.592000000000
-197	0	Bob's Burgers/8/Bob's Burgers 0816 Are You There Bob It's Me, Birthday.mkv	1293.632000000000
-200	0	Bob's Burgers/8/Bob's Burgers 0819 Mo Mommy Mo Problems.mkv	1293.216000000000
-201	0	Bob's Burgers/8/Bob's Burgers 0820 Mission Impos-slug-ble.mkv	1296.640000000000
-202	0	Bob's Burgers/8/Bob's Burgers 0821 Something Old, Something New, Something Bob Caters for You.mkv	1293.216000000000
-187	0	Bob's Burgers/8/Bob's Burgers 0805 Thanks-hoarding.mkv	1276.320000000000
-206	0	Malcolm in the Middle/1/Malcolm in the Middle 0104 Shame.mkv	1350.449125000000
-208	0	Malcolm in the Middle/1/Malcolm in the Middle 0106 Sleepover.mkv	1353.986000000000
-210	0	Malcolm in the Middle/1/Malcolm in the Middle 0108 Krelboyne Picnic.mkv	1356.922250000000
-207	0	Malcolm in the Middle/1/Malcolm in the Middle 0105 Malcolm Babysits.mkv	1355.921250000000
-209	0	Malcolm in the Middle/1/Malcolm in the Middle 0107 Francis Escapes.mkv	1354.920250000000
-211	0	Malcolm in the Middle/1/Malcolm in the Middle 0109 Lois vs. Evil.mkv	1355.921250000000
-213	0	Malcolm in the Middle/1/Malcolm in the Middle 0111 Funeral.mkv	1352.918250000000
-215	0	Malcolm in the Middle/1/Malcolm in the Middle 0113 Rollerskates.mkv	1345.911250000000
-212	0	Malcolm in the Middle/1/Malcolm in the Middle 0110 Stock Car Races.mkv	1355.921250000000
-216	0	Malcolm in the Middle/1/Malcolm in the Middle 0114 The Bots and the Bees.mkv	1354.920250000000
-219	0	Malcolm in the Middle/2/Malcolm in the Middle 0201 Traffic Jam.mkv	1332.297625000000
-217	0	Malcolm in the Middle/1/Malcolm in the Middle 0115 Smunday.mkv	1351.917250000000
-218	0	Malcolm in the Middle/1/Malcolm in the Middle 0116 Water Park.mkv	1353.986000000000
-220	0	Malcolm in the Middle/2/Malcolm in the Middle 0202 Halloween Approximately.mkv	1334.599875000000
-221	0	Malcolm in the Middle/2/Malcolm in the Middle 0203 Lois's Birthday.mkv	1298.263625000000
-223	0	Malcolm in the Middle/2/Malcolm in the Middle 0205 Casino.mkv	1336.301625000000
-225	0	Malcolm in the Middle/2/Malcolm in the Middle 0207 Robbery.mkv	1334.800125000000
-222	0	Malcolm in the Middle/2/Malcolm in the Middle 0204 Dinner Out.mkv	1337.302625000000
-226	0	Malcolm in the Middle/2/Malcolm in the Middle 0208 Therapy.mkv	1337.636250000000
-227	0	Malcolm in the Middle/2/Malcolm in the Middle 0209 High School Play.mkv	1336.301625000000
-229	0	Malcolm in the Middle/2/Malcolm in the Middle 0211 Old Mrs. Old.mkv	1327.426125000000
-228	0	Malcolm in the Middle/2/Malcolm in the Middle 0210 The Bully.mkv	1336.301625000000
-230	0	Malcolm in the Middle/2/Malcolm in the Middle 0212 Krelboyne Girl.mkv	1337.302625000000
-231	0	Malcolm in the Middle/2/Malcolm in the Middle 0213 New Neighbors.mkv	1335.300625000000
-232	0	Malcolm in the Middle/2/Malcolm in the Middle 0214 Hal Quits.mkv	1337.302625000000
-234	0	Malcolm in the Middle/2/Malcolm in the Middle 0216 Traffic Ticket.mkv	1336.501875000000
-233	0	Malcolm in the Middle/2/Malcolm in the Middle 0215 The Grandparents.mkv	1334.299625000000
-235	0	Malcolm in the Middle/2/Malcolm in the Middle 0217 Surgery.mkv	1338.303625000000
-236	0	Malcolm in the Middle/2/Malcolm in the Middle 0218 Reese Cooks.mkv	1336.301625000000
-237	0	Malcolm in the Middle/2/Malcolm in the Middle 0219 Tutoring Reese.mkv	1332.464500000000
-239	0	Malcolm in the Middle/2/Malcolm in the Middle 0221 Malcolm vs. Reese.mkv	1307.853250000000
-238	0	Malcolm in the Middle/2/Malcolm in the Middle 0220 Bowling.mkv	1333.165125000000
-241	0	Malcolm in the Middle/2/Malcolm in the Middle 0223 Carnival.mkv	1333.098375000000
-243	0	Malcolm in the Middle/2/Malcolm in the Middle 0225 Flashback.mkv	1334.499875000000
-242	0	Malcolm in the Middle/2/Malcolm in the Middle 0224 Evacuation.mkv	1327.693000000000
-245	0	Malcolm in the Middle/3/Malcolm in the Middle 0302 Emancipation.mkv	1328.660625000000
-244	0	Malcolm in the Middle/3/Malcolm in the Middle 0301 Houseboat.mkv	1331.196500000000
-246	0	Malcolm in the Middle/3/Malcolm in the Middle 0303 Book Club.mkv	1321.320000000000
-248	0	Malcolm in the Middle/3/Malcolm in the Middle 0305 Charity.mkv	1328.894250000000
-247	0	Malcolm in the Middle/3/Malcolm in the Middle 0304 Malcolm's Girlfriend.mkv	1314.713375000000
-249	0	Malcolm in the Middle/3/Malcolm in the Middle 0306 Health Scare.mkv	1327.492875000000
-254	0	Malcolm in the Middle/3/Malcolm in the Middle 0311 Company Picnic Part 1.mkv	1297.162500000000
-255	0	Malcolm in the Middle/3/Malcolm in the Middle 0312 Company Picnic Part 2.mkv	1327.626250000000
-251	0	Malcolm in the Middle/3/Malcolm in the Middle 0308 Poker.mkv	1328.026750000000
-257	0	Malcolm in the Middle/3/Malcolm in the Middle 0314 Cynthia's Back.mkv	1326.925625000000
-256	0	Malcolm in the Middle/3/Malcolm in the Middle 0313 Reese Drives.mkv	1328.226875000000
-258	0	Malcolm in the Middle/3/Malcolm in the Middle 0315 Hal's Birthday.mkv	1293.558875000000
-259	0	Malcolm in the Middle/3/Malcolm in the Middle 0316 Hal Coaches.mkv	1269.234625000000
-260	0	Malcolm in the Middle/3/Malcolm in the Middle 0317 Dewey's Dog.mkv	1327.559625000000
-261	0	Malcolm in the Middle/3/Malcolm in the Middle 0318 Poker #2.mkv	1328.060125000000
-263	0	Malcolm in the Middle/3/Malcolm in the Middle 0320 Jury Duty.mkv	1326.558625000000
-264	0	Malcolm in the Middle/3/Malcolm in the Middle 0321 Cliques.mkv	1328.060125000000
-265	0	Malcolm in the Middle/3/Malcolm in the Middle 0322 Monkey.mkv	1327.059125000000
-268	0	Malcolm in the Middle/4/Malcolm in the Middle 0403 Family Reunion.mkv	1314.212875000000
-266	0	Malcolm in the Middle/4/Malcolm in the Middle 0401 Zoo.mkv	1314.713375000000
-267	0	Malcolm in the Middle/4/Malcolm in the Middle 0402 Humilithon.mkv	1314.613250000000
-269	0	Malcolm in the Middle/4/Malcolm in the Middle 0404 Stupid Girl.mkv	1314.813500000000
-270	0	Malcolm in the Middle/4/Malcolm in the Middle 0405 Forwards Backwards.mkv	1315.647625000000
-273	0	Malcolm in the Middle/4/Malcolm in the Middle 0408 Boys at the Ranch.mkv	1314.313000000000
-272	0	Malcolm in the Middle/4/Malcolm in the Middle 0407 Malcolm Holds His Tongue.mkv	1315.981375000000
-271	0	Malcolm in the Middle/4/Malcolm in the Middle 0406 Forbidden Girlfriend.mkv	1314.479875000000
-274	0	Malcolm in the Middle/4/Malcolm in the Middle 0409 Grandma Sues.mkv	1282.848250000000
-275	0	Malcolm in the Middle/4/Malcolm in the Middle 0410 If Boys Were Girls.mkv	1316.148125000000
-277	0	Malcolm in the Middle/4/Malcolm in the Middle 0412 Kicked Out.mkv	1315.480875000000
-276	0	Malcolm in the Middle/4/Malcolm in the Middle 0411 Long Drive.mkv	1316.815500000000
-278	0	Malcolm in the Middle/4/Malcolm in the Middle 0413 Stereo Store.mkv	1315.480875000000
-281	0	Malcolm in the Middle/4/Malcolm in the Middle 0416 Academic Octathlon.mkv	1316.481875000000
-283	0	Malcolm in the Middle/4/Malcolm in the Middle 0418 Reese's Party.mkv	1317.149125000000
-282	0	Malcolm in the Middle/4/Malcolm in the Middle 0417 Clip Show #2.mkv	1316.815500000000
-285	0	Malcolm in the Middle/4/Malcolm in the Middle 0420 Baby Part 1.mkv	1352.184125000000
-284	0	Malcolm in the Middle/4/Malcolm in the Middle 0419 Future Malcolm.mkv	1316.815500000000
-286	0	Malcolm in the Middle/4/Malcolm in the Middle 0421 Baby Part 2.mkv	1326.325000000000
-287	0	Malcolm in the Middle/4/Malcolm in the Middle 0422 Day Care.mkv	1289.354750000000
-289	0	Malcolm in the Middle/5/Malcolm in the Middle 0502 Watching the Baby.mkv	1316.782125000000
-288	0	Malcolm in the Middle/5/Malcolm in the Middle 0501 Vegas.mkv	1348.413750000000
-290	0	Malcolm in the Middle/5/Malcolm in the Middle 0503 Goodbye Kitty.mkv	1316.448500000000
-291	0	Malcolm in the Middle/5/Malcolm in the Middle 0504 Thanksgiving.mkv	1321.453500000000
-292	0	Malcolm in the Middle/5/Malcolm in the Middle 0505 Malcolm Films Reese.mkv	1299.765125000000
-295	0	Malcolm in the Middle/5/Malcolm in the Middle 0508 Block Party.mkv	1318.450500000000
-293	0	Malcolm in the Middle/5/Malcolm in the Middle 0506 Malcolm's Job.mkv	1293.425500000000
-299	0	Malcolm in the Middle/5/Malcolm in the Middle 0512 Softball.mkv	1315.447500000000
-297	0	Malcolm in the Middle/5/Malcolm in the Middle 0510 Hot Tub.mkv	1316.448500000000
-296	0	Malcolm in the Middle/5/Malcolm in the Middle 0509 Dirty Magazine.mkv	1316.949000000000
-300	0	Malcolm in the Middle/5/Malcolm in the Middle 0513 Lois's Sister.mkv	1317.449500000000
-298	0	Malcolm in the Middle/5/Malcolm in the Middle 0511 Ida's Boyfriend.mkv	1313.445500000000
-301	0	Malcolm in the Middle/5/Malcolm in the Middle 0514 Malcolm Dates a Family.mkv	1318.450500000000
-303	0	Malcolm in the Middle/5/Malcolm in the Middle 0516 Malcolm Visits College.mkv	1318.450500000000
-302	0	Malcolm in the Middle/5/Malcolm in the Middle 0515 Reese's Apartment.mkv	1317.282625000000
-304	0	Malcolm in the Middle/5/Malcolm in the Middle 0517 Polly in the Middle.mkv	1316.281625000000
-305	0	Malcolm in the Middle/5/Malcolm in the Middle 0518 Dewey's Special Class.mkv	1316.448500000000
-306	0	Malcolm in the Middle/5/Malcolm in the Middle 0519 Experiment.mkv	1305.437500000000
-307	0	Malcolm in the Middle/5/Malcolm in the Middle 0520 Victor's Other Family.mkv	1346.645250000000
-308	0	Malcolm in the Middle/5/Malcolm in the Middle 0521 Reese Joins the Army Part 1.mkv	1316.949000000000
-163	0	Bob's Burgers/7/Bob's Burgers 0703 Teen-a Witch.mp4	1298.560000000000
-164	0	Bob's Burgers/7/Bob's Burgers 0704 They Serve Horses, Don't They.mp4	1295.044000000000
-162	0	Bob's Burgers/7/Bob's Burgers 0702 Sea Me Now.mp4	1293.568000000000
-168	0	Bob's Burgers/7/Bob's Burgers 0708 Ex MachTina.mp4	1298.539000000000
-169	0	Bob's Burgers/7/Bob's Burgers 0709 Bob Actually.mp4	1298.426500000000
-172	0	Bob's Burgers/7/Bob's Burgers 0712 Like Gene for Chocolate.mp4	1296.939000000000
-171	0	Bob's Burgers/7/Bob's Burgers 0711 A Few 'Gurt Men.mp4	1298.475000000000
-181	0	Bob's Burgers/7/Bob's Burgers 0721 Paraders of the Lost Float.mp4	1278.027000000000
-198	0	Bob's Burgers/8/Bob's Burgers 0817 Boywatch.mkv	1295.456000000000
-196	0	Bob's Burgers/8/Bob's Burgers 0815 Go Tina on the Mountain.mkv	1296.576000000000
-214	0	Malcolm in the Middle/1/Malcolm in the Middle 0112 Cheerleader.mkv	1355.921250000000
-224	0	Malcolm in the Middle/2/Malcolm in the Middle 0206 Convention.mkv	1336.301625000000
-240	0	Malcolm in the Middle/2/Malcolm in the Middle 0222 Mini-Bike.mkv	1334.466500000000
-250	0	Malcolm in the Middle/3/Malcolm in the Middle 0307 Christmas.mkv	1329.094375000000
-252	0	Malcolm in the Middle/3/Malcolm in the Middle 0309 Reese's Job.mkv	1326.525250000000
-253	0	Malcolm in the Middle/3/Malcolm in the Middle 0310 Lois's Makeover.mkv	1327.292625000000
-262	0	Malcolm in the Middle/3/Malcolm in the Middle 0319 Clip Show.mkv	1329.328000000000
-280	0	Malcolm in the Middle/4/Malcolm in the Middle 0415 Garage Sale.mkv	1317.482875000000
-279	0	Malcolm in the Middle/4/Malcolm in the Middle 0414 Hal's Friend.mkv	1316.815500000000
-294	0	Malcolm in the Middle/5/Malcolm in the Middle 0507 Christmas Trees.mkv	1303.435500000000
-310	0	Malcolm in the Middle/6/Malcolm in the Middle 0601 Reese Comes Home.mkv	1303.435500000000
-309	0	Malcolm in the Middle/5/Malcolm in the Middle 0522 Reese Joins the Army Part 2.mkv	1317.449500000000
-311	0	Malcolm in the Middle/6/Malcolm in the Middle 0602 Buseys Run Away.mkv	1317.449500000000
-312	0	Malcolm in the Middle/6/Malcolm in the Middle 0603 Standee.mkv	1318.450500000000
-313	0	Malcolm in the Middle/6/Malcolm in the Middle 0604 Pearl Harbor.mkv	1345.410750000000
-314	0	Malcolm in the Middle/6/Malcolm in the Middle 0605 Kitty's Back.mkv	1316.448500000000
-315	0	Malcolm in the Middle/6/Malcolm in the Middle 0606 Hal's Christmas Gift.mkv	1316.448500000000
-316	0	Malcolm in the Middle/6/Malcolm in the Middle 0607 Hal Sleepwalks.mkv	1317.449500000000
-319	0	Malcolm in the Middle/6/Malcolm in the Middle 0610 Billboard.mkv	1318.450500000000
-320	0	Malcolm in the Middle/6/Malcolm in the Middle 0611 Dewey's Opera.mkv	1344.409750000000
-318	0	Malcolm in the Middle/6/Malcolm in the Middle 0609 Malcolm's Car.mkv	1315.447500000000
-322	0	Malcolm in the Middle/6/Malcolm in the Middle 0613 Tiki Lounge.mkv	1315.447500000000
-324	0	Malcolm in the Middle/6/Malcolm in the Middle 0615 Chad's Sleepover.mkv	1316.448500000000
-323	0	Malcolm in the Middle/6/Malcolm in the Middle 0614 Ida Loses a Leg.mkv	1318.450500000000
-325	0	Malcolm in the Middle/6/Malcolm in the Middle 0616 No Motorcycles.mkv	1316.448500000000
-326	0	Malcolm in the Middle/6/Malcolm in the Middle 0617 Butterflies.mkv	1309.441500000000
-327	0	Malcolm in the Middle/6/Malcolm in the Middle 0618 Ida's Dance.mkv	1318.450500000000
-329	0	Malcolm in the Middle/6/Malcolm in the Middle 0620 Stilts.mkv	1367.332625000000
-328	0	Malcolm in the Middle/6/Malcolm in the Middle 0619 Motivational Speaker.mkv	1316.448500000000
-330	0	Malcolm in the Middle/6/Malcolm in the Middle 0621 Buseys Take a Hostage.mkv	1317.449500000000
-332	0	Malcolm in the Middle/7/Malcolm in the Middle 0701 Burning Man.mkv	1317.716375000000
-333	0	Malcolm in the Middle/7/Malcolm in the Middle 0702 Health Insurance.mkv	1296.695375000000
-331	0	Malcolm in the Middle/6/Malcolm in the Middle 0622 Mrs. Tri-County.mkv	1348.413750000000
-335	0	Malcolm in the Middle/7/Malcolm in the Middle 0704 Halloween.mkv	1321.720375000000
-336	0	Malcolm in the Middle/7/Malcolm in the Middle 0705 Jessica Stays Over.mkv	1322.721375000000
-338	0	Malcolm in the Middle/7/Malcolm in the Middle 0707 Blackout.mkv	1352.751375000000
-337	0	Malcolm in the Middle/7/Malcolm in the Middle 0706 Secret Boyfriend.mkv	1322.721375000000
-339	0	Malcolm in the Middle/7/Malcolm in the Middle 0708 Army Buddy.mkv	1321.720375000000
-340	0	Malcolm in the Middle/7/Malcolm in the Middle 0709 Malcolm Defends Reese.mkv	1323.722375000000
-341	0	Malcolm in the Middle/7/Malcolm in the Middle 0710 Malcolm's Money.mkv	1315.714375000000
-344	0	Malcolm in the Middle/7/Malcolm in the Middle 0713 Mono.mkv	1323.722375000000
-345	0	Malcolm in the Middle/7/Malcolm in the Middle 0714 Hal Grieves.mkv	1352.751375000000
-343	0	Malcolm in the Middle/7/Malcolm in the Middle 0712 College Recruiters.mkv	1321.720375000000
-342	0	Malcolm in the Middle/7/Malcolm in the Middle 0711 Bride of Ida.mkv	1351.750375000000
-346	0	Malcolm in the Middle/7/Malcolm in the Middle 0715 A.A..mkv	1320.719375000000
-350	0	Malcolm in the Middle/7/Malcolm in the Middle 0719 Stevie in the Hospital.mkv	1324.723375000000
-348	0	Malcolm in the Middle/7/Malcolm in the Middle 0717 Hal's Dentist.mkv	1288.687375000000
-347	0	Malcolm in the Middle/7/Malcolm in the Middle 0716 Lois Strikes Back.mkv	1321.720375000000
-349	0	Malcolm in the Middle/7/Malcolm in the Middle 0718 Bomb Shelter.mkv	1324.723375000000
-351	0	Malcolm in the Middle/7/Malcolm in the Middle 0720 Cattle Court.mkv	1322.721375000000
-352	0	Malcolm in the Middle/7/Malcolm in the Middle 0721 Morp.mkv	1323.722375000000
-353	0	Malcolm in the Middle/7/Malcolm in the Middle 0722 Graduation.mkv	1354.753375000000
-317	0	Malcolm in the Middle/6/Malcolm in the Middle 0608 Lois Battles Jamie.mkv	1315.447500000000
-321	0	Malcolm in the Middle/6/Malcolm in the Middle 0612 Living Will.mkv	1317.449500000000
-334	0	Malcolm in the Middle/7/Malcolm in the Middle 0703 Reese vs. Stevie.mkv	1321.720375000000
+COPY public.videos (id, title_id, uri, duration, loudnorm_input_i, loudnorm_input_lra, loudnorm_input_tp, loudnorm_input_thresh) FROM stdin;
+23	0	Commercials/N64/Kirby 64/U.S Kirby 64 commercial.mp4	15.650000000000	-14.02	6.1	-0.01	-24.89
+2	1	Bob's Burgers/1/Bob's Burgers 0102 Crawl Space.mkv	1291.164750000000	-19.72	7.4	-1.86	-30.07
+3	1	Bob's Burgers/1/Bob's Burgers 0103 Sacred Cow.mkv	1296.294750000000	-24.09	8.3	-6.66	-34.52
+4	1	Bob's Burgers/1/Bob's Burgers 0104 Sexy Dance Fighting.mkv	1296.127750000000	-24.63	6.6	-6.87	-34.93
+32	0	Commercials/N64/Turok Dinosaur Hunter/Turok Dinosaur Hunter Commercial.mp4	30.741667000000	-9.07	3.6	0.38	-19.67
+6	1	Bob's Burgers/1/Bob's Burgers 0106 Sheesh Cab Bob.mkv	1294.125750000000	-24.35	8.2	-6.34	-34.6
+7	1	Bob's Burgers/1/Bob's Burgers 0107 Bed & Breakfast.mkv	1280.904000000000	-24.67	7.1	-7.08	-35.03
+8	1	Bob's Burgers/1/Bob's Burgers 0108 Art Crawl.mkv	1301.925750000000	-24.38	6.1	-6.93	-34.59
+10	1	Bob's Burgers/1/Bob's Burgers 0110 Burger War.mkv	1293.625750000000	-24.11	7	-6.83	-34.35
+41	0	Commercials/PS1/Resident Evil 3/Resident Evil 3- Nemesis Commercial.mp4	29.866667000000	-22.37	2.3	-10.4	-32.39
+43	0	Commercials/PS2/Grand Theft Auto III/Grand Theft Auto III Trailer.mp4	60.463333000000	-20.96	5.3	-8.37	-31.35
+42	0	Commercials/PS2/Final Fantasy X/Final Fantasy X Promo Trailer.mp4	154.955000000000	-11.46	8.9	1.43	-22.41
+12	1	Bob's Burgers/1/Bob's Burgers 0112 Lobsterfest.mkv	1293.959750000000	-22.87	6.7	-6.27	-33.08
+13	1	Bob's Burgers/1/Bob's Burgers 0113 Torpedo.mkv	1294.459750000000	-23.48	6.4	-6.97	-33.7
+18	0	Commercials/N64/Console/Nintendo 64 It's Coming Right At Us.mp4	28.536667000000	-22.4	2.3	-12.3	-32.67
+25	0	Commercials/N64/Paper Mario/Paper Mario Debut Commercial.mp4	29.836667000000	-8.73	4.7	1.23	-18.78
+20	0	Commercials/N64/Donkey Kong 64/Donkey Kong 64 Promotional Trailer.mp4	60.720000000000	-14.18	2.3	-0.26	-24.64
+24	0	Commercials/N64/Mario Kart 64/Mario Kart 64 Commercial.mp4	30.531000000000	-10.63	3.5	0.04	-20.73
+27	0	Commercials/N64/Super Mario 64/Super Mario 64 Commercial.mp4	27.538333000000	-24.01	2.5	-11.47	-34.04
+28	0	Commercials/N64/Super Smash Bros/Super Smash Bros. Commercial.mp4	30.348333000000	-13.86	1.2	-5.05	-23.91
+29	0	Commercials/N64/The Legend of Zelda Majora's Mask/The Legend of Zelda Majora's Mask Trailer.mp4	60.433333000000	-21.06	9.9	-3.2	-31.45
+31	0	Commercials/N64/Turok 2 Seeds of Evil/Turok 2 Seeds of Evil Commercial.mp4	30.068333000000	-12.71	1.4	-2.69	-22.75
+34	0	Commercials/PS1/Vigilante 8/Vigilante 8 Banned Commercial.mp4	32.067000000000	-14.18	4.4	-1.72	-24.66
+35	0	Commercials/PS1/Duke Nukem/Duke Nukem Commercial.mp4	14.883333000000	-19.06	3.1	-6.45	-29.41
+36	0	Commercials/PS1/Duke Nukem Time to Kill/Duke Nukem Time to Kill Commercial.mp4	30.091667000000	-17.42	2.5	-4.01	-27.42
+37	0	Commercials/PS1/Resident Evil 2/Resident Evil 2 Commercial 30sec.mp4	30.325267000000	-16.16	1.8	-2.74	-26.19
+39	0	Commercials/PS1/Resident Evil 2/Biohazard 2 Commercial George Romero.mp4	24.960000000000	-13.19	5.1	-1.14	-23.61
+38	0	Commercials/PS1/Resident Evil 2/Biohazard 2 TV Spot George Romero.mp4	31.196000000000	-10.22	5.8	0.2	-21.31
+15	0	Commercials/N64/Banjo-Kazooie/Banjo-Kazooie Nintendo 64 Cartoon Network Giveaway.mp4	32.901667000000	-26.88	1.8	-13.04	-36.89
+16	0	Commercials/N64/Banjo-Kazooie/Banjo-Kazooie Promotional Trailer.mp4	35.641667000000	-15.39	3.2	-0.63	-25.85
+17	0	Commercials/N64/Banjo-Kazooie/Banjo-Kazooie Commercial US.mp4	29.906667000000	-18.14	2.7	-4.51	-28.25
+44	0	Commercials/PS2/Grand Theft Auto Vice City/Grand Theft Auto Vice City Trailer 1.mp4	64.968333000000	-16.25	8.1	-0.91	-26.37
+46	0	Commercials/PS2/Xenosaga Episode I Der Wille zur Macht/Xenosaga Episode I Der Wille zur Macht Commercial.mp4	31.695234000000	-16.26	15.3	-1.18	-27.68
+47	0	Commercials/N64/The Legend of Zelda Ocarina of Time/The Legend of Zelda Ocarina Of Time E3 Promo Trailer.mp4	56.261667000000	-15.09	6.3	-3.5	-25.51
+48	0	Commercials/Gamecube/Metroid Prime/Metroid Prime Live Action TV Spot V1.mp4	70.448333000000	-24.92	5.7	-13.75	-35.14
+49	0	Commercials/Gamecube/Pikmin/Pikmin Promo Trailer.mp4	119.605000000000	-28.4	14.1	-9.32	-39.23
+52	0	Commercials/Gamecube/Resident Evil 0/Resident Evil 0 Commercial.mp4	30.208333000000	-16.52	2	-3.24	-26.56
+51	0	Commercials/Gamecube/Resident Evil (Remake)/Resident Evil (Remake) Promo.mp4	90.858333000000	-18.47	14.1	-0.67	-29.28
+54	0	Commercials/Gamecube/Resident Evil 0/Resident Evil 0 Commercial 2.mp4	67.314633000000	-17.02	11	-1.54	-27.6
+55	0	Commercials/Gamecube/The Legend of Zelda The Wind Waker/The Legend of Zelda The Wind Waker With Ocarina of Time Master Quest.mp4	30.000000000000	-14.53	2	-0.56	-24.63
+57	0	Commercials/SNES/Super Mario Kart/Super Mario Kart Commercial.mp4	30.115000000000	-11.62	1.6	0.14	-21.67
+58	0	Commercials/SNES/Super Mario World/Super Mario World Commercial.mp4	30.486667000000	-25.13	3.1	-7.08	-35.22
+59	0	Commercials/NES/Super Mario Bros. 2/Super Mario Bros. 2 Commercial.mp4	29.675000000000	-26.07	1.3	-15.09	-36.16
+60	0	Commercials/Gameboy/Kirby's Dream Land/Kirby's Dream Land Commercial.mp4	30.000000000000	-20.35	2.6	-7.09	-30.41
+62	0	Commercials/64 Bit Jaguar/DOOM/DOOM Commercial.mp4	34.550000000000	-12.75	2.3	-0.58	-23.2
+63	0	Commercials/NES/Konami/Konami Commercial.mp4	31.346667000000	-18.46	7	-7.12	-29.06
+64	0	Commercials/PS2/Final Fantasy X/Final Fantasy X Promo Trailer 2.mp4	170.225000000000	-16.91	8.8	0.52	-27.33
+272	0	Malcolm in the Middle/4/Malcolm in the Middle 0407 Malcolm Holds His Tongue.mkv	1315.981375000000	-24.78	12.6	-3.36	-35.84
+354	0	3rd Rock from the Sun/1/3rd Rock from the Sun 102 Post-Nasal Dick.mkv	\N	\N	\N	\N	\N
+355	0	3rd Rock from the Sun/1/3rd Rock from the Sun 103 Dick's First Birthday.mkv	\N	\N	\N	\N	\N
+356	0	3rd Rock from the Sun/1/3rd Rock from the Sun 104 Dick Is from Mars, Sally Is from Venus.mkv	\N	\N	\N	\N	\N
+357	0	3rd Rock from the Sun/1/3rd Rock from the Sun 105 Dick, Smoker.mkv	\N	\N	\N	\N	\N
+358	0	3rd Rock from the Sun/1/3rd Rock from the Sun 106 Green-Eyed Dick.mkv	\N	\N	\N	\N	\N
+359	0	3rd Rock from the Sun/1/3rd Rock from the Sun 107 Lonely Dick.mkv	\N	\N	\N	\N	\N
+360	0	3rd Rock from the Sun/1/3rd Rock from the Sun 108 Body & Soul & Dick.mkv	\N	\N	\N	\N	\N
+361	0	3rd Rock from the Sun/1/3rd Rock from the Sun 109 Ab-Dick-ted.mkv	\N	\N	\N	\N	\N
+362	0	3rd Rock from the Sun/1/3rd Rock from the Sun 110 Truth or Dick.mkv	\N	\N	\N	\N	\N
+363	0	3rd Rock from the Sun/1/3rd Rock from the Sun 111 The Art of Dick.mkv	\N	\N	\N	\N	\N
+364	0	3rd Rock from the Sun/1/3rd Rock from the Sun 112 Frozen Dick.mkv	\N	\N	\N	\N	\N
+365	0	3rd Rock from the Sun/1/3rd Rock from the Sun 113 Angry Dick.mkv	\N	\N	\N	\N	\N
+66	0	Commercials/PS2/Final Fantasy X-2/Final Fantasy X-2 Promo Japanese.mp4	180.975000000000	-18.58	4.7	-1.22	-28.75
+69	0	Bob's Burgers/2/Bob's Burgers 0203 Synchronized Swimming.mkv	1272.384000000000	-26.44	9.4	-5.23	-36.74
+68	0	Bob's Burgers/2/Bob's Burgers 0202 Bob Day Afternoon.mkv	1291.488000000000	-23.3	8.3	-1.33	-33.67
+71	0	Bob's Burgers/2/Bob's Burgers 0205 Food Truckin'.mkv	1272.192000000000	-22.66	7.9	0.17	-32.94
+70	0	Bob's Burgers/2/Bob's Burgers 0204 Burgerboss.mkv	1295.832000000000	-22.66	9.2	1.4	-32.98
+67	0	Bob's Burgers/2/Bob's Burgers 0201 The Belchies.mkv	1287.024000000000	-22.52	8.9	0.33	-32.88
+72	0	Bob's Burgers/2/Bob's Burgers 0206 Dr Yap.mkv	1292.136000000000	-23.61	6.1	-1.13	-33.93
+73	0	Bob's Burgers/2/Bob's Burgers 0207 Moody Foodie.mkv	1282.056000000000	-23.98	5.2	-3.95	-34.29
+74	0	Bob's Burgers/2/Bob's Burgers 0208 Bad Tina.mkv	1290.216000000000	-23.22	7.2	-3.75	-33.53
+366	0	3rd Rock from the Sun/1/3rd Rock from the Sun 114 The Dicks They Are A-Changin'.mkv	\N	\N	\N	\N	\N
+77	0	Bob's Burgers/3/Bob's Burgers 0302 Full Bars.mkv	1284.115750000000	-22.35	7.9	-2.08	-32.63
+75	0	Bob's Burgers/2/Bob's Burgers 0209 Beefsquatch.mkv	1292.808000000000	-23.57	6.5	-4.44	-33.77
+76	0	Bob's Burgers/3/Bob's Burgers 0301 Ear-sy Rider.mkv	1292.958750000000	-20.98	9.4	1.37	-31.29
+78	0	Bob's Burgers/3/Bob's Burgers 0303 Bob Fires the Kids.mkv	1292.249750000000	-22.64	6.8	-3.41	-32.88
+79	0	Bob's Burgers/3/Bob's Burgers 0304 Mutiny on the Windbreaker.mkv	1291.915750000000	-23.01	7	-3.24	-33.43
+80	0	Bob's Burgers/3/Bob's Burgers 0305 An Indecent Thanksgiving Proposal.mkv	1292.165750000000	-22.85	7	-3.49	-33.16
+82	0	Bob's Burgers/3/Bob's Burgers 0307 Tina-Rannosaurus Wrecks.mkv	1292.123750000000	-27.31	4.4	-10.19	-37.45
+81	0	Bob's Burgers/3/Bob's Burgers 0306 The Deepening.mkv	1271.853750000000	-21.67	9.5	-1.2	-31.96
+83	0	Bob's Burgers/3/Bob's Burgers 0308 The Unbearable Like-Likeness of Gene.mkv	1289.287750000000	-24.86	6.2	-3.3	-35.07
+84	0	Bob's Burgers/3/Bob's Burgers 0309 God Rest Ye Merry Gentle-Mannequins.mkv	1292.374750000000	-25.18	6.2	-6.95	-35.39
+85	0	Bob's Burgers/3/Bob's Burgers 0310 Mother Daughter Laser Razor.mkv	1298.046750000000	-25.2	5.6	-4.55	-35.33
+86	0	Bob's Burgers/3/Bob's Burgers 0311 Nude Beach.mkv	1297.546750000000	-25.52	6.2	-4.53	-35.7
+88	0	Bob's Burgers/3/Bob's Burgers 0313 My Fuzzy Valentine.mkv	1286.952750000000	-25.23	4.9	-7.19	-35.36
+90	0	Bob's Burgers/3/Bob's Burgers 0315 O T The Outside Toilet.mkv	1272.145750000000	-24.87	7.1	-4.76	-35.05
+87	0	Bob's Burgers/3/Bob's Burgers 0312 Broadcast Wagstaff School News.mkv	1282.155750000000	-25.4	4.8	-6.19	-35.52
+89	0	Bob's Burgers/3/Bob's Burgers 0314 Lindapendant Woman.mkv	1271.978750000000	-25.49	4.7	-4.71	-35.62
+91	0	Bob's Burgers/3/Bob's Burgers 0316 Topsy.mkv	1292.457750000000	-24.44	7.1	-5.35	-34.54
+92	0	Bob's Burgers/3/Bob's Burgers 0317 Two for Tina.mkv	1292.249750000000	-25.13	5.7	-6.08	-35.24
+93	0	Bob's Burgers/3/Bob's Burgers 0318 It Snakes a Village.mkv	1272.479750000000	-24.73	6.6	-5.31	-34.86
+95	0	Bob's Burgers/3/Bob's Burgers 0320 The Kids Run the Restaurant.mkv	1287.202750000000	-24.81	5.3	-6.78	-34.95
+94	0	Bob's Burgers/3/Bob's Burgers 0319 Family Fracas.mkv	1293.959750000000	-24.69	6.6	-4.79	-34.79
+96	0	Bob's Burgers/3/Bob's Burgers 0321 Boyz 4 Now.mkv	1272.354750000000	-23.32	8.8	-3.67	-33.5
+97	0	Bob's Burgers/3/Bob's Burgers 0322 Carpe Museum.mkv	1275.273750000000	-24.72	6.4	-6.28	-34.85
+367	0	3rd Rock from the Sun/1/3rd Rock from the Sun 115 I Enjoy Being a Dick.mkv	\N	\N	\N	\N	\N
+368	0	3rd Rock from the Sun/1/3rd Rock from the Sun 116 Dick Like Me.mkv	\N	\N	\N	\N	\N
+369	0	3rd Rock from the Sun/1/3rd Rock from the Sun 117 Assault with a Deadly Dick.mkv	\N	\N	\N	\N	\N
+370	0	3rd Rock from the Sun/1/3rd Rock from the Sun 118 Father Knows Dick.mkv	\N	\N	\N	\N	\N
+371	0	3rd Rock from the Sun/1/3rd Rock from the Sun 119 Selfish Dick.mkv	\N	\N	\N	\N	\N
+372	0	3rd Rock from the Sun/1/3rd Rock from the Sun 120 See Dick Run.mkv	\N	\N	\N	\N	\N
+65	0	Commercials/PS2/Final Fantasy X/Final Fantasy X Promo Trailer 3.mp4	103.188333000000	-26.99	15.2	-10.79	-37.7
+277	0	Malcolm in the Middle/4/Malcolm in the Middle 0412 Kicked Out.mkv	1315.480875000000	-24.3	14.9	-1.08	-35.96
+101	0	Bob's Burgers/4/Bob's Burgers 0403 Seaplane.mkv	1292.750000000000	-25.35	4.9	-7.62	-35.44
+100	0	Bob's Burgers/4/Bob's Burgers 0402 Fort Night.mkv	1293.472000000000	-24.84	5	-7.82	-34.96
+99	0	Bob's Burgers/4/Bob's Burgers 0401 A River Runs Through Bob.mkv	1290.176000000000	-25.36	4.7	-6.89	-35.43
+102	0	Bob's Burgers/4/Bob's Burgers 0404 My Big Fat Greek Bob.mkv	1282.272000000000	-25.44	5	-8.1	-35.54
+103	0	Bob's Burgers/4/Bob's Burgers 0405 Turkey in a Can.mkv	1272.063000000000	-25.7	4.5	-8.05	-35.83
+105	0	Bob's Burgers/4/Bob's Burgers 0407 Bob and Deliver.mkv	1291.374000000000	-25.72	4.5	-7.94	-35.8
+106	0	Bob's Burgers/4/Bob's Burgers 0408 Christmas in the Car.mkv	1276.687000000000	-25.57	4.9	-7.84	-35.75
+108	0	Bob's Burgers/4/Bob's Burgers 0410 Presto Tina-o.mkv	1278.068000000000	-25.39	4.4	-7.65	-35.52
+109	0	Bob's Burgers/4/Bob's Burgers 0411 Easy Com-mercial, Easy Go-mercial.mkv	1286.368000000000	-22.84	2.1	-4.2	-32.88
+110	0	Bob's Burgers/4/Bob's Burgers 0412 The Frond Files.mkv	1295.776000000000	-24.82	6.1	-7.69	-34.95
+113	0	Bob's Burgers/4/Bob's Burgers 0415 The Kids Rob a Train.mkv	1284.576000000000	-24.22	2.5	-5.74	-34.36
+112	0	Bob's Burgers/4/Bob's Burgers 0414 Uncle Teddy.mkv	1290.247000000000	-22.79	2.4	-3.48	-32.86
+115	0	Bob's Burgers/4/Bob's Burgers 0417 The Equestranauts.mkv	1288.704000000000	-25.39	5	-8.35	-35.46
+116	0	Bob's Burgers/4/Bob's Burgers 0418 Ambergris.mkv	1267.183000000000	-25.28	4.8	-7.59	-35.36
+118	0	Bob's Burgers/4/Bob's Burgers 0420 Gene It On.mkv	1285.696000000000	-24.29	2.6	-4.11	-34.36
+119	0	Bob's Burgers/4/Bob's Burgers 0421 Wharf Horse (or How Bob Saves Destroys the Town - Part I).mkv	1283.824000000000	-25.64	4.5	-8.02	-35.69
+121	0	Bob's Burgers/5/Bob's Burgers 0501 Work Hard Or Die Trying, Girl.mkv	1296.963000000000	-22.72	7.4	-2.7	-32.87
+123	0	Bob's Burgers/5/Bob's Burgers 0503 Friends With Burger-Fits.mkv	1294.836000000000	-23.2	7.4	-3.11	-33.4
+125	0	Bob's Burgers/5/Bob's Burgers 0505 Best Burger.mkv	1262.845000000000	-23.25	5.4	-4.99	-33.32
+124	0	Bob's Burgers/5/Bob's Burgers 0504 Dawn of the Peck.mkv	1281.864000000000	-22.61	8.5	-2.83	-32.9
+126	0	Bob's Burgers/5/Bob's Burgers 0506 Father of the Bob.mkv	1292.041000000000	-23.12	6.5	-3.53	-33.3
+127	0	Bob's Burgers/5/Bob's Burgers 0507 Tina Tailor Soldier Spy.mkv	1296.879000000000	-23.19	6.7	-3.59	-33.33
+130	0	Bob's Burgers/5/Bob's Burgers 0510 Late Afternoon in the Garden of Bob and Louise.mkv	1294.000000000000	-23.39	6.4	-5.66	-33.55
+131	0	Bob's Burgers/5/Bob's Burgers 0511 Can't Buy Me Math.mkv	1296.504000000000	-22.9	7.8	-4.64	-33.08
+129	0	Bob's Burgers/5/Bob's Burgers 0509 Speakeasy Rider.mkv	1296.879000000000	-22.2	9.1	-4.24	-32.4
+133	0	Bob's Burgers/5/Bob's Burgers 0513 The Gayle Tales.mkv	1291.874000000000	-22.97	7	-4.65	-33.09
+134	0	Bob's Burgers/5/Bob's Burgers 0514 L'il Hard Dad.mkv	1286.828000000000	-22.94	7.7	-0.21	-33.15
+136	0	Bob's Burgers/5/Bob's Burgers 0516 The Runaway Club.mkv	1291.833000000000	-22.74	8.2	-3.06	-32.86
+138	0	Bob's Burgers/5/Bob's Burgers 0518 Eat, Spray, Linda.mkv	1281.572000000000	-22.99	7.4	-4.13	-33.25
+137	0	Bob's Burgers/5/Bob's Burgers 0517 The Itty Bitty Ditty Committee.mkv	1296.963000000000	-22.96	7.5	-5.12	-33.09
+139	0	Bob's Burgers/5/Bob's Burgers 0519 Housetrap.mkv	1296.713000000000	-23.19	6.6	-3.71	-33.31
+142	0	Bob's Burgers/6/Bob's Burgers 0601 Sliding Bobs.mkv	1294.001000000000	-25.34	3.7	-5.79	-35.42
+143	0	Bob's Burgers/6/Bob's Burgers 0602 The Land Ship.mkv	1298.005000000000	-25.28	4.5	-5.38	-35.41
+144	0	Bob's Burgers/6/Bob's Burgers 0603 The Hauntening.mkv	1277.109000000000	-25	5.2	-5.68	-35.1
+145	0	Bob's Burgers/6/Bob's Burgers 0604 Gayle Makin' Bob Sled.mkv	1291.999000000000	-25.37	4.3	-5.38	-35.6
+146	0	Bob's Burgers/6/Bob's Burgers 0605 Nice-Capades.mkv	1276.984000000000	-25.28	4.3	-5.62	-35.41
+148	0	Bob's Burgers/6/Bob's Burgers 0607 The Gene & Courtney Show.mkv	1292.124000000000	-25.3	3.7	-5.58	-35.45
+149	0	Bob's Burgers/6/Bob's Burgers 0608 Sexy Dance Healing.mkv	1286.994000000000	-25.62	4.3	-6.31	-35.75
+150	0	Bob's Burgers/6/Bob's Burgers 0609 Sacred Couch.mkv	1297.046000000000	-25.38	4.5	-5.96	-35.52
+152	0	Bob's Burgers/6/Bob's Burgers 0611 House of 1000 Bounces.mkv	1280.967000000000	-25.47	4.6	-5.9	-35.59
+154	0	Bob's Burgers/6/Bob's Burgers 0613 Wag the Hog.mkv	1271.872000000000	-25.5	4.5	-5.88	-35.58
+160	0	Bob's Burgers/6/Bob's Burgers 0619 Glued, Where's My Bob.mp4	1293.379778000000	-18.78	6.4	0.07	-28.89
+155	0	Bob's Burgers/6/Bob's Burgers 0614 The Hormone-iums.mkv	1297.046000000000	-25	4.7	-6.33	-35.13
+165	0	Bob's Burgers/7/Bob's Burgers 0705 Large Brother, Where Fart Thou.mp4	1298.560000000000	-25.01	7.1	-5.18	-35.27
+157	0	Bob's Burgers/6/Bob's Burgers 0616 Bye Bye Boo Boo.mkv	1294.983000000000	-25.29	3.7	-5.88	-35.38
+161	0	Bob's Burgers/7/Bob's Burgers 0701 Flu-ouise.mp4	1322.450556000000	-20.24	6.2	-2.04	-30.38
+158	0	Bob's Burgers/6/Bob's Burgers 0617 The Horse Rider-er.mkv	1295.985000000000	-25.21	4.4	-5.37	-35.42
+166	0	Bob's Burgers/7/Bob's Burgers 0706 The Quirk-ducers.mp4	1293.504000000000	-24.43	5.7	-4.5	-34.55
+147	0	Bob's Burgers/6/Bob's Burgers 0606 The Cook, the Steve, the Gayle, & Her Lover.mkv	1287.047000000000	-25.31	4.1	-5.57	-35.41
+98	0	Bob's Burgers/3/Bob's Burgers 0323 The Unnatural.mkv	1292.123750000000	-24.87	6.4	-3.24	-34.98
+283	0	Malcolm in the Middle/4/Malcolm in the Middle 0418 Reese's Party.mkv	1317.149125000000	-25.62	15.4	-0.97	-37.01
+185	0	Bob's Burgers/8/Bob's Burgers 0803 The Wolf of Wharf Street.mkv	1295.424000000000	-26.36	6.4	-9.13	-36.58
+191	0	Bob's Burgers/8/Bob's Burgers 0810 The Secret Ceramics Room of Secrets.mkv	1291.456000000000	-26.15	7.4	-7.43	-36.46
+203	0	Malcolm in the Middle/1/Malcolm in the Middle 0101 Pilot.mkv	1352.317625000000	-25.27	13.3	-4.04	-36.57
+204	0	Malcolm in the Middle/1/Malcolm in the Middle 0102 Red Dress.mkv	1330.963000000000	-29.5	12.5	-9.12	-40.76
+179	0	Bob's Burgers/7/Bob's Burgers 0719 Thelma & Louise Except Thelma is Linda.mp4	1298.560000000000	-24.26	5.5	-4.93	-34.39
+178	0	Bob's Burgers/7/Bob's Burgers 0718 The Laser-inth.mp4	1293.547000000000	-24.1	8.2	-2.78	-34.24
+170	0	Bob's Burgers/7/Bob's Burgers 0710 There's No Business Like Mr Business Business.mp4	1277.989378000000	-24.69	5.3	-5.6	-34.83
+174	0	Bob's Burgers/7/Bob's Burgers 0714 Aquaticism.mp4	1296.555000000000	-24.9	4.1	-5.7	-35
+173	0	Bob's Burgers/7/Bob's Burgers 0713 The Grand Mama-pest Hotel.mp4	1298.603000000000	-24.78	5.6	-4.64	-34.9
+177	0	Bob's Burgers/7/Bob's Burgers 0717 Zero Larp Thirty.mp4	1298.603000000000	-23.98	4.8	-3.36	-34.11
+176	0	Bob's Burgers/7/Bob's Burgers 0716 Eggs for Days.mp4	1297.600000000000	-23.93	6.5	-4.1	-34.08
+195	0	Bob's Burgers/8/Bob's Burgers 0814 The Trouble with Doubles.mkv	1286.368000000000	-25.5	9	-7.38	-35.83
+180	0	Bob's Burgers/7/Bob's Burgers 0720 Mom, Lies, and Videotape.mp4	1283.584000000000	-22.77	5.7	-4.78	-32.86
+182	0	Bob's Burgers/7/Bob's Burgers 0722 Into the Mild.mp4	1298.042000000000	-22.34	6.5	-5.26	-32.55
+183	0	Bob's Burgers/8/Bob's Burgers 0801 Brunchsquatch.mkv	1298.592000000000	-26.6	7.9	-7.75	-36.86
+190	0	Bob's Burgers/8/Bob's Burgers 0809 Y Tu Ga-Ga Tambien.mkv	1293.568000000000	-26.3	8.6	-8.96	-36.63
+193	0	Bob's Burgers/8/Bob's Burgers 0812 The Hurt Soccer.mkv	1291.296000000000	-26.05	9.2	-8.36	-36.42
+194	0	Bob's Burgers/8/Bob's Burgers 0813 Cheer Up, Sleepy Gene.mkv	1286.592000000000	-26.38	8.5	-7.2	-36.73
+197	0	Bob's Burgers/8/Bob's Burgers 0816 Are You There Bob It's Me, Birthday.mkv	1293.632000000000	-26.15	8.1	-7.96	-36.48
+200	0	Bob's Burgers/8/Bob's Burgers 0819 Mo Mommy Mo Problems.mkv	1293.216000000000	-25.57	9	-6.37	-35.85
+206	0	Malcolm in the Middle/1/Malcolm in the Middle 0104 Shame.mkv	1350.449125000000	-23.61	8.2	-5.07	-34.43
+208	0	Malcolm in the Middle/1/Malcolm in the Middle 0106 Sleepover.mkv	1353.986000000000	-28.54	9.4	-10.98	-39.74
+207	0	Malcolm in the Middle/1/Malcolm in the Middle 0105 Malcolm Babysits.mkv	1355.921250000000	-28.4	10.2	-9.75	-39.47
+209	0	Malcolm in the Middle/1/Malcolm in the Middle 0107 Francis Escapes.mkv	1354.920250000000	-28.11	10.1	-9.96	-39.41
+211	0	Malcolm in the Middle/1/Malcolm in the Middle 0109 Lois vs. Evil.mkv	1355.921250000000	-29.62	12.5	-10.36	-40.83
+202	0	Bob's Burgers/8/Bob's Burgers 0821 Something Old, Something New, Something Bob Caters for You.mkv	1293.216000000000	-25.01	8.4	-7.21	-35.27
+187	0	Bob's Burgers/8/Bob's Burgers 0805 Thanks-hoarding.mkv	1276.320000000000	-26.51	6.1	-8.03	-36.72
+213	0	Malcolm in the Middle/1/Malcolm in the Middle 0111 Funeral.mkv	1352.918250000000	-27.71	7.3	-10.11	-38.57
+212	0	Malcolm in the Middle/1/Malcolm in the Middle 0110 Stock Car Races.mkv	1355.921250000000	-27.68	8.6	-10.68	-38.38
+216	0	Malcolm in the Middle/1/Malcolm in the Middle 0114 The Bots and the Bees.mkv	1354.920250000000	-28.19	8.6	-9.04	-39.11
+219	0	Malcolm in the Middle/2/Malcolm in the Middle 0201 Traffic Jam.mkv	1332.297625000000	-25.28	12	-6.66	-36.41
+218	0	Malcolm in the Middle/1/Malcolm in the Middle 0116 Water Park.mkv	1353.986000000000	-27.61	7.5	-9.7	-38.35
+220	0	Malcolm in the Middle/2/Malcolm in the Middle 0202 Halloween Approximately.mkv	1334.599875000000	-24.11	12.9	-4.44	-35.27
+221	0	Malcolm in the Middle/2/Malcolm in the Middle 0203 Lois's Birthday.mkv	1298.263625000000	-25.02	12.2	-5.32	-36.16
+225	0	Malcolm in the Middle/2/Malcolm in the Middle 0207 Robbery.mkv	1334.800125000000	-24.02	14.4	-5.41	-35.36
+222	0	Malcolm in the Middle/2/Malcolm in the Middle 0204 Dinner Out.mkv	1337.302625000000	-24.63	12.6	-5.46	-36.18
+226	0	Malcolm in the Middle/2/Malcolm in the Middle 0208 Therapy.mkv	1337.636250000000	-25.76	11.6	-3.22	-37.09
+229	0	Malcolm in the Middle/2/Malcolm in the Middle 0211 Old Mrs. Old.mkv	1327.426125000000	-24.04	11.5	-3.02	-35.3
+228	0	Malcolm in the Middle/2/Malcolm in the Middle 0210 The Bully.mkv	1336.301625000000	-23.5	13.6	-8.42	-34.58
+230	0	Malcolm in the Middle/2/Malcolm in the Middle 0212 Krelboyne Girl.mkv	1337.302625000000	-25.7	12	-6.29	-37.08
+232	0	Malcolm in the Middle/2/Malcolm in the Middle 0214 Hal Quits.mkv	1337.302625000000	-24.6	11.3	-3.84	-35.92
+234	0	Malcolm in the Middle/2/Malcolm in the Middle 0216 Traffic Ticket.mkv	1336.501875000000	-25.05	13.1	-6.42	-36.36
+233	0	Malcolm in the Middle/2/Malcolm in the Middle 0215 The Grandparents.mkv	1334.299625000000	-25.96	10.9	-5.16	-37
+236	0	Malcolm in the Middle/2/Malcolm in the Middle 0218 Reese Cooks.mkv	1336.301625000000	-24.33	10.4	-5.84	-35.42
+237	0	Malcolm in the Middle/2/Malcolm in the Middle 0219 Tutoring Reese.mkv	1332.464500000000	-23.66	10.9	-6.26	-34.83
+238	0	Malcolm in the Middle/2/Malcolm in the Middle 0220 Bowling.mkv	1333.165125000000	-24.39	12.6	-6.02	-35.52
+184	0	Bob's Burgers/8/Bob's Burgers 0802 The Silence of the Louise.mkv	1296.629000000000	-26.48	6.3	-8.4	-36.73
+273	0	Malcolm in the Middle/4/Malcolm in the Middle 0408 Boys at the Ranch.mkv	1314.313000000000	-23.68	13	-2.24	-35
+274	0	Malcolm in the Middle/4/Malcolm in the Middle 0409 Grandma Sues.mkv	1282.848250000000	-25.24	13.6	-4.18	-36.72
+271	0	Malcolm in the Middle/4/Malcolm in the Middle 0406 Forbidden Girlfriend.mkv	1314.479875000000	-27.13	12.9	-3.38	-38.38
+275	0	Malcolm in the Middle/4/Malcolm in the Middle 0410 If Boys Were Girls.mkv	1316.148125000000	-24.11	10.9	-2.47	-35.01
+276	0	Malcolm in the Middle/4/Malcolm in the Middle 0411 Long Drive.mkv	1316.815500000000	-23.33	13	-0.87	-34.45
+278	0	Malcolm in the Middle/4/Malcolm in the Middle 0413 Stereo Store.mkv	1315.480875000000	-24.19	13.8	-1.92	-35.66
+281	0	Malcolm in the Middle/4/Malcolm in the Middle 0416 Academic Octathlon.mkv	1316.481875000000	-24.97	13.9	-3.09	-36.37
+282	0	Malcolm in the Middle/4/Malcolm in the Middle 0417 Clip Show #2.mkv	1316.815500000000	-22.35	13.3	-2.85	-33.36
+285	0	Malcolm in the Middle/4/Malcolm in the Middle 0420 Baby Part 1.mkv	1352.184125000000	-25.69	11.5	-2.84	-36.9
+284	0	Malcolm in the Middle/4/Malcolm in the Middle 0419 Future Malcolm.mkv	1316.815500000000	-26.52	12	-2.27	-37.84
+287	0	Malcolm in the Middle/4/Malcolm in the Middle 0422 Day Care.mkv	1289.354750000000	-25.61	13.4	-0.74	-36.92
+289	0	Malcolm in the Middle/5/Malcolm in the Middle 0502 Watching the Baby.mkv	1316.782125000000	-23.58	14.7	-2.81	-34.83
+288	0	Malcolm in the Middle/5/Malcolm in the Middle 0501 Vegas.mkv	1348.413750000000	-23.36	13.2	-7.23	-34.53
+291	0	Malcolm in the Middle/5/Malcolm in the Middle 0504 Thanksgiving.mkv	1321.453500000000	-25.7	15.8	-6.75	-37.46
+243	0	Malcolm in the Middle/2/Malcolm in the Middle 0225 Flashback.mkv	1334.499875000000	-23.52	10.3	-5.32	-34.48
+242	0	Malcolm in the Middle/2/Malcolm in the Middle 0224 Evacuation.mkv	1327.693000000000	-24.33	9.2	-4.89	-35.35
+244	0	Malcolm in the Middle/3/Malcolm in the Middle 0301 Houseboat.mkv	1331.196500000000	-25.6	12.9	-4.89	-36.98
+246	0	Malcolm in the Middle/3/Malcolm in the Middle 0303 Book Club.mkv	1321.320000000000	-24.83	10.1	-7.51	-35.73
+248	0	Malcolm in the Middle/3/Malcolm in the Middle 0305 Charity.mkv	1328.894250000000	-25.7	12.2	-5.18	-36.93
+249	0	Malcolm in the Middle/3/Malcolm in the Middle 0306 Health Scare.mkv	1327.492875000000	-25.53	13.2	-5.78	-36.86
+254	0	Malcolm in the Middle/3/Malcolm in the Middle 0311 Company Picnic Part 1.mkv	1297.162500000000	-25.5	9.6	-6.83	-36.33
+255	0	Malcolm in the Middle/3/Malcolm in the Middle 0312 Company Picnic Part 2.mkv	1327.626250000000	-23.57	9.7	-1.71	-34.3
+257	0	Malcolm in the Middle/3/Malcolm in the Middle 0314 Cynthia's Back.mkv	1326.925625000000	-25.08	8.6	-4.41	-36.03
+256	0	Malcolm in the Middle/3/Malcolm in the Middle 0313 Reese Drives.mkv	1328.226875000000	-24.95	9	-4.97	-35.75
+258	0	Malcolm in the Middle/3/Malcolm in the Middle 0315 Hal's Birthday.mkv	1293.558875000000	-25.64	10.8	-7.04	-36.96
+260	0	Malcolm in the Middle/3/Malcolm in the Middle 0317 Dewey's Dog.mkv	1327.559625000000	-24.98	9.4	-8.17	-35.86
+261	0	Malcolm in the Middle/3/Malcolm in the Middle 0318 Poker #2.mkv	1328.060125000000	-25.14	10.4	-8.35	-36.17
+263	0	Malcolm in the Middle/3/Malcolm in the Middle 0320 Jury Duty.mkv	1326.558625000000	-23.86	7.3	-3.53	-34.52
+265	0	Malcolm in the Middle/3/Malcolm in the Middle 0322 Monkey.mkv	1327.059125000000	-25.47	11.5	-0.13	-36.58
+268	0	Malcolm in the Middle/4/Malcolm in the Middle 0403 Family Reunion.mkv	1314.212875000000	-24.01	14.8	-2.38	-35.29
+266	0	Malcolm in the Middle/4/Malcolm in the Middle 0401 Zoo.mkv	1314.713375000000	-26.39	10.7	-3.01	-37.48
+269	0	Malcolm in the Middle/4/Malcolm in the Middle 0404 Stupid Girl.mkv	1314.813500000000	-25.44	13.3	-0.45	-36.68
+270	0	Malcolm in the Middle/4/Malcolm in the Middle 0405 Forwards Backwards.mkv	1315.647625000000	-25.07	13.2	-2.34	-36.31
+292	0	Malcolm in the Middle/5/Malcolm in the Middle 0505 Malcolm Films Reese.mkv	1299.765125000000	-25.81	12.8	-3.12	-37.28
+295	0	Malcolm in the Middle/5/Malcolm in the Middle 0508 Block Party.mkv	1318.450500000000	-23.16	11.8	-8.04	-34.1
+299	0	Malcolm in the Middle/5/Malcolm in the Middle 0512 Softball.mkv	1315.447500000000	-24.66	14.5	-8.5	-36.12
+297	0	Malcolm in the Middle/5/Malcolm in the Middle 0510 Hot Tub.mkv	1316.448500000000	-24.93	13	-8.19	-36.17
+296	0	Malcolm in the Middle/5/Malcolm in the Middle 0509 Dirty Magazine.mkv	1316.949000000000	-25.9	11.6	-3.37	-37.23
+298	0	Malcolm in the Middle/5/Malcolm in the Middle 0511 Ida's Boyfriend.mkv	1313.445500000000	-26.81	12.2	-8.91	-38.32
+301	0	Malcolm in the Middle/5/Malcolm in the Middle 0514 Malcolm Dates a Family.mkv	1318.450500000000	-26.79	12.2	-5.19	-38.24
+303	0	Malcolm in the Middle/5/Malcolm in the Middle 0516 Malcolm Visits College.mkv	1318.450500000000	-24.49	14.8	-9.04	-35.93
+304	0	Malcolm in the Middle/5/Malcolm in the Middle 0517 Polly in the Middle.mkv	1316.281625000000	-24.98	11.3	-2.8	-36.15
+305	0	Malcolm in the Middle/5/Malcolm in the Middle 0518 Dewey's Special Class.mkv	1316.448500000000	-25	16.5	-5.99	-36.54
+306	0	Malcolm in the Middle/5/Malcolm in the Middle 0519 Experiment.mkv	1305.437500000000	-27.31	14.4	-7.17	-38.94
+308	0	Malcolm in the Middle/5/Malcolm in the Middle 0521 Reese Joins the Army Part 1.mkv	1316.949000000000	-25.53	15.2	-3.08	-36.98
+373	0	3rd Rock from the Sun/1/3rd Rock from the Sun 101 Brains and Eggs.mkv	\N	\N	\N	\N	\N
+241	0	Malcolm in the Middle/2/Malcolm in the Middle 0223 Carnival.mkv	1333.098375000000	-23.77	11.7	-4.75	-34.88
+286	0	Malcolm in the Middle/4/Malcolm in the Middle 0421 Baby Part 2.mkv	1326.325000000000	-25	12.6	-2.82	-36.27
+290	0	Malcolm in the Middle/5/Malcolm in the Middle 0503 Goodbye Kitty.mkv	1316.448500000000	-25.09	12.9	-8.15	-36.49
+164	0	Bob's Burgers/7/Bob's Burgers 0704 They Serve Horses, Don't They.mp4	1295.044000000000	-25.26	5.2	-4.78	-35.42
+168	0	Bob's Burgers/7/Bob's Burgers 0708 Ex MachTina.mp4	1298.539000000000	-24.85	6.3	-5.5	-35.06
+169	0	Bob's Burgers/7/Bob's Burgers 0709 Bob Actually.mp4	1298.426500000000	-24	4.7	-4.69	-34.14
+309	0	Malcolm in the Middle/5/Malcolm in the Middle 0522 Reese Joins the Army Part 2.mkv	1317.449500000000	-23.67	15.1	-8.21	-35.18
+311	0	Malcolm in the Middle/6/Malcolm in the Middle 0602 Buseys Run Away.mkv	1317.449500000000	-23.42	15.6	-8.16	-35.07
+312	0	Malcolm in the Middle/6/Malcolm in the Middle 0603 Standee.mkv	1318.450500000000	-25.26	16.6	-7.29	-36.91
+313	0	Malcolm in the Middle/6/Malcolm in the Middle 0604 Pearl Harbor.mkv	1345.410750000000	-23.83	14.5	-7.71	-35.39
+315	0	Malcolm in the Middle/6/Malcolm in the Middle 0606 Hal's Christmas Gift.mkv	1316.448500000000	-22.36	15.6	-8.26	-33.87
+316	0	Malcolm in the Middle/6/Malcolm in the Middle 0607 Hal Sleepwalks.mkv	1317.449500000000	-22.54	14.2	-8.36	-33.91
+318	0	Malcolm in the Middle/6/Malcolm in the Middle 0609 Malcolm's Car.mkv	1315.447500000000	-24.93	11.1	-9.18	-36.01
+320	0	Malcolm in the Middle/6/Malcolm in the Middle 0611 Dewey's Opera.mkv	1344.409750000000	-22.47	15.2	-8.77	-33.85
+322	0	Malcolm in the Middle/6/Malcolm in the Middle 0613 Tiki Lounge.mkv	1315.447500000000	-23.95	13.3	-10	-35.34
+323	0	Malcolm in the Middle/6/Malcolm in the Middle 0614 Ida Loses a Leg.mkv	1318.450500000000	-23.74	15.4	-9.9	-35.28
+326	0	Malcolm in the Middle/6/Malcolm in the Middle 0617 Butterflies.mkv	1309.441500000000	-26.05	11.9	-9.61	-37.41
+325	0	Malcolm in the Middle/6/Malcolm in the Middle 0616 No Motorcycles.mkv	1316.448500000000	-24.03	12.3	-10.14	-35.42
+329	0	Malcolm in the Middle/6/Malcolm in the Middle 0620 Stilts.mkv	1367.332625000000	-24.59	12.6	-10.58	-35.86
+328	0	Malcolm in the Middle/6/Malcolm in the Middle 0619 Motivational Speaker.mkv	1316.448500000000	-25.06	14.6	-9.68	-36.8
+332	0	Malcolm in the Middle/7/Malcolm in the Middle 0701 Burning Man.mkv	1317.716375000000	-24.54	7.8	-3.76	-35.08
+333	0	Malcolm in the Middle/7/Malcolm in the Middle 0702 Health Insurance.mkv	1296.695375000000	-25.59	9.3	-2.84	-36.46
+335	0	Malcolm in the Middle/7/Malcolm in the Middle 0704 Halloween.mkv	1321.720375000000	-24.92	9.7	-6.63	-35.8
+331	0	Malcolm in the Middle/6/Malcolm in the Middle 0622 Mrs. Tri-County.mkv	1348.413750000000	-23.46	12.2	-11.53	-34.73
+338	0	Malcolm in the Middle/7/Malcolm in the Middle 0707 Blackout.mkv	1352.751375000000	-25.77	8.7	-6.15	-36.45
+337	0	Malcolm in the Middle/7/Malcolm in the Middle 0706 Secret Boyfriend.mkv	1322.721375000000	-25.11	8	-7.59	-35.96
+339	0	Malcolm in the Middle/7/Malcolm in the Middle 0708 Army Buddy.mkv	1321.720375000000	-25.32	8.3	-6.01	-36.39
+341	0	Malcolm in the Middle/7/Malcolm in the Middle 0710 Malcolm's Money.mkv	1315.714375000000	-25.1	9.8	-7.15	-36.16
+344	0	Malcolm in the Middle/7/Malcolm in the Middle 0713 Mono.mkv	1323.722375000000	-25.55	11.4	-7.08	-36.87
+345	0	Malcolm in the Middle/7/Malcolm in the Middle 0714 Hal Grieves.mkv	1352.751375000000	-24.99	9.6	-6.6	-35.99
+342	0	Malcolm in the Middle/7/Malcolm in the Middle 0711 Bride of Ida.mkv	1351.750375000000	-25.2	9.9	-6.9	-36.27
+346	0	Malcolm in the Middle/7/Malcolm in the Middle 0715 A.A..mkv	1320.719375000000	-25.38	8.7	-7.37	-36.42
+350	0	Malcolm in the Middle/7/Malcolm in the Middle 0719 Stevie in the Hospital.mkv	1324.723375000000	-25.4	11.1	-5.37	-36.53
+347	0	Malcolm in the Middle/7/Malcolm in the Middle 0716 Lois Strikes Back.mkv	1321.720375000000	-24.85	10.3	-7.03	-35.91
+349	0	Malcolm in the Middle/7/Malcolm in the Middle 0718 Bomb Shelter.mkv	1324.723375000000	-24.55	9.5	-5.16	-35.3
+351	0	Malcolm in the Middle/7/Malcolm in the Middle 0720 Cattle Court.mkv	1322.721375000000	-24.93	9.6	-7.38	-35.77
+352	0	Malcolm in the Middle/7/Malcolm in the Middle 0721 Morp.mkv	1323.722375000000	-24.92	7.2	-6.46	-35.66
+171	0	Bob's Burgers/7/Bob's Burgers 0711 A Few 'Gurt Men.mp4	1298.475000000000	-25.31	4.5	-4.85	-35.43
+181	0	Bob's Burgers/7/Bob's Burgers 0721 Paraders of the Lost Float.mp4	1278.027000000000	-22.37	6	-5.05	-32.47
+214	0	Malcolm in the Middle/1/Malcolm in the Middle 0112 Cheerleader.mkv	1355.921250000000	-28.61	9	-9.31	-39.64
+240	0	Malcolm in the Middle/2/Malcolm in the Middle 0222 Mini-Bike.mkv	1334.466500000000	-24.6	12.6	-5.53	-35.99
+250	0	Malcolm in the Middle/3/Malcolm in the Middle 0307 Christmas.mkv	1329.094375000000	-25.66	12.7	-7.41	-37.16
+253	0	Malcolm in the Middle/3/Malcolm in the Middle 0310 Lois's Makeover.mkv	1327.292625000000	-25.37	12.4	-6.72	-36.59
+280	0	Malcolm in the Middle/4/Malcolm in the Middle 0415 Garage Sale.mkv	1317.482875000000	-25.89	11.5	-2.53	-36.85
+262	0	Malcolm in the Middle/3/Malcolm in the Middle 0319 Clip Show.mkv	1329.328000000000	-25.3	11.8	-6.28	-36.47
+198	0	Bob's Burgers/8/Bob's Burgers 0817 Boywatch.mkv	1295.456000000000	-26.53	9.2	-8.19	-36.84
+196	0	Bob's Burgers/8/Bob's Burgers 0815 Go Tina on the Mountain.mkv	1296.576000000000	-26.08	7.7	-7.94	-36.39
+294	0	Malcolm in the Middle/5/Malcolm in the Middle 0507 Christmas Trees.mkv	1303.435500000000	-23.79	12.3	-7.77	-34.83
+293	0	Malcolm in the Middle/5/Malcolm in the Middle 0506 Malcolm's Job.mkv	1293.425500000000	-25.51	12.9	-8.65	-36.76
+300	0	Malcolm in the Middle/5/Malcolm in the Middle 0513 Lois's Sister.mkv	1317.449500000000	-25.6	14.3	-4.03	-37.01
+302	0	Malcolm in the Middle/5/Malcolm in the Middle 0515 Reese's Apartment.mkv	1317.282625000000	-26.55	13.1	-4.93	-38.04
+307	0	Malcolm in the Middle/5/Malcolm in the Middle 0520 Victor's Other Family.mkv	1346.645250000000	-25.86	13	-5.33	-37.26
+163	0	Bob's Burgers/7/Bob's Burgers 0703 Teen-a Witch.mp4	1298.560000000000	-24.47	5.6	-4.48	-34.58
+162	0	Bob's Burgers/7/Bob's Burgers 0702 Sea Me Now.mp4	1293.568000000000	-19.05	4.9	1.85	-29.17
+172	0	Bob's Burgers/7/Bob's Burgers 0712 Like Gene for Chocolate.mp4	1296.939000000000	-25.27	5.9	-4.68	-35.44
+224	0	Malcolm in the Middle/2/Malcolm in the Middle 0206 Convention.mkv	1336.301625000000	-25.64	11.7	-6.88	-37.02
+252	0	Malcolm in the Middle/3/Malcolm in the Middle 0309 Reese's Job.mkv	1326.525250000000	-25.42	9	-5.62	-36.32
+279	0	Malcolm in the Middle/4/Malcolm in the Middle 0414 Hal's Friend.mkv	1316.815500000000	-24.12	11	-1.73	-35.15
+310	0	Malcolm in the Middle/6/Malcolm in the Middle 0601 Reese Comes Home.mkv	1303.435500000000	-23.21	13.2	-7.56	-34.63
+314	0	Malcolm in the Middle/6/Malcolm in the Middle 0605 Kitty's Back.mkv	1316.448500000000	-24.2	14.1	-7.77	-35.78
+319	0	Malcolm in the Middle/6/Malcolm in the Middle 0610 Billboard.mkv	1318.450500000000	-23.6	10.6	-10.15	-34.63
+324	0	Malcolm in the Middle/6/Malcolm in the Middle 0615 Chad's Sleepover.mkv	1316.448500000000	-24.07	14.7	-8.99	-35.75
+327	0	Malcolm in the Middle/6/Malcolm in the Middle 0618 Ida's Dance.mkv	1318.450500000000	-25.16	13.1	-9.85	-36.6
+330	0	Malcolm in the Middle/6/Malcolm in the Middle 0621 Buseys Take a Hostage.mkv	1317.449500000000	-25.88	12.9	-10.23	-37.35
+336	0	Malcolm in the Middle/7/Malcolm in the Middle 0705 Jessica Stays Over.mkv	1322.721375000000	-25.06	9.4	-6.65	-36.02
+340	0	Malcolm in the Middle/7/Malcolm in the Middle 0709 Malcolm Defends Reese.mkv	1323.722375000000	-25.85	9.1	-7.9	-36.78
+343	0	Malcolm in the Middle/7/Malcolm in the Middle 0712 College Recruiters.mkv	1321.720375000000	-25.19	8.6	-6.18	-36.34
+348	0	Malcolm in the Middle/7/Malcolm in the Middle 0717 Hal's Dentist.mkv	1288.687375000000	-24.9	8.8	-6.08	-35.93
+317	0	Malcolm in the Middle/6/Malcolm in the Middle 0608 Lois Battles Jamie.mkv	1315.447500000000	-23.33	15.3	-7.87	-34.94
+321	0	Malcolm in the Middle/6/Malcolm in the Middle 0612 Living Will.mkv	1317.449500000000	-24.11	11.5	-10.28	-35.49
+21	0	Commercials/N64/Extreme-G/Extreme-G Beta Trailer.mp4	18.970000000000	-8.74	1.3	1.04	-18.79
+22	0	Commercials/N64/Goldeneye/Goldeneye 007 Promotional Trailer.mp4	30.510000000000	-14.1	3	-0.08	-24.56
+19	0	Commercials/N64/Diddy Kong Racing/Diddy Kong Racing Meet the Fastest Monkey in the Jungle.mp4	49.851667000000	-15.05	2.1	0.1	-25.23
+26	0	Commercials/N64/Perfect Dark/Perfect Dark Commercial Full.mkv	60.021000000000	-18.65	9.4	-2.26	-29.02
+30	0	Commercials/N64/The Legend of Zelda Ocarina of Time/The Legend of Zelda Ocarina of Time Trailer.mp4	62.368333000000	-9.77	17.2	1.75	-20.95
+33	0	Commercials/N64/Turok Dinosaur Hunter/Turok Dinosaur Hunter German Commercial.mp4	76.160000000000	-11.43	3.4	1.26	-21.58
+14	0	Commercials/N64/Banjo-Kazooie/Banjo-Kazooie Nintendo 64 Fruit by the Foot.mp4	30.603333000000	-12.74	2.7	2.39	-22.81
+1	1	Bob's Burgers/1/Bob's Burgers 0101 Human Flesh.mkv	1291.164750000000	-20.15	7.1	-2.83	-30.56
+5	1	Bob's Burgers/1/Bob's Burgers 0105 Hamburger Dinner Theater.mkv	1276.441750000000	-24.4	6.4	-6.96	-34.69
+9	1	Bob's Burgers/1/Bob's Burgers 0109 Spaghetti Western and Meatballs.mkv	1300.173750000000	-23.47	7.3	-6.54	-33.77
+40	0	Commercials/PS1/Resident Evil 2/Biohazard 2 Promotional Trailer.mp4	113.151000000000	-16.97	6	0.05	-27.47
+45	0	Commercials/PS2/Grand Theft Auto Vice City/Grand Theft Auto Vice City Trailer Flock of Seagulls.mp4	60.000000000000	-21.98	3.6	-11.47	-32.43
+50	0	Commercials/Gamecube/Resident Evil (Remake)/Resident Evil (Remake) Commercial.mp4	32.265000000000	-7.75	1.3	0.19	-18.03
+53	0	Commercials/Gamecube/Resident Evil 0/Resident Evil 0 Promo.mp4	134.071667000000	-10.35	15.8	-1.92	-21.79
+56	0	Commercials/SNES/Donkey Kong Country/Donkey Kong Country Commercial.mp4	60.580000000000	-12.97	6.1	0.31	-23.13
+61	0	Commercials/Dreamcast/Half-Life/Half-Life Unreleased Commercial.mp4	45.741667000000	-23.38	6.2	-5.02	-33.71
+11	1	Bob's Burgers/1/Bob's Burgers 0111 Weekend at Mort's.mkv	1276.608750000000	-23.56	7.3	-5.15	-33.82
+122	0	Bob's Burgers/5/Bob's Burgers 0502 Tina and the Real Ghost.mkv	1295.044000000000	-23.6	5.8	-5.84	-33.85
+104	0	Bob's Burgers/4/Bob's Burgers 0406 Purple Rain-Union.mkv	1289.408000000000	-25.03	5.3	-8.18	-35.15
+107	0	Bob's Burgers/4/Bob's Burgers 0409 Slumber Party.mkv	1290.808000000000	-25.39	4.5	-7.25	-35.5
+111	0	Bob's Burgers/4/Bob's Burgers 0413 Mazel-Tina.mkv	1289.705000000000	-22.56	2.4	-3.95	-32.61
+114	0	Bob's Burgers/4/Bob's Burgers 0416 I Get Psy-chic Out of You.mkv	1285.504000000000	-24.25	2.1	-4.63	-34.33
+117	0	Bob's Burgers/4/Bob's Burgers 0419 The Kids Run Away.mkv	1286.304000000000	-25.3	4.7	-7.64	-35.42
+120	0	Bob's Burgers/4/Bob's Burgers 0422 World Wharf II The Wharfening (or How Bob Saves Destroys the Town - Part II).mkv	1291.264000000000	-22.79	5.6	-5.26	-32.94
+128	0	Bob's Burgers/5/Bob's Burgers 0508 Midday Run.mkv	1281.948000000000	-23.01	7.3	-4.34	-33.2
+132	0	Bob's Burgers/5/Bob's Burgers 0512 The Millie-Churian Candidate.mkv	1296.921000000000	-23.05	7.6	-4.1	-33.23
+135	0	Bob's Burgers/5/Bob's Burgers 0515 Adventures In Chinchilla Sitting.mkv	1281.864000000000	-23.12	6.9	-4.4	-33.28
+140	0	Bob's Burgers/5/Bob's Burgers 0520 Hawk & Chick.mkv	1286.729000000000	-23.13	7.4	-2.06	-33.4
+141	0	Bob's Burgers/5/Bob's Burgers 0521 The Oeder Games.mkv	1296.754000000000	-23.19	7.1	-3.22	-33.35
+153	0	Bob's Burgers/6/Bob's Burgers 0612 Stand by Gene.mkv	1297.012000000000	-25.11	3.8	-5.85	-35.23
+151	0	Bob's Burgers/6/Bob's Burgers 0610 Lice Things Are Lice.mkv	1297.046000000000	-25.49	3.4	-5.36	-35.59
+159	0	Bob's Burgers/6/Bob's Burgers 0618 Secret Admiral-irer.mp4	1297.926000000000	-20.11	5.9	-1.09	-30.27
+156	0	Bob's Burgers/6/Bob's Burgers 0615 Pro Tiki Con Tiki.mkv	1295.975000000000	-25.55	3.2	-5.6	-35.65
+167	0	Bob's Burgers/7/Bob's Burgers 0707 The Last Gingerbread House on the Left.mp4	1298.539000000000	-25	4.3	-5.65	-35.11
+192	0	Bob's Burgers/8/Bob's Burgers 0811 Sleeping with the Frenemy.mkv	1296.608000000000	-26.02	8.4	-7.12	-36.43
+205	0	Malcolm in the Middle/1/Malcolm in the Middle 0103 Home Alone 4.mkv	1324.957000000000	-27.56	9.1	-10.02	-38.52
+175	0	Bob's Burgers/7/Bob's Burgers 0715 Ain't Miss Debatin'.mp4	1298.539000000000	-25.18	6.3	-4.07	-35.36
+199	0	Bob's Burgers/8/Bob's Burgers 0818 As I Walk Through the Alley of the Shadow of Ramps.mkv	1291.616000000000	-24.94	8.2	-6.03	-35.24
+186	0	Bob's Burgers/8/Bob's Burgers 0804 Sit Me Baby One More Time.mkv	1296.544000000000	-26.47	7.1	-7.16	-36.74
+189	0	Bob's Burgers/8/Bob's Burgers 0808 V for Valentine-detta.mkv	1276.448000000000	-25.86	9.3	-8.31	-36.29
+188	0	Bob's Burgers/8/Bob's Burgers 0806+0807 The Bleakening (Parts 1 & 2).mkv	2625.792000000000	-26.35	9.4	-8.46	-36.69
+210	0	Malcolm in the Middle/1/Malcolm in the Middle 0108 Krelboyne Picnic.mkv	1356.922250000000	-28.66	9.6	-10.61	-39.43
+201	0	Bob's Burgers/8/Bob's Burgers 0820 Mission Impos-slug-ble.mkv	1296.640000000000	-24.96	9.2	-6.95	-35.42
+215	0	Malcolm in the Middle/1/Malcolm in the Middle 0113 Rollerskates.mkv	1345.911250000000	-27.81	8.9	-9	-38.69
+217	0	Malcolm in the Middle/1/Malcolm in the Middle 0115 Smunday.mkv	1351.917250000000	-28.46	8.2	-9.8	-39.39
+223	0	Malcolm in the Middle/2/Malcolm in the Middle 0205 Casino.mkv	1336.301625000000	-25.86	11.6	-5.06	-37.03
+227	0	Malcolm in the Middle/2/Malcolm in the Middle 0209 High School Play.mkv	1336.301625000000	-25.41	13.1	-6.01	-36.9
+231	0	Malcolm in the Middle/2/Malcolm in the Middle 0213 New Neighbors.mkv	1335.300625000000	-24.6	11.8	-3.82	-35.78
+235	0	Malcolm in the Middle/2/Malcolm in the Middle 0217 Surgery.mkv	1338.303625000000	-24.8	11.1	-6.17	-36.18
+239	0	Malcolm in the Middle/2/Malcolm in the Middle 0221 Malcolm vs. Reese.mkv	1307.853250000000	-24.53	11.6	-4.68	-35.89
+245	0	Malcolm in the Middle/3/Malcolm in the Middle 0302 Emancipation.mkv	1328.660625000000	-25.14	13.1	-6.19	-36.45
+247	0	Malcolm in the Middle/3/Malcolm in the Middle 0304 Malcolm's Girlfriend.mkv	1314.713375000000	-25.73	10.8	-8.49	-36.9
+251	0	Malcolm in the Middle/3/Malcolm in the Middle 0308 Poker.mkv	1328.026750000000	-25.46	13	-8.52	-36.94
+259	0	Malcolm in the Middle/3/Malcolm in the Middle 0316 Hal Coaches.mkv	1269.234625000000	-24.59	9	-5.82	-35.58
+264	0	Malcolm in the Middle/3/Malcolm in the Middle 0321 Cliques.mkv	1328.060125000000	-24.21	10.9	-4.12	-35.14
+267	0	Malcolm in the Middle/4/Malcolm in the Middle 0402 Humilithon.mkv	1314.613250000000	-25.33	11.7	-2.26	-36.52
+353	0	Malcolm in the Middle/7/Malcolm in the Middle 0722 Graduation.mkv	1354.753375000000	-25.02	7.5	-7.33	-35.97
+334	0	Malcolm in the Middle/7/Malcolm in the Middle 0703 Reese vs. Stevie.mkv	1321.720375000000	-25.46	10	-6.15	-36.54
 \.
 
 
@@ -1649,7 +2265,7 @@ SELECT pg_catalog.setval('public.segments_id_seq', 25, false);
 -- Name: station_videos_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.station_videos_id_seq', 149, true);
+SELECT pg_catalog.setval('public.station_videos_id_seq', 300, true);
 
 
 --
@@ -1685,7 +2301,7 @@ SELECT pg_catalog.setval('public.title_metadata_id_seq', 15, true);
 -- Name: titles_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.titles_id_seq', 1, true);
+SELECT pg_catalog.setval('public.titles_id_seq', 2, true);
 
 
 --
@@ -1694,7 +2310,7 @@ SELECT pg_catalog.setval('public.titles_id_seq', 1, true);
 -- Name: video_metadata_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.video_metadata_id_seq', 486, true);
+SELECT pg_catalog.setval('public.video_metadata_id_seq', 926, true);
 
 
 --
@@ -1712,7 +2328,7 @@ SELECT pg_catalog.setval('public.video_tags_id_seq', 53, true);
 -- Name: videos_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.videos_id_seq', 353, false);
+SELECT pg_catalog.setval('public.videos_id_seq', 373, true);
 
 
 --
@@ -1978,11 +2594,11 @@ ALTER TABLE ONLY public.videos
     ADD CONSTRAINT videos_title_id_fkey FOREIGN KEY (title_id) REFERENCES public.titles(id) ON DELETE CASCADE;
 
 
--- Completed on 2025-09-29 23:20:52
+-- Completed on 2025-10-05 16:32:38
 
 --
 -- PostgreSQL database dump complete
 --
 
-\unrestrict fhhChmVPkfpO10dHQRM6x5ayUpXr2YY9wKj2tdohAXjdLOF13Lpg2VGMxp7JU8H
+\unrestrict ui8qXSEb81rpXiAuBveVujNfTuKUI5oTvoYTWlLocclCabT67iK4sL7oHfCAumA
 

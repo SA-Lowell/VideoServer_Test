@@ -83,35 +83,13 @@
         .pagination-controls button { margin-right: 10px; }
         .pagination-controls span { margin-right: 10px; }
         #selected-videos-container:empty + .pagination-controls { display: none; }
+        .break-item .display-span { display: block; margin-bottom: 5px; }
+        .break-item input[type="range"] { width: 300px; margin-right: 10px; }
+        .break-item input[type="text"] { width: 120px; margin-right: 10px; }
     </style>
 </head>
 <body>
     <h1>Admin Panel - Update Ad Break Points</h1>
-
-    <h2>Titles from Database</h2>
-    <ul>
-        {{range .Titles}}
-        <li>
-            <strong>{{.Name}}</strong> (ID: {{.ID}}) - {{.Description}}
-            <ul>
-                {{range .Videos}}
-                <li>
-                    Video ID: {{.ID}}, URI: {{.URI}}
-                    <button onclick="selectVideo({{.ID}}, '{{.URI}}', [{{range $index, $meta := .Metadata}}{{if eq $meta.TypeName "break_point"}}{{if $index}}, {{end}}{{$meta.Value}}{{end}}{{end}}])">Select from DB</button>
-                    <ul>
-                        {{range .Metadata}}
-                        <li>Metadata: {{.TypeName}} - {{.Value}}</li>
-                        {{end}}
-                        {{range .Tags}}
-                        <li>Tag: {{.Name}}</li>
-                        {{end}}
-                    </ul>
-                </li>
-                {{end}}
-            </ul>
-        </li>
-        {{end}}
-    </ul>
 
     <h2>Files from Video Folder</h2>
     <div id="current-path">Current Path: /</div>
@@ -144,6 +122,17 @@
             const secs = seconds % 60;
             const formatted = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs.toFixed(4)).padStart(7, '0')}`;
             return formatted;
+        }
+
+        // Parse HH:MM:SS.dddd back to seconds
+        function parseTime(timeStr) {
+            const parts = timeStr.split(':');
+            if (parts.length !== 3) return NaN;
+            const hours = parseInt(parts[0], 10);
+            const minutes = parseInt(parts[1], 10);
+            const secs = parseFloat(parts[2]);
+            if (isNaN(hours) || isNaN(minutes) || isNaN(secs)) return NaN;
+            return hours * 3600 + minutes * 60 + secs;
         }
 
         function selectVideo(id, uri, metadataBreaks = []) {
@@ -304,22 +293,22 @@
             });
         }
 
-        function updatePagination() {
-            const prevButton = document.getElementById('prev-button');
-            const nextButton = document.getElementById('next-button');
-            const paginationInfo = document.getElementById('pagination-info');
-            if (videoIds.length === 0) {
-                prevButton.disabled = true;
-                nextButton.disabled = true;
-                paginationInfo.textContent = '';
-                currentVideoIndex = -1;
-                return;
-            }
-            prevButton.disabled = currentVideoIndex <= 0;
-            nextButton.disabled = currentVideoIndex >= videoIds.length - 1;
-            paginationInfo.textContent = `Video ${currentVideoIndex + 1} of ${videoIds.length}`;
-            showVideoSection(videoIds[currentVideoIndex]);
-        }
+function updatePagination() {
+    const prevButton = document.getElementById('prev-button');
+    const nextButton = document.getElementById('next-button');
+    const paginationInfo = document.getElementById('pagination-info');
+    if (videoIds.length === 0) {
+        prevButton.disabled = true;
+        nextButton.disabled = true;
+        paginationInfo.textContent = '';
+        currentVideoIndex = -1;
+        return;
+    }
+    prevButton.disabled = currentVideoIndex <= 0;
+    nextButton.disabled = currentVideoIndex >= videoIds.length - 1;
+    paginationInfo.textContent = `Video ${currentVideoIndex + 1} of ${videoIds.length}`;
+    showVideoSection(videoIds[currentVideoIndex]);
+}
 
         function showVideoSection(id) {
             document.querySelectorAll('.video-section').forEach(section => {
@@ -355,17 +344,17 @@
                         const div = document.createElement('div');
                         if (item.type === 'dir') {
                             div.className = 'dir-item';
-                            div.innerHTML = `[Dir] ${item.name}`;
+                            div.innerHTML = `/${item.name}/`;
                             div.onclick = () => navigateTo(item.path);
                             folderBrowser.appendChild(div);
                         } else {
                             div.className = 'file-item';
-                            div.innerHTML = `[File] ${item.name}`;
+                            div.innerHTML = `${item.name}`;
                             div.onclick = () => {
                                 fetch('/add-video', {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ uri: item.path, title_id: 0 })
+                                    body: JSON.stringify({ uri: item.path })
                                 }).then(res => res.json()).then(addData => {
                                     fetchMetadata(addData.id, item.path);
                                 }).catch(err => console.error(err));
@@ -478,7 +467,54 @@
             videosData[id].selectedBreaks.forEach((b, idx) => {
                 const div = document.createElement('div');
                 div.className = 'break-item';
-                div.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(b.mid)}, End: ${formatTime(b.end)}`;
+
+                const displaySpan = document.createElement('span');
+                displaySpan.className = 'display-span';
+                displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(b.mid)}, End: ${formatTime(b.end)}`;
+                div.appendChild(displaySpan);
+
+                const slider = document.createElement('input');
+                slider.type = 'range';
+                slider.min = b.start;
+                slider.max = b.end;
+                slider.step = 0.0001;
+                slider.value = b.mid;
+                slider.oninput = () => {
+                    const newMid = parseFloat(slider.value);
+                    videosData[id].selectedBreaks[idx].mid = newMid;
+                    timeInput.value = formatTime(newMid);
+                    displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(newMid)}, End: ${formatTime(b.end)}`;
+                };
+                div.appendChild(slider);
+
+                const timeInput = document.createElement('input');
+                timeInput.type = 'text';
+                timeInput.value = formatTime(b.mid);
+                timeInput.size = 12;
+                timeInput.onchange = () => {
+                    const newTime = parseTime(timeInput.value);
+                    if (!isNaN(newTime) && newTime >= b.start && newTime <= b.end) {
+                        videosData[id].selectedBreaks[idx].mid = newTime;
+                        slider.value = newTime;
+                        displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(newTime)}, End: ${formatTime(b.end)}`;
+                    } else {
+                        alert('Invalid time or out of range');
+                        timeInput.value = formatTime(videosData[id].selectedBreaks[idx].mid);
+                    }
+                };
+                div.appendChild(timeInput);
+
+                const resetBtn = document.createElement('button');
+                resetBtn.textContent = 'Reset Midpoint';
+                resetBtn.onclick = () => {
+                    const originalMid = videosData[id].selectedBreaks[idx].originalMid;
+                    videosData[id].selectedBreaks[idx].mid = originalMid;
+                    slider.value = originalMid;
+                    timeInput.value = formatTime(originalMid);
+                    displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(originalMid)}, End: ${formatTime(b.end)}`;
+                };
+                div.appendChild(resetBtn);
+
                 const removeBtn = document.createElement('button');
                 removeBtn.textContent = 'Remove';
                 removeBtn.onclick = () => {
@@ -486,11 +522,13 @@
                     updateSelectedBreaksList(id);
                     document.getElementById(`save-breaks-button-${id}`).disabled = videosData[id].selectedBreaks.length === 0;
                 };
+                div.appendChild(removeBtn);
+
                 const previewBtn = document.createElement('button');
                 previewBtn.textContent = 'Preview Break';
-                previewBtn.onclick = () => previewBreak(id, b.mid);
-                div.appendChild(removeBtn);
+                previewBtn.onclick = () => previewBreak(id, videosData[id].selectedBreaks[idx].mid);
                 div.appendChild(previewBtn);
+
                 list.appendChild(div);
             });
         }
@@ -516,7 +554,8 @@
             if (selectedIndex >= 0) {
                 const breakPoint = videosData[id].detectedBreaks[selectedIndex];
                 if (!videosData[id].selectedBreaks.some(b => b.mid === breakPoint.mid)) {
-                    videosData[id].selectedBreaks.push(breakPoint);
+                    // Store original midpoint for reset
+                    videosData[id].selectedBreaks.push({ ...breakPoint, originalMid: breakPoint.mid });
                     updateSelectedBreaksList(id);
                     document.getElementById(`save-breaks-button-${id}`).disabled = false;
                 }
@@ -585,22 +624,37 @@
             video.play();
         }
 
-        function removeSection(id) {
-            document.getElementById(`video-section-${id}`).remove();
-            delete videosData[id];
-            videoIds = videoIds.filter(vid => vid !== id);
-            if (videoIds.length === 0) {
-                currentVideoIndex = -1;
-            } else if (currentVideoIndex >= videoIds.length) {
+function removeSection(id) {
+    document.getElementById(`video-section-${id}`).remove();
+    delete videosData[id];
+    
+    // Find the index of the video to be removed before filtering
+    const removedIndex = videoIds.indexOf(id);
+    
+    // Remove the video ID from the array
+    videoIds = videoIds.filter(vid => vid !== id);
+    
+    // Adjust currentVideoIndex
+    if (videoIds.length === 0) {
+        // No videos left, reset index
+        currentVideoIndex = -1;
+    } else {
+        if (removedIndex === currentVideoIndex) {
+            // If the current video was removed, move to the next video if available, else previous
+            if (currentVideoIndex >= videoIds.length) {
+                // If the removed video was the last one, move to the previous video
                 currentVideoIndex = videoIds.length - 1;
-            } else if (videoIds[currentVideoIndex] !== id) {
-                const removedIndex = videoIds.indexOf(id);
-                if (removedIndex < currentVideoIndex) {
-                    currentVideoIndex--;
-                }
             }
-            updatePagination();
+            // Otherwise, stay at the same index to select the next video (no change needed)
+        } else if (removedIndex < currentVideoIndex) {
+            // If a video before the current one was removed, shift the index
+            currentVideoIndex = Math.max(0, currentVideoIndex - 1);
         }
+        // If removedIndex > currentVideoIndex, no change is needed
+    }
+    
+    updatePagination();
+}
 
         document.getElementById('clear-all-button').addEventListener('click', () => {
             document.getElementById('selected-videos-container').innerHTML = '';

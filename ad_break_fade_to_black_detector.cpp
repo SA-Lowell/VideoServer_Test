@@ -69,11 +69,11 @@ std::vector<Period> parseSilence(const std::string& output, double start_time)
                 try {
                     current_start = start_time + std::stod(match[1].str());
                 } catch (...) {
-                    std::cerr << "Warning: Failed to parse silence_start time in line: " << line << std::endl;
+                    //std::cerr << "Warning: Failed to parse silence_start time in line: " << line << std::endl;
                     continue;
                 }
             } else {
-                std::cerr << "Warning: No time match for silence_start in line: " << line << std::endl;
+                //std::cerr << "Warning: No time match for silence_start in line: " << line << std::endl;
             }
         }
         else if(pos_silence_end != std::string::npos && current_start >= start_time)
@@ -88,11 +88,11 @@ std::vector<Period> parseSilence(const std::string& output, double start_time)
                     }
                     current_start = -1.0;
                 } catch (...) {
-                    std::cerr << "Warning: Failed to parse silence_end time in line: " << line << std::endl;
+                    //std::cerr << "Warning: Failed to parse silence_end time in line: " << line << std::endl;
                     continue;
                 }
             } else {
-                std::cerr << "Warning: No time match for silence_end in line: " << line << std::endl;
+                //std::cerr << "Warning: No time match for silence_end in line: " << line << std::endl;
             }
         }
     }
