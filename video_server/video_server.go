@@ -272,7 +272,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 		"-bsf:v", "h264_mp4toannexb",
 		"-g", "60",
 		"-reset_timestamps", "1",
-		"-vsync", "1", // Enforce constant frame rate to prevent drift
+		"-vsync", "vfr", // Use VFR initially to preserve source timing
 		fullSegPath,
 	}
 	cmdVideo = exec.Command("ffmpeg", argsVideo...)
@@ -299,21 +299,21 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 			"-profile:v", "baseline",
 			"-level", "3.0",
 			"-pix_fmt", "yuv420p",
-			"-force_key_frames", "expr:gte(t,n_forced*1)",
+			"-force_key_frames", "0", // Force IDR at start
 			"-sc_threshold", "0",
-			"-g", "30", // 1-second GOP for frequent IDRs
-			"-keyint_min", "30", // Match GOP with FPS
-			"-bf", "0", // Disable B-frames for WebRTC compatibility
+			"-g", "15", // 0.5-second GOP for ads
+			"-keyint_min", "15", // Match GOP with FPS
+			"-bf", "0", // Disable B-frames
 			"-r", "30", // Force constant 30 FPS
 			"-vsync", "1", // Enforce constant frame rate
-			"-re", // Real-time input to prevent timing skips
-			"-use_wallclock_as_timestamps", "1", // Use wallclock for precise timing
+			"-re", // Real-time input
+			"-use_wallclock_as_timestamps", "1", // Precise timing
 			"-c:a", "libopus",
 			"-b:a", "128k",
 			"-ar", "48000",
 			"-ac", "2",
 			"-async", "1", // Sync audio to video
-			"-strict", "experimental", // For Opus if needed
+			"-strict", "experimental", // For Opus
 			"-f", "mp4",
 			tempMP4Path,
 		}
@@ -325,39 +325,72 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 		}
 		log.Printf("Station %s: Full re-encode succeeded, creating segments from %s", st.name, tempMP4Path)
 
-		// Extract video (h264)
-		cmdVideo = exec.Command("ffmpeg", []string{
+		// Full re-encode of extracted video to ensure cleanliness
+		var cmdReencodeVideo *exec.Cmd
+		var outputReencodeVideo []byte
+		argsReencodeVideo := []string{
 			"-y",
 			"-i", tempMP4Path,
-			"-c:v", "copy",
+			"-c:v", "libx264",
+			"-preset", "fast",
+			"-crf", "23",
+			"-profile:v", "baseline",
+			"-level", "3.0",
+			"-pix_fmt", "yuv420p",
+			"-force_key_frames", "0", // Force IDR at start
+			"-g", "15",
+			"-keyint_min", "15",
+			"-bf", "0",
+			"-r", "30",
+			"-vsync", "1",
 			"-an",
 			"-bsf:v", "h264_mp4toannexb",
 			"-f", "h264",
 			fullSegPath,
-		}...)
-		outputVideo, err = cmdVideo.CombinedOutput()
+		}
+		cmdReencodeVideo = exec.Command("ffmpeg", argsReencodeVideo...)
+		outputReencodeVideo, err = cmdReencodeVideo.CombinedOutput()
 		if err != nil {
-			log.Printf("Station %s: Extracting h264 failed for %s: %v\nOutput: %s", st.name, fullSegPath, err, string(outputVideo))
+			log.Printf("Station %s: Re-encoding video failed for %s: %v\nOutput: %s", st.name, fullSegPath, err, string(outputReencodeVideo))
 			os.Remove(tempMP4Path)
-			return nil, nil, "", 0, fpsPair{}, fmt.Errorf("extracting h264 failed for video %d: %v", videoID, err)
+			return nil, nil, "", 0, fpsPair{}, fmt.Errorf("re-encoding video failed for video %d: %v", videoID, err)
 		}
 		segments = append(segments, fullSegPath)
 
-		// Extract audio (opus)
-		cmdAudio = exec.Command("ffmpeg", []string{
+		// Full re-encode of extracted audio to ensure cleanliness
+		var cmdReencodeAudio *exec.Cmd
+		var outputReencodeAudio []byte
+		argsReencodeAudio := []string{
 			"-y",
 			"-i", tempMP4Path,
-			"-c:a", "copy",
+			"-c:a", "libopus",
+			"-b:a", "128k",
+			"-ar", "48000",
+			"-ac", "2",
+			"-async", "1",
 			"-vn",
 			"-f", "opus",
 			opusPath,
-		}...)
-		outputAudio, err = cmdAudio.CombinedOutput()
+		}
+		if loudI.Valid {
+			loudnormFilter := fmt.Sprintf(
+				"loudnorm=I=-23:TP=-1.5:LRA=11:measured_I=%.2f:measured_LRA=%.2f:measured_TP=%.2f:measured_thresh=%.2f:offset=0:linear=true",
+				loudI.Float64, loudLRA.Float64, loudTP.Float64, loudThresh.Float64,
+			)
+			for i := len(argsReencodeAudio) - 1; i >= 0; i-- {
+				if argsReencodeAudio[i] == "-c:a" {
+					argsReencodeAudio = append(argsReencodeAudio[:i], append([]string{"-af", loudnormFilter}, argsReencodeAudio[i:]...)...)
+					break
+				}
+			}
+		}
+		cmdReencodeAudio = exec.Command("ffmpeg", argsReencodeAudio...)
+		outputReencodeAudio, err = cmdReencodeAudio.CombinedOutput()
 		if err != nil {
-			log.Printf("Station %s: Extracting opus failed for %s: %v\nOutput: %s", st.name, opusPath, err, string(outputAudio))
+			log.Printf("Station %s: Re-encoding audio failed for %s: %v\nOutput: %s", st.name, opusPath, err, string(outputReencodeAudio))
 			os.Remove(fullSegPath)
 			os.Remove(tempMP4Path)
-			return nil, nil, "", 0, fpsPair{}, fmt.Errorf("extracting opus failed for video %d: %v", videoID, err)
+			return nil, nil, "", 0, fpsPair{}, fmt.Errorf("re-encoding audio failed for video %d: %v", videoID, err)
 		}
 		os.Remove(tempMP4Path) // Clean up temp file
 	} else {
