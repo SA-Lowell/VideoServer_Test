@@ -163,7 +163,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 	if err := os.MkdirAll(tempDir, 0755); err != nil {
 		return nil, nil, "", 0, fpsPair{}, fmt.Errorf("failed to create temp_encoded_segments directory for video %d: %v", videoID, err)
 	}
-	//defer os.RemoveAll(tempDir) // Clean up the directory when done
+	defer os.RemoveAll(tempDir) // Clean up the directory when done
 	if err := os.MkdirAll(HlsDir, 0755); err != nil {
 		return nil, nil, "", 0, fpsPair{}, fmt.Errorf("failed to create webrtc_segments directory: %v", err)
 	}
@@ -177,7 +177,9 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 
 	// Probe source audio properties
 	var sampleRate, channels int
-	cmdProbe := exec.Command(
+	var cmdProbe *exec.Cmd
+	var outputProbe []byte
+	cmdProbe = exec.Command(
 		"ffprobe",
 		"-v", "error",
 		"-select_streams", "a:0",
@@ -185,7 +187,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 		"-of", "default=noprint_wrappers=1",
 		fullEpisodePath,
 	)
-	outputProbe, err := cmdProbe.Output()
+	outputProbe, err = cmdProbe.Output()
 	if err == nil {
 		log.Printf("Station %s: Input audio for %s: %s", st.name, fullEpisodePath, strings.TrimSpace(string(outputProbe)))
 	} else {
@@ -284,10 +286,8 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 	// Check if either encoding failed, trigger full re-encode
 	if err != nil {
 		log.Printf("Station %s: Initial encoding failed for video %d at %.3fs, performing full re-encode", st.name, videoID, startTime)
-		// Full re-encode to temp MP4 with sync flags
 		var cmdReencode *exec.Cmd
 		var outputReencode []byte
-		// Full re-encode to temp MP4 with sync flags
 		tempMP4Args := []string{
 			"-y",
 			"-ss", fmt.Sprintf("%.3f", startTime),
@@ -299,13 +299,15 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 			"-profile:v", "baseline",
 			"-level", "3.0",
 			"-pix_fmt", "yuv420p",
-			"-force_key_frames", "expr:gte(t,n_forced*2)",
+			"-force_key_frames", "expr:gte(t,n_forced*1)",
 			"-sc_threshold", "0",
-			"-g", "60",
+			"-g", "30", // 1-second GOP for frequent IDRs
+			"-keyint_min", "30", // Match GOP with FPS
 			"-bf", "0", // Disable B-frames for WebRTC compatibility
-			"-keyint_min", "1", // Frequent key frames to avoid black screens
-			"-r", "30", // Force constant 30 FPS for compatibility
+			"-r", "30", // Force constant 30 FPS
 			"-vsync", "1", // Enforce constant frame rate
+			"-re", // Real-time input to prevent timing skips
+			"-use_wallclock_as_timestamps", "1", // Use wallclock for precise timing
 			"-c:a", "libopus",
 			"-b:a", "128k",
 			"-ar", "48000",
@@ -581,9 +583,9 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 	}
 	if !hasIDR {
 		log.Printf("Station %s: No IDR frame in segment %s, attempting repair", st.name, fullSegPath)
-		repairedSegPath := filepath.Join(tempDir, baseName+"_repaired.h264")
 		var cmdRepair *exec.Cmd
 		var outputRepair []byte
+		repairedSegPath := filepath.Join(tempDir, baseName+"_repaired.h264")
 		args := []string{
 			"-y",
 			"-i", fullSegPath,
