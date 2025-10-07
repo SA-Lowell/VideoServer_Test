@@ -159,11 +159,11 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 			return nil, nil, "", 0, fpsPair{}, fmt.Errorf("no remaining duration for video %d at start time %f", videoID, startTime)
 		}
 	}
-	tempDir, err := os.MkdirTemp("", DefaultTempPrefix)
-	if err != nil {
-		return nil, nil, "", 0, fpsPair{}, fmt.Errorf("failed to create temp dir for video %d: %v", videoID, err)
+	tempDir := filepath.Join(".", "temp_encoded_segments")
+	if err := os.MkdirAll(tempDir, 0755); err != nil {
+		return nil, nil, "", 0, fpsPair{}, fmt.Errorf("failed to create temp_encoded_segments directory for video %d: %v", videoID, err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer os.RemoveAll(tempDir) // Clean up the directory when done
 	if err := os.MkdirAll(HlsDir, 0755); err != nil {
 		return nil, nil, "", 0, fpsPair{}, fmt.Errorf("failed to create webrtc_segments directory: %v", err)
 	}
@@ -294,12 +294,14 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 			"-force_key_frames", "expr:gte(t,n_forced*2)",
 			"-sc_threshold", "0",
 			"-g", "60",
+			"-r", "30", // Force constant 30 FPS for compatibility
 			"-vsync", "1", // Enforce constant frame rate
 			"-c:a", "libopus",
 			"-b:a", "128k",
 			"-ar", "48000",
 			"-ac", "2",
 			"-async", "1", // Sync audio to video
+			"-strict", "experimental", // For Opus if needed
 			"-f", "mp4",
 			tempMP4Path,
 		}
@@ -371,7 +373,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 		"-of", "default=noprint_wrappers=1:nokey=1",
 		fullEpisodePath,
 	)
-	outputFPS, err := cmdFPS.Output()
+	outputFPS, err := cmdFPS.Output() // Declare outputFPS here
 	if err == nil {
 		rate := strings.TrimSpace(string(outputFPS))
 		if rate == "0/0" || rate == "" {
@@ -405,7 +407,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 		"-of", "json",
 		fullSegPath,
 	)
-	outputDur, err := cmdDur.Output()
+	outputDur, err := cmdDur.Output() // Declare outputDur here
 	var actualDur float64
 	if err == nil {
 		var result struct {
