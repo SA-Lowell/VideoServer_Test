@@ -40,6 +40,7 @@ const (
 	DefaultTempPrefix   = "ad_insert_"
 	ChunkDuration       = 30.0 // Process 30-second chunks
 	BufferThreshold     = 60.0 // Start processing more chunks when buffer < 60s
+	maxAdRetries      = 5   // Higher retry limit for ads
 )
 
 const dbConnString = "user=postgres password=aaaaaaaaaa dbname=webrtc_tv sslmode=disable host=localhost port=5432"
@@ -172,6 +173,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 	fullSegPath := filepath.Join(HlsDir, segName)
 	opusName := baseName + ".opus"
 	opusPath := filepath.Join(HlsDir, opusName)
+	tempMP4Path := filepath.Join(tempDir, baseName+".mp4")
 
 	// Probe source audio properties
 	var sampleRate, channels int
@@ -179,27 +181,13 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 		"ffprobe",
 		"-v", "error",
 		"-select_streams", "a:0",
-		"-show_entries", "stream=sample_rate,channels,codec_name",
-		"-of", "json",
+		"-show_entries", "stream=sample_rate,channels",
+		"-of", "default=noprint_wrappers=1",
 		fullEpisodePath,
 	)
 	outputProbe, err := cmdProbe.Output()
 	if err == nil {
-		var result struct {
-			Streams []struct {
-				SampleRate string `json:"sample_rate"`
-				Channels   int    `json:"channels"`
-				CodecName  string `json:"codec_name"`
-			} `json:"streams"`
-		}
-		if err := json.Unmarshal(outputProbe, &result); err == nil && len(result.Streams) > 0 {
-			sampleRate, _ = strconv.Atoi(result.Streams[0].SampleRate)
-			channels = result.Streams[0].Channels
-			codec := result.Streams[0].CodecName
-			log.Printf("Station %s: Probed audio for %s: sample_rate=%d, channels=%d, codec=%s", st.name, fullEpisodePath, sampleRate, channels, codec)
-		} else {
-			log.Printf("Station %s: Failed to parse ffprobe audio JSON for %s: %v", st.name, fullEpisodePath, err)
-		}
+		log.Printf("Station %s: Input audio for %s: %s", st.name, fullEpisodePath, strings.TrimSpace(string(outputProbe)))
 	} else {
 		log.Printf("Station %s: Failed to probe input audio for %s: %v", st.name, fullEpisodePath, err)
 	}
@@ -210,8 +198,8 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 		channels = 2 // Fallback
 	}
 
-	// Audio encoding with dynaudnorm
-	args := []string{
+	// Initial attempt: Encode audio and video separately with sync flags
+	argsAudio := []string{
 		"-y",
 		"-ss", fmt.Sprintf("%.3f", startTime),
 		"-i", fullEpisodePath,
@@ -219,55 +207,48 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 		"-map", "0:a:0",
 		"-c:a", "libopus",
 		"-b:a", "128k",
-		"-ar", fmt.Sprintf("%d", sampleRate),
-		"-ac", fmt.Sprintf("%d", channels),
+		"-ar", "48000",
+		"-ac", "2",
 		"-frame_duration", "20",
 		"-page_duration", "20000",
 		"-application", "audio",
 		"-vbr", "on",
 		"-avoid_negative_ts", "make_zero",
 		"-fflags", "+genpts",
+		"-async", "1", // Sync audio to video timestamps
 		"-f", "opus",
 		opusPath,
 	}
-	audioFilter := "dynaudnorm=f=150:g=15,aresample=async=1:min_hard_comp=0.100000:first_pts=0"
-	args = append(args[:len(args)-3], append([]string{"-af", audioFilter}, args[len(args)-3:]...)...)
-	log.Printf("Station %s: Applying audio filter: %s", st.name, audioFilter)
-	cmdAudio := exec.Command("ffmpeg", args...)
+	// Query loudnorm measurements and apply if available
+	var loudI, loudLRA, loudTP, loudThresh sql.NullFloat64
+	err = db.QueryRow(
+		"SELECT loudnorm_input_i, loudnorm_input_lra, loudnorm_input_tp, loudnorm_input_thresh FROM videos WHERE id = $1",
+		videoID,
+	).Scan(&loudI, &loudLRA, &loudTP, &loudThresh)
+	if err == nil && loudI.Valid {
+		loudnormFilter := fmt.Sprintf(
+			"loudnorm=I=-23:TP=-1.5:LRA=11:measured_I=%.2f:measured_LRA=%.2f:measured_TP=%.2f:measured_thresh=%.2f:offset=0:linear=true",
+			loudI.Float64, loudLRA.Float64, loudTP.Float64, loudThresh.Float64,
+		)
+		for i := len(argsAudio) - 1; i >= 0; i-- {
+			if argsAudio[i] == "-c:a" {
+				argsAudio = append(argsAudio[:i], append([]string{"-af", loudnormFilter}, argsAudio[i:]...)...)
+				break
+			}
+		}
+		log.Printf("Station %s: Applying loudnorm filter to audio for video %d: %s", st.name, videoID, loudnormFilter)
+	} else {
+		log.Printf("Station %s: No loudnorm measurements for video %d, skipping normalization", st.name, videoID)
+	}
+	cmdAudio := exec.Command("ffmpeg", argsAudio...)
 	outputAudio, err := cmdAudio.CombinedOutput()
 	if err != nil {
-		log.Printf("Station %s: ffmpeg audio command failed for %s: %v\nOutput: %s", st.name, opusPath, err, string(outputAudio))
-		// Fallback to copy if normalization fails
-		log.Printf("Station %s: Falling back to audio copy for %s due to normalization failure", st.name, opusPath)
-		args = []string{
-			"-y",
-			"-ss", fmt.Sprintf("%.3f", startTime),
-			"-i", fullEpisodePath,
-			"-t", fmt.Sprintf("%.3f", adjustedChunkDur),
-			"-map", "0:a:0",
-			"-c:a", "copy",
-			"-f", "opus",
-			opusPath,
-		}
-		cmdAudio = exec.Command("ffmpeg", args...)
-		outputAudio, err = cmdAudio.CombinedOutput()
-		if err != nil {
-			log.Printf("Station %s: ffmpeg audio copy failed for %s: %v\nOutput: %s", st.name, opusPath, err, string(outputAudio))
-			return nil, nil, "", 0, fpsPair{}, fmt.Errorf("ffmpeg audio processing failed for video %d at %fs: %v", videoID, startTime, err)
-		}
-		log.Printf("Station %s: ffmpeg audio copy succeeded for %s", st.name, opusPath)
+		log.Printf("Station %s: ffmpeg audio command failed: %v\nOutput: %s", st.name, err, string(outputAudio))
 	} else {
 		log.Printf("Station %s: ffmpeg audio succeeded for %s", st.name, opusPath)
 	}
-	audioData, err := os.ReadFile(opusPath)
-	if err != nil || len(audioData) == 0 {
-		log.Printf("Station %s: Audio file %s is empty or unreadable: %v, size=%d", st.name, opusPath, err, len(audioData))
-		return nil, nil, "", 0, fpsPair{}, fmt.Errorf("audio file %s is empty or unreadable: %v", opusPath, err)
-	}
-	log.Printf("Station %s: Read audio file %s, size: %d bytes", st.name, opusPath, len(audioData))
 
-	// Video encoding
-	args = []string{
+	argsVideo := []string{
 		"-y",
 		"-ss", fmt.Sprintf("%.3f", startTime),
 		"-i", fullEpisodePath,
@@ -284,15 +265,100 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 		"-bsf:v", "h264_mp4toannexb",
 		"-g", "60",
 		"-reset_timestamps", "1",
+		"-vsync", "1", // Enforce constant frame rate to prevent drift
 		fullSegPath,
 	}
-	cmdVideo := exec.Command("ffmpeg", args...)
+	cmdVideo := exec.Command("ffmpeg", argsVideo...)
 	outputVideo, err := cmdVideo.CombinedOutput()
 	if err != nil {
 		log.Printf("Station %s: ffmpeg video command failed: %v\nOutput: %s", st.name, err, string(outputVideo))
-		return nil, nil, "", 0, fpsPair{}, fmt.Errorf("ffmpeg video failed for video %d at %fs: %v", videoID, startTime, err)
+	} else {
+		log.Printf("Station %s: ffmpeg video succeeded for %s", st.name, fullSegPath)
 	}
-	segments = append(segments, fullSegPath)
+
+	// Check if either encoding failed, trigger full re-encode
+	if err != nil {
+		log.Printf("Station %s: Initial encoding failed for video %d at %.3fs, performing full re-encode", st.name, videoID, startTime)
+		// Full re-encode to temp MP4 with sync flags
+		tempMP4Args := []string{
+			"-y",
+			"-ss", fmt.Sprintf("%.3f", startTime),
+			"-i", fullEpisodePath,
+			"-t", fmt.Sprintf("%.3f", adjustedChunkDur),
+			"-c:v", "libx264",
+			"-preset", "fast",
+			"-crf", "23",
+			"-profile:v", "baseline",
+			"-level", "3.0",
+			"-pix_fmt", "yuv420p",
+			"-force_key_frames", "expr:gte(t,n_forced*2)",
+			"-sc_threshold", "0",
+			"-g", "60",
+			"-vsync", "1", // Enforce constant frame rate
+			"-c:a", "libopus",
+			"-b:a", "128k",
+			"-ar", "48000",
+			"-ac", "2",
+			"-async", "1", // Sync audio to video
+			"-f", "mp4",
+			tempMP4Path,
+		}
+		cmdReencode := exec.Command("ffmpeg", tempMP4Args...)
+		outputReencode, err := cmdReencode.CombinedOutput()
+		if err != nil {
+			log.Printf("Station %s: Full re-encode failed for video %d at %.3fs: %v\nOutput: %s", st.name, videoID, startTime, err, string(outputReencode))
+			return nil, nil, "", 0, fpsPair{}, fmt.Errorf("full re-encode failed for video %d at %.3fs: %v", videoID, startTime, err)
+		}
+		log.Printf("Station %s: Full re-encode succeeded, creating segments from %s", st.name, tempMP4Path)
+
+		// Extract video (h264)
+		argsVideo = []string{
+			"-y",
+			"-i", tempMP4Path,
+			"-c:v", "copy",
+			"-an",
+			"-bsf:v", "h264_mp4toannexb",
+			"-f", "h264",
+			fullSegPath,
+		}
+		cmdVideo = exec.Command("ffmpeg", argsVideo...)
+		outputVideo, err = cmdVideo.CombinedOutput()
+		if err != nil {
+			log.Printf("Station %s: Extracting h264 failed for %s: %v\nOutput: %s", st.name, fullSegPath, err, string(outputVideo))
+			os.Remove(tempMP4Path)
+			return nil, nil, "", 0, fpsPair{}, fmt.Errorf("extracting h264 failed for video %d: %v", videoID, err)
+		}
+		segments = append(segments, fullSegPath)
+
+		// Extract audio (opus)
+		argsAudio = []string{
+			"-y",
+			"-i", tempMP4Path,
+			"-c:a", "copy",
+			"-vn",
+			"-f", "opus",
+			opusPath,
+		}
+		cmdAudio = exec.Command("ffmpeg", argsAudio...)
+		outputAudio, err = cmdAudio.CombinedOutput()
+		if err != nil {
+			log.Printf("Station %s: Extracting opus failed for %s: %v\nOutput: %s", st.name, opusPath, err, string(outputAudio))
+			os.Remove(fullSegPath)
+			os.Remove(tempMP4Path)
+			return nil, nil, "", 0, fpsPair{}, fmt.Errorf("extracting opus failed for video %d: %v", videoID, err)
+		}
+		os.Remove(tempMP4Path) // Clean up temp file
+	} else {
+		// Initial encoding succeeded, verify files
+		audioData, err := os.ReadFile(opusPath)
+		if err != nil || len(audioData) == 0 {
+			log.Printf("Station %s: Audio file %s is empty or unreadable: %v, size=%d", st.name, opusPath, err, len(audioData))
+			os.Remove(fullSegPath)
+			return nil, nil, "", 0, fpsPair{}, fmt.Errorf("audio file %s is empty or unreadable: %v", opusPath, err)
+		}
+		log.Printf("Station %s: Read audio file %s, size: %d bytes", st.name, opusPath, len(audioData))
+		segments = append(segments, fullSegPath)
+	}
 
 	// Get FPS
 	fpsNum := DefaultFPSNum
@@ -391,7 +457,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 		}
 	}
 
-	// Check audio duration and re-encode if mismatch
+	// Check audio duration (after re-encode if applied)
 	cmdAudioDur := exec.Command(
 		"ffprobe",
 		"-v", "error",
@@ -423,9 +489,10 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 		log.Printf("Station %s: ffprobe audio duration failed for %s: %v, assuming video duration %.3fs", st.name, opusPath, err, actualDur)
 		audioDur = actualDur
 	}
-	if math.Abs(audioDur-actualDur) > 0.1 {
-		log.Printf("Station %s: Audio duration %.3fs differs from video duration %.3fs, re-encoding audio", st.name, audioDur, actualDur)
-		args = []string{
+
+	if math.Abs(audioDur-actualDur) > 0.5 {
+		log.Printf("Station %s: Audio duration %.3fs significantly differs from video duration %.3fs, re-encoding audio", st.name, audioDur, actualDur)
+		argsAudio = []string{
 			"-y",
 			"-ss", fmt.Sprintf("%.3f", startTime),
 			"-i", fullEpisodePath,
@@ -433,44 +500,38 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 			"-map", "0:a:0",
 			"-c:a", "libopus",
 			"-b:a", "128k",
-			"-ar", fmt.Sprintf("%d", sampleRate),
-			"-ac", fmt.Sprintf("%d", channels),
+			"-ar", "48000",
+			"-ac", "2",
 			"-frame_duration", "20",
 			"-page_duration", "20000",
 			"-application", "audio",
 			"-vbr", "on",
 			"-avoid_negative_ts", "make_zero",
 			"-fflags", "+genpts",
+			"-async", "1", // Sync audio to video
 			"-f", "opus",
 			opusPath,
 		}
-		args = append(args[:len(args)-3], append([]string{"-af", audioFilter}, args[len(args)-3:]...)...)
-		cmdAudio := exec.Command("ffmpeg", args...)
+		if loudI.Valid {
+			loudnormFilter := fmt.Sprintf(
+				"loudnorm=I=-23:TP=-1.5:LRA=11:measured_I=%.2f:measured_LRA=%.2f:measured_TP=%.2f:measured_thresh=%.2f:offset=0:linear=true",
+				loudI.Float64, loudLRA.Float64, loudTP.Float64, loudThresh.Float64,
+			)
+			for i := len(argsAudio) - 1; i >= 0; i-- {
+				if argsAudio[i] == "-c:a" {
+					argsAudio = append(argsAudio[:i], append([]string{"-af", loudnormFilter}, argsAudio[i:]...)...)
+					break
+				}
+			}
+			log.Printf("Station %s: Applying loudnorm filter to re-encoded audio for video %d: %s", st.name, videoID, loudnormFilter)
+		}
+		cmdAudio := exec.Command("ffmpeg", argsAudio...)
 		outputAudio, err = cmdAudio.CombinedOutput()
 		if err != nil {
-			log.Printf("Station %s: ffmpeg audio re-encode failed for %s: %v\nOutput: %s", st.name, opusPath, err, string(outputAudio))
-			// Fallback to copy on re-encode failure
-			log.Printf("Station %s: Falling back to audio copy for %s due to re-encode failure", st.name, opusPath)
-			args = []string{
-				"-y",
-				"-ss", fmt.Sprintf("%.3f", startTime),
-				"-i", fullEpisodePath,
-				"-t", fmt.Sprintf("%.3f", actualDur),
-				"-map", "0:a:0",
-				"-c:a", "copy",
-				"-f", "opus",
-				opusPath,
-			}
-			cmdAudio = exec.Command("ffmpeg", args...)
-			outputAudio, err = cmdAudio.CombinedOutput()
-			if err != nil {
-				log.Printf("Station %s: ffmpeg audio copy failed for %s: %v\nOutput: %s", st.name, opusPath, err, string(outputAudio))
-				return nil, nil, "", 0, fpsPair{}, fmt.Errorf("ffmpeg audio re-encode and copy failed for video %d at %fs: %v", videoID, startTime, err)
-			}
-			log.Printf("Station %s: ffmpeg audio copy succeeded for %s", st.name, opusPath)
-		} else {
-			log.Printf("Station %s: ffmpeg audio re-encode succeeded for %s", st.name, opusPath)
+			log.Printf("Station %s: ffmpeg audio re-encode failed: %v\nOutput: %s", st.name, err, string(outputAudio))
+			return nil, nil, "", 0, fpsPair{}, fmt.Errorf("ffmpeg audio re-encode failed for video %d at %fs: %v", videoID, startTime, err)
 		}
+		log.Printf("Station %s: Re-encoded audio for %s to match video duration %.3fs", st.name, opusPath, actualDur)
 	}
 
 	data, err := os.ReadFile(fullSegPath)
@@ -505,7 +566,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 	if !hasIDR {
 		log.Printf("Station %s: No IDR frame in segment %s, attempting repair", st.name, fullSegPath)
 		repairedSegPath := filepath.Join(tempDir, baseName+"_repaired.h264")
-		args = []string{
+		args := []string{
 			"-y",
 			"-i", fullSegPath,
 			"-c:v", "libx264",
@@ -594,8 +655,7 @@ func getVideoDur(videoID int64, db *sql.DB) float64 {
 }
 
 func manageProcessing(st *Station, db *sql.DB) {
-	const maxRetries = 3       // General retry limit for episode chunks
-	const maxAdRetries = 5     // Higher retry limit for ads
+	const maxRetries = 3 // Limit retries per chunk to avoid infinite loops
 	for {
 		select {
 		case <-st.stopCh:
@@ -626,10 +686,9 @@ func manageProcessing(st *Station, db *sql.DB) {
 					sumNonAd += chunk.dur
 				}
 			}
-			log.Printf("Station %s (adsEnabled: %v): Remaining buffer %.3fs, non-ad %.3fs, current video %d, offset %.3f", st.name, st.adsEnabled, remainingDur, sumNonAd, st.currentVideo, st.currentOffset)
+			log.Printf("Station %s (adsEnabled: %v): Remaining buffer %.3fs, non-ad %.3fs, current video %d, offset %.3fs", st.name, st.adsEnabled, remainingDur, sumNonAd, st.currentVideo, st.currentOffset)
 			if remainingDur < BufferThreshold {
 				videoDur := getVideoDur(st.currentVideo, db)
-				log.Printf("Station %s: Video %d duration: %.3f", st.name, st.currentVideo, videoDur)
 				if videoDur <= 0 {
 					log.Printf("Station %s (adsEnabled: %v): Invalid duration for video %d, advancing to next video", st.name, st.adsEnabled, st.currentVideo)
 					st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
@@ -712,8 +771,10 @@ func manageProcessing(st *Station, db *sql.DB) {
 						break
 					}
 				}
+				// Skip ad insertion for no-ads stations
 				if !st.adsEnabled && nextBreak == chunkEnd && len(breaks) > 0 {
 					log.Printf("Station %s (adsEnabled: %v): Skipping ad break at %.3fs for video %d", st.name, st.adsEnabled, nextBreak, st.currentVideo)
+					// Pre-queue next episode segment
 					nextStart = st.currentOffset + sumNonAd
 					if nextStart < videoDur {
 						var retryCount int
@@ -761,28 +822,31 @@ func manageProcessing(st *Station, db *sql.DB) {
 					availableAds := make([]int64, len(adIDs))
 					copy(availableAds, adIDs)
 					adDurTotal := 0.0
-					for i := 0; i < 3 && len(availableAds) > 0; i++ {
+					for i := 0; i < 3; i++ { // Attempt exactly 3 ads
+						if len(availableAds) == 0 {
+							log.Printf("Station %s: No more available ads, stopping at %d of 3", st.name, i)
+							break
+						}
 						idx := rand.Intn(len(availableAds))
 						adID := availableAds[idx]
 						adDur := getVideoDur(adID, db)
 						if adDur <= 0 {
-							log.Printf("Station %s (adsEnabled: %v): Invalid duration for ad %d, skipping", st.name, st.adsEnabled, adID)
+							log.Printf("Station %s (adsEnabled: %v): Invalid duration for ad %d, skipping and removing from pool", st.name, st.adsEnabled, adID)
 							availableAds = append(availableAds[:idx], availableAds[idx+1:]...)
-							i--
 							continue
 						}
 						var retryCount int
-						for retryCount < maxAdRetries {
+						for retryCount < maxRetries {
 							segments, spsPPS, fmtpLine, actualDur, fps, err := processVideo(st, adID, db, 0, adDur)
 							if err != nil {
-								log.Printf("Station %s (adsEnabled: %v): Failed to process ad %d (retry %d/%d): %v", st.name, st.adsEnabled, adID, retryCount+1, maxAdRetries, err)
+								log.Printf("Station %s (adsEnabled: %v): Failed to process ad %d (retry %d/%d): %v", st.name, st.adsEnabled, adID, retryCount+1, maxRetries, err)
 								if segments != nil && len(segments) > 0 {
 									os.Remove(segments[0])
 									os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
 								}
 								retryCount++
-								if retryCount == maxAdRetries {
-									log.Printf("Station %s: All %d retries failed for ad %d, skipping", st.name, maxAdRetries, adID)
+								if retryCount == maxRetries {
+									log.Printf("Station %s: All %d retries failed for ad %d, skipping", st.name, maxRetries, adID)
 									break
 								}
 								continue

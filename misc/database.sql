@@ -2,12 +2,12 @@
 -- PostgreSQL database dump
 --
 
-\restrict ui8qXSEb81rpXiAuBveVujNfTuKUI5oTvoYTWlLocclCabT67iK4sL7oHfCAumA
+\restrict fJ3LYnu3uQPJlsWMx24MG7S3PbIs52gzna5vyhyvFPzt0dpg700xGTFIBvKCzJF
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.6
 
--- Started on 2025-10-05 16:32:38
+-- Started on 2025-10-07 16:28:23
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -655,6 +655,19 @@ COPY public.station_videos (id, station_id, video_id) FROM stdin;
 298	2	351
 299	2	352
 300	2	353
+301	3	373
+302	3	354
+303	3	355
+304	3	356
+305	3	357
+306	3	358
+307	3	359
+308	3	360
+309	3	361
+310	3	362
+311	3	363
+312	3	364
+313	3	365
 7	1	7
 61	1	114
 62	1	115
@@ -812,6 +825,133 @@ COPY public.station_videos (id, station_id, video_id) FROM stdin;
 169	2	222
 171	2	224
 173	2	226
+314	3	366
+316	3	368
+318	3	370
+320	3	372
+322	3	375
+325	3	378
+328	3	381
+331	3	384
+333	3	386
+335	3	388
+337	3	390
+339	3	392
+341	3	394
+343	3	396
+347	3	402
+345	3	399
+349	3	404
+351	3	406
+353	3	408
+355	3	410
+357	3	412
+359	3	414
+361	3	416
+363	3	418
+365	3	420
+367	3	422
+370	3	425
+372	3	427
+374	3	429
+376	3	431
+378	3	433
+379	3	434
+381	3	436
+383	3	438
+385	3	440
+388	3	443
+390	3	445
+392	3	447
+394	3	449
+315	3	367
+317	3	369
+319	3	371
+321	3	374
+323	3	376
+324	3	377
+326	3	379
+327	3	380
+329	3	382
+330	3	383
+332	3	385
+334	3	387
+336	3	389
+338	3	391
+340	3	393
+342	3	395
+344	3	397
+346	3	401
+348	3	403
+350	3	405
+352	3	407
+354	3	409
+356	3	411
+358	3	413
+360	3	415
+362	3	417
+364	3	419
+366	3	421
+368	3	423
+369	3	424
+371	3	426
+373	3	428
+375	3	430
+377	3	432
+380	3	435
+382	3	437
+384	3	439
+386	3	441
+387	3	442
+389	3	444
+391	3	446
+393	3	448
+395	3	450
+396	3	451
+397	3	452
+398	3	453
+399	3	454
+400	3	455
+401	3	456
+402	3	457
+403	3	458
+404	3	459
+405	3	460
+406	3	461
+407	3	462
+408	3	463
+409	3	464
+410	3	465
+411	3	466
+412	3	467
+413	3	468
+414	3	469
+415	3	470
+416	3	471
+417	3	472
+418	3	473
+419	3	474
+420	3	475
+421	3	476
+422	3	477
+423	3	478
+424	3	479
+425	3	480
+426	3	481
+427	3	482
+428	3	483
+429	3	484
+430	3	485
+431	3	486
+432	3	487
+433	3	488
+434	3	489
+435	3	490
+436	3	491
+437	3	492
+438	3	493
+439	3	495
+440	4	366
 \.
 
 
@@ -824,7 +964,8 @@ COPY public.station_videos (id, station_id, video_id) FROM stdin;
 COPY public.stations (id, name, unix_start) FROM stdin;
 1	Bob's Burgers	0
 2	Malcolm in the Middle	0
-3	UNTITLED	0
+3	3rd Rock from the Sun	0
+4	Beyond Belief Fact or Fiction	0
 \.
 
 
@@ -862,6 +1003,7 @@ COPY public.titles (id, name, description) FROM stdin;
 0	N/A	N/A
 2	Malcolm in the Middle	MALCOLM IS RIGHT IN THE MIDDLE
 1	Bob's Burgers	Bob has a burger!!!!
+3	3rd Rock from the Sun	
 \.
 
 
@@ -1148,6 +1290,9 @@ COPY public.video_metadata (id, video_id, metadata_type_id, value) FROM stdin;
 274	146	1	385.552
 275	146	1	760.385
 276	146	1	1058.28
+1214	450	1	108.182
+1215	450	1	566.623
+1216	450	1	1243.425
 280	148	1	286.585
 281	148	1	629.42
 282	148	1	902.402
@@ -1163,6 +1308,9 @@ COPY public.video_metadata (id, video_id, metadata_type_id, value) FROM stdin;
 292	152	1	308.12
 293	152	1	666.279
 294	152	1	975.016
+1217	451	1	165.602
+1218	451	1	668.91
+1219	451	1	1242.945
 298	154	1	297.731
 299	154	1	568.255
 300	154	1	961.741
@@ -1792,6 +1940,450 @@ COPY public.video_metadata (id, video_id, metadata_type_id, value) FROM stdin;
 924	353	1	57.441
 925	353	1	575.566
 926	353	1	1314.24
+927	373	1	142.98
+928	373	1	683.277
+929	373	1	1176.1568
+930	373	1	1274.3
+931	354	1	129.406
+932	354	1	549.593
+933	354	1	1253.41
+934	355	1	154.337
+935	355	1	776.841
+936	355	1	1275.35
+937	356	1	151.831
+938	356	1	729.782
+939	356	1	1276.5221
+940	357	1	135.396
+941	357	1	817.58
+942	357	1	1273.93
+943	358	1	143.279
+944	358	1	712.896
+945	358	1	1276.05
+946	359	1	129.053
+947	359	1	703.481
+948	359	1	1265.955
+949	360	1	197.28
+950	360	1	783.907
+951	360	1	1271.28
+952	361	1	166.7
+953	361	1	669.268
+954	361	1	1262.75
+955	362	1	140.6
+956	362	1	663.568
+957	362	1	1244.185
+958	363	1	142.141
+959	363	1	694.037
+960	363	1	1276.115
+961	364	1	94.496
+962	364	1	684.249
+963	364	1	1274.695
+964	365	1	111.593
+965	365	1	701.076
+966	365	1	1263.19
+967	366	1	106.874
+968	366	1	549.286
+969	366	1	1274.275
+970	367	1	111.043
+971	367	1	585.689
+972	367	1	1266.15
+973	368	1	172.525
+974	368	1	775.032
+975	368	1	1277.025
+976	369	1	151.529
+977	369	1	707.586
+978	369	1	1274.13
+979	370	1	117.459
+980	370	1	765.47
+981	370	1	1269.455
+982	371	1	187.714
+983	371	1	774.746
+984	371	1	1275.185
+985	372	1	157.195
+986	372	1	565.452
+987	372	1	1274.225
+988	401	1	75.333
+989	401	1	696.362
+990	401	1	1235.99
+991	400	1	777.974
+992	400	1	1425.82
+993	399	1	174.124
+994	399	1	691.92
+995	399	1	1237.415
+996	398	1	292.259
+997	398	1	909.193
+998	397	1	148.212
+999	397	1	674.316
+1000	397	1	1245.405
+1001	396	1	177.829
+1002	396	1	613.639
+1003	396	1	1245.195
+1004	395	1	175.241
+1005	395	1	657.329
+1006	395	1	1245.735
+1007	394	1	123.402
+1008	394	1	684.417
+1009	394	1	1245.935
+1010	393	1	174.043
+1011	393	1	885.289
+1012	393	1	1240.84
+1013	392	1	151.219
+1014	392	1	727.311
+1015	392	1	1245.525
+1016	391	1	180.726
+1017	391	1	793.625
+1018	391	1	1245.7
+1019	390	1	211.766
+1020	390	1	693.309
+1021	390	1	1246.865
+1022	389	1	132.93
+1023	389	1	750.67
+1024	389	1	1247.8
+1025	388	1	94.561
+1026	388	1	675.65
+1027	388	1	1246.475
+1028	387	1	160.986
+1029	387	1	602.794
+1030	387	1	1250.995
+1031	386	1	117.364
+1032	386	1	790.446
+1033	386	1	1245.845
+1034	385	1	172.744
+1035	385	1	657.757
+1036	385	1	1245.75
+1037	384	1	172.81
+1038	384	1	645.895
+1039	384	1	1247.36
+1040	383	1	180.12
+1041	383	1	614.661
+1042	383	1	1247.115
+1043	382	1	157.365
+1044	382	1	684.584
+1045	382	1	1246.89
+1046	381	1	137.718
+1047	381	1	541.658
+1048	381	1	1245.095
+1049	380	1	122.898
+1050	380	1	757.23
+1051	380	1	1247.4
+1052	379	1	123.525
+1053	379	1	717.18
+1054	379	1	1246.415
+1055	378	1	75.805
+1056	378	1	597.577
+1057	378	1	1246.615
+1058	377	1	137.614
+1059	377	1	738.588
+1060	377	1	1232.345
+1061	376	1	147.416
+1062	376	1	642.558
+1063	376	1	1243.32
+1064	375	1	191.026
+1065	375	1	552.145
+1066	375	1	1247.92
+1067	374	1	251.594
+1068	374	1	770.075
+1069	374	1	1245.88
+1070	402	1	274.984
+1071	402	1	623.729
+1072	402	1	1247.545
+1073	403	1	220.225
+1074	403	1	769.363
+1075	403	1	1247.365
+1076	404	1	199.971
+1077	404	1	748.279
+1078	404	1	1247.295
+1079	405	1	155.74
+1080	405	1	806.357
+1081	405	1	1246.555
+1082	406	1	143.738
+1083	406	1	728.833
+1084	406	1	1248.39
+1085	407	1	89.142
+1086	407	1	602.452
+1087	407	1	1249.13
+1088	408	1	181.077
+1089	408	1	610.697
+1090	408	1	1248.215
+1091	409	1	152.09
+1092	409	1	551.698
+1093	409	1	1247.56
+1094	410	1	207.452
+1095	410	1	835.447
+1096	410	1	1247.295
+1097	411	1	130.312
+1098	411	1	657.255
+1099	411	1	1249.38
+1100	412	1	155.166
+1101	412	1	673.019
+1102	412	1	1248.34
+1103	413	1	169.51
+1104	413	1	663.119
+1105	413	1	1247.78
+1106	414	1	110.82
+1107	414	1	587.276
+1108	414	1	1247.875
+1109	415	1	298.811
+1110	415	1	613.279
+1111	415	1	1249.15
+1112	416	1	76.321
+1113	416	1	646.938
+1114	416	1	1248.095
+1115	417	1	163.811
+1116	417	1	631.661
+1117	417	1	1248.06
+1118	418	1	156.863
+1119	418	1	675.659
+1120	418	1	1248.075
+1121	419	1	164.522
+1122	419	1	597.867
+1123	419	1	1248.33
+1124	420	1	129.019
+1125	420	1	724.272
+1126	420	1	1247.735
+1127	421	1	113.484
+1128	421	1	801.061
+1129	421	1	1250.75
+1130	422	1	119.49
+1131	422	1	653.468
+1132	422	1	1248.13
+1133	423	1	249.956
+1134	423	1	668.966
+1135	423	1	1248.055
+1136	424	1	168.288
+1137	424	1	585.965
+1138	424	1	1247.035
+1139	425	1	124.252
+1140	425	1	644.931
+1141	425	1	1248.005
+1142	426	1	141.081
+1143	426	1	651.661
+1144	426	1	1249.095
+1145	427	1	191.683
+1146	427	1	628.503
+1147	427	1	1249.45
+1148	428	1	136.413
+1149	428	1	636.512
+1150	428	1	1324.085
+1151	429	1	260.547
+1152	429	1	729.271
+1153	429	1	1242.88
+1154	430	1	106.791
+1155	430	1	622.588
+1156	430	1	1242.55
+1157	431	1	100.177
+1158	431	1	700.352
+1159	431	1	1242.545
+1160	432	1	88.842
+1161	432	1	731.742
+1162	432	1	1243.775
+1163	433	1	124.108
+1164	433	1	729.878
+1165	433	1	1242.045
+1166	434	1	133.059
+1167	434	1	685.307
+1168	434	1	1243.39
+1169	435	1	146.314
+1170	435	1	770.522
+1171	435	1	1242.935
+1172	436	1	185.446
+1173	436	1	740.433
+1174	436	1	1242.89
+1175	437	1	128.8
+1176	437	1	670.434
+1177	437	1	1242.075
+1178	438	1	146.106
+1179	438	1	650.272
+1180	438	1	1242.72
+1181	439	1	108.023
+1182	439	1	787.063
+1183	439	1	1243.215
+1184	440	1	228.956
+1185	440	1	707.465
+1186	440	1	1243.3842
+1187	441	1	117.657
+1188	441	1	577.015
+1189	441	1	1243.64
+1190	442	1	221.462
+1191	442	1	713.162
+1192	442	1	1243.275
+1193	443	1	167.713
+1194	443	1	661.995
+1195	443	1	1244.34
+1196	444	1	136.093
+1197	444	1	669.412
+1198	444	1	1244
+1199	445	1	154.444
+1200	445	1	728.107
+1201	445	1	1244.155
+1202	446	1	136.764
+1203	446	1	710.885
+1204	446	1	1242.975
+1205	447	1	134.816
+1206	447	1	687.12
+1207	447	1	1243.005
+1208	448	1	150.589
+1209	448	1	727.524
+1210	448	1	1244.805
+1211	449	1	194.142
+1212	449	1	837.293
+1213	449	1	1242.915
+1220	452	1	167.724
+1221	452	1	889.92
+1222	452	1	1243.595
+1223	473	1	161.76
+1224	473	1	796.477
+1225	453	1	190.143
+1226	453	1	629.448
+1227	453	1	1217.4
+1228	454	1	122.563
+1229	454	1	698.148
+1230	454	1	1216.86
+1231	455	1	159.379
+1232	455	1	786.865
+1233	455	1	1216.78
+1234	456	1	228.377
+1235	456	1	575.413
+1236	456	1	1216.675
+1237	457	1	126.655
+1238	457	1	618.629
+1239	457	1	1216.415
+1240	458	1	123.781
+1241	458	1	631.98
+1242	458	1	1216.815
+1243	459	1	175.553
+1244	459	1	570.56
+1245	459	1	1216.4
+1246	460	1	89.309
+1247	460	1	533.283
+1248	460	1	1217.005
+1249	461	1	33.84
+1250	461	1	234.359
+1251	461	1	566.045
+1252	461	1	1216.695
+1253	462	1	131.843
+1254	462	1	681.89
+1255	462	1	1213.495
+1256	463	1	144.187
+1257	463	1	718.303
+1258	463	1	1213.07
+1259	464	1	145.427
+1260	464	1	651.55
+1261	464	1	1214.19
+1262	465	1	129.14
+1263	465	1	806.407
+1264	465	1	1213.145
+1265	466	1	132.872
+1266	466	1	634.555
+1267	466	1	1214.205
+1268	467	1	129.887
+1269	467	1	615.096
+1270	467	1	1214.135
+1271	468	1	109.472
+1272	468	1	563.204
+1273	468	1	1216.66
+1274	469	1	240.786
+1275	469	1	649.687
+1276	469	1	1215.485
+1277	470	1	113.1
+1278	470	1	732.448
+1279	470	1	1214.435
+1281	471	1	600.162
+1282	471	1	1213.265
+1280	471	1	130.7262
+1283	472	1	120.179
+1284	472	1	662.391
+1285	472	1	1213.31
+1287	474	1	70.668
+1288	474	1	581.5692
+1289	474	1	1213.7499
+1290	475	1	118.816
+1291	475	1	687.419
+1292	475	1	1211.8861
+1293	476	1	237.92
+1294	476	1	607.2609
+1295	476	1	1212.2579
+1296	477	1	165.013
+1297	477	1	698.237
+1298	477	1	1212.4087
+1299	478	1	179.2436
+1300	478	1	789.9949
+1301	478	1	1211.6186
+1302	479	1	118.9162
+1303	479	1	572.1368
+1304	479	1	1212.6419
+1305	480	1	115.132
+1306	480	1	587.075
+1307	480	1	1213.065
+1308	481	1	105.535
+1309	481	1	673.9903
+1310	481	1	1211.8445
+1311	482	1	127.701
+1312	482	1	699.526
+1313	482	1	1212.92
+1314	483	1	107.731
+1315	483	1	655.606
+1316	483	1	1213.525
+1317	484	1	166.971
+1318	484	1	702.298
+1319	484	1	1212.3975
+1320	485	1	154.501
+1321	485	1	634.308
+1322	485	1	1212.728
+1323	486	1	118.847
+1324	486	1	680.337
+1325	486	1	1212.7843
+1326	487	1	113.25
+1327	487	1	672.552
+1328	487	1	1212.605
+1329	488	1	175.38
+1330	488	1	684.7092
+1331	488	1	1211.92
+1332	489	1	130.3041
+1333	489	1	625.2815
+1334	489	1	1211.945
+1335	490	1	138.876
+1336	490	1	750.52
+1337	490	1	1212.514
+1338	491	1	159.093
+1339	491	1	534.02
+1340	491	1	1216.96
+1341	492	1	172.512
+1342	492	1	650.196
+1343	492	1	1216.74
+1344	493	1	125.75
+1345	493	1	584.8725
+1346	493	1	1213.0959
+1347	495	1	145.248
+1348	495	1	478.112
+1349	495	1	1212.0369
+1350	496	1	968.4634
+1351	496	1	1527.4
+1352	496	1	1924.4225
+1353	496	1	2405.485
+1354	497	1	513.087
+1355	497	1	879.7677
+1356	497	1	1411.6787
+1357	497	1	1870.4707
+1358	497	1	2430.575
+1359	498	1	569.8868
+1360	498	1	928.8957
+1361	498	1	1565.23
+1362	498	1	1992.9735
+1363	498	1	2395.981
+1364	499	1	662.752
+1365	499	1	1052.3231
+1366	499	1	1533.2111
+1367	499	1	1958.1583
+1368	499	1	2378.28
+1369	500	1	587.309
+1370	500	1	1032.3
+1371	500	1	1772.03
+1372	500	1	2265.68
+1373	501	1	746.735
+1374	501	1	1273.89
+1375	501	1	1825.105
+1376	501	1	2275.54
+1377	501	1	2568.93
 \.
 
 
@@ -1913,18 +2505,6 @@ COPY public.videos (id, title_id, uri, duration, loudnorm_input_i, loudnorm_inpu
 63	0	Commercials/NES/Konami/Konami Commercial.mp4	31.346667000000	-18.46	7	-7.12	-29.06
 64	0	Commercials/PS2/Final Fantasy X/Final Fantasy X Promo Trailer 2.mp4	170.225000000000	-16.91	8.8	0.52	-27.33
 272	0	Malcolm in the Middle/4/Malcolm in the Middle 0407 Malcolm Holds His Tongue.mkv	1315.981375000000	-24.78	12.6	-3.36	-35.84
-354	0	3rd Rock from the Sun/1/3rd Rock from the Sun 102 Post-Nasal Dick.mkv	\N	\N	\N	\N	\N
-355	0	3rd Rock from the Sun/1/3rd Rock from the Sun 103 Dick's First Birthday.mkv	\N	\N	\N	\N	\N
-356	0	3rd Rock from the Sun/1/3rd Rock from the Sun 104 Dick Is from Mars, Sally Is from Venus.mkv	\N	\N	\N	\N	\N
-357	0	3rd Rock from the Sun/1/3rd Rock from the Sun 105 Dick, Smoker.mkv	\N	\N	\N	\N	\N
-358	0	3rd Rock from the Sun/1/3rd Rock from the Sun 106 Green-Eyed Dick.mkv	\N	\N	\N	\N	\N
-359	0	3rd Rock from the Sun/1/3rd Rock from the Sun 107 Lonely Dick.mkv	\N	\N	\N	\N	\N
-360	0	3rd Rock from the Sun/1/3rd Rock from the Sun 108 Body & Soul & Dick.mkv	\N	\N	\N	\N	\N
-361	0	3rd Rock from the Sun/1/3rd Rock from the Sun 109 Ab-Dick-ted.mkv	\N	\N	\N	\N	\N
-362	0	3rd Rock from the Sun/1/3rd Rock from the Sun 110 Truth or Dick.mkv	\N	\N	\N	\N	\N
-363	0	3rd Rock from the Sun/1/3rd Rock from the Sun 111 The Art of Dick.mkv	\N	\N	\N	\N	\N
-364	0	3rd Rock from the Sun/1/3rd Rock from the Sun 112 Frozen Dick.mkv	\N	\N	\N	\N	\N
-365	0	3rd Rock from the Sun/1/3rd Rock from the Sun 113 Angry Dick.mkv	\N	\N	\N	\N	\N
 66	0	Commercials/PS2/Final Fantasy X-2/Final Fantasy X-2 Promo Japanese.mp4	180.975000000000	-18.58	4.7	-1.22	-28.75
 69	0	Bob's Burgers/2/Bob's Burgers 0203 Synchronized Swimming.mkv	1272.384000000000	-26.44	9.4	-5.23	-36.74
 68	0	Bob's Burgers/2/Bob's Burgers 0202 Bob Day Afternoon.mkv	1291.488000000000	-23.3	8.3	-1.33	-33.67
@@ -1934,7 +2514,6 @@ COPY public.videos (id, title_id, uri, duration, loudnorm_input_i, loudnorm_inpu
 72	0	Bob's Burgers/2/Bob's Burgers 0206 Dr Yap.mkv	1292.136000000000	-23.61	6.1	-1.13	-33.93
 73	0	Bob's Burgers/2/Bob's Burgers 0207 Moody Foodie.mkv	1282.056000000000	-23.98	5.2	-3.95	-34.29
 74	0	Bob's Burgers/2/Bob's Burgers 0208 Bad Tina.mkv	1290.216000000000	-23.22	7.2	-3.75	-33.53
-366	0	3rd Rock from the Sun/1/3rd Rock from the Sun 114 The Dicks They Are A-Changin'.mkv	\N	\N	\N	\N	\N
 77	0	Bob's Burgers/3/Bob's Burgers 0302 Full Bars.mkv	1284.115750000000	-22.35	7.9	-2.08	-32.63
 75	0	Bob's Burgers/2/Bob's Burgers 0209 Beefsquatch.mkv	1292.808000000000	-23.57	6.5	-4.44	-33.77
 76	0	Bob's Burgers/3/Bob's Burgers 0301 Ear-sy Rider.mkv	1292.958750000000	-20.98	9.4	1.37	-31.29
@@ -1958,12 +2537,20 @@ COPY public.videos (id, title_id, uri, duration, loudnorm_input_i, loudnorm_inpu
 94	0	Bob's Burgers/3/Bob's Burgers 0319 Family Fracas.mkv	1293.959750000000	-24.69	6.6	-4.79	-34.79
 96	0	Bob's Burgers/3/Bob's Burgers 0321 Boyz 4 Now.mkv	1272.354750000000	-23.32	8.8	-3.67	-33.5
 97	0	Bob's Burgers/3/Bob's Burgers 0322 Carpe Museum.mkv	1275.273750000000	-24.72	6.4	-6.28	-34.85
-367	0	3rd Rock from the Sun/1/3rd Rock from the Sun 115 I Enjoy Being a Dick.mkv	\N	\N	\N	\N	\N
-368	0	3rd Rock from the Sun/1/3rd Rock from the Sun 116 Dick Like Me.mkv	\N	\N	\N	\N	\N
-369	0	3rd Rock from the Sun/1/3rd Rock from the Sun 117 Assault with a Deadly Dick.mkv	\N	\N	\N	\N	\N
-370	0	3rd Rock from the Sun/1/3rd Rock from the Sun 118 Father Knows Dick.mkv	\N	\N	\N	\N	\N
-371	0	3rd Rock from the Sun/1/3rd Rock from the Sun 119 Selfish Dick.mkv	\N	\N	\N	\N	\N
-372	0	3rd Rock from the Sun/1/3rd Rock from the Sun 120 See Dick Run.mkv	\N	\N	\N	\N	\N
+367	0	3rd Rock from the Sun/1/3rd Rock from the Sun 115 I Enjoy Being a Dick.mkv	1296.042000000000	-22.59	6.7	-4.59	-33.07
+365	0	3rd Rock from the Sun/1/3rd Rock from the Sun 113 Angry Dick.mkv	1293.013000000000	-23.05	6.1	-5.07	-33.41
+368	0	3rd Rock from the Sun/1/3rd Rock from the Sun 116 Dick Like Me.mkv	1306.645000000000	-22.68	7.8	-4.49	-33.19
+370	0	3rd Rock from the Sun/1/3rd Rock from the Sun 118 Father Knows Dick.mkv	1298.453000000000	-22.67	6.5	-5.27	-33.22
+354	0	3rd Rock from the Sun/1/3rd Rock from the Sun 102 Post-Nasal Dick.mkv	1282.773000000000	-24.4	8.6	-6.94	-35.08
+366	0	3rd Rock from the Sun/1/3rd Rock from the Sun 114 The Dicks They Are A-Changin'.mkv	1303.573000000000	-22.63	6.6	-5.03	-33.2
+362	0	3rd Rock from the Sun/1/3rd Rock from the Sun 110 Truth or Dick.mkv	1272.853000000000	-22.82	6.3	-7.49	-33.4
+361	0	3rd Rock from the Sun/1/3rd Rock from the Sun 109 Ab-Dick-ted.mkv	1292.736000000000	-22.41	6.5	-5.04	-32.96
+359	0	3rd Rock from the Sun/1/3rd Rock from the Sun 107 Lonely Dick.mkv	1295.402000000000	-23.47	8.5	-4.87	-34.16
+360	0	3rd Rock from the Sun/1/3rd Rock from the Sun 108 Body & Soul & Dick.mkv	1300.842000000000	-21.55	6.4	-5.96	-32.16
+363	0	3rd Rock from the Sun/1/3rd Rock from the Sun 111 The Art of Dick.mkv	1305.813000000000	-22.6	6.4	-4.69	-33.15
+364	0	3rd Rock from the Sun/1/3rd Rock from the Sun 112 Frozen Dick.mkv	1304.853000000000	-22.52	7.4	-5.46	-33.06
+372	0	3rd Rock from the Sun/1/3rd Rock from the Sun 120 See Dick Run.mkv	1303.573000000000	-21.99	7.6	-4.55	-32.66
+369	0	3rd Rock from the Sun/1/3rd Rock from the Sun 117 Assault with a Deadly Dick.mkv	1303.573000000000	-22.38	6.1	-3.75	-32.81
 65	0	Commercials/PS2/Final Fantasy X/Final Fantasy X Promo Trailer 3.mp4	103.188333000000	-26.99	15.2	-10.79	-37.7
 277	0	Malcolm in the Middle/4/Malcolm in the Middle 0412 Kicked Out.mkv	1315.480875000000	-24.3	14.9	-1.08	-35.96
 101	0	Bob's Burgers/4/Bob's Burgers 0403 Seaplane.mkv	1292.750000000000	-25.35	4.9	-7.62	-35.44
@@ -2109,7 +2696,6 @@ COPY public.videos (id, title_id, uri, duration, loudnorm_input_i, loudnorm_inpu
 305	0	Malcolm in the Middle/5/Malcolm in the Middle 0518 Dewey's Special Class.mkv	1316.448500000000	-25	16.5	-5.99	-36.54
 306	0	Malcolm in the Middle/5/Malcolm in the Middle 0519 Experiment.mkv	1305.437500000000	-27.31	14.4	-7.17	-38.94
 308	0	Malcolm in the Middle/5/Malcolm in the Middle 0521 Reese Joins the Army Part 1.mkv	1316.949000000000	-25.53	15.2	-3.08	-36.98
-373	0	3rd Rock from the Sun/1/3rd Rock from the Sun 101 Brains and Eggs.mkv	\N	\N	\N	\N	\N
 241	0	Malcolm in the Middle/2/Malcolm in the Middle 0223 Carnival.mkv	1333.098375000000	-23.77	11.7	-4.75	-34.88
 286	0	Malcolm in the Middle/4/Malcolm in the Middle 0421 Baby Part 2.mkv	1326.325000000000	-25	12.6	-2.82	-36.27
 290	0	Malcolm in the Middle/5/Malcolm in the Middle 0503 Goodbye Kitty.mkv	1316.448500000000	-25.09	12.9	-8.15	-36.49
@@ -2180,6 +2766,31 @@ COPY public.videos (id, title_id, uri, duration, loudnorm_input_i, loudnorm_inpu
 348	0	Malcolm in the Middle/7/Malcolm in the Middle 0717 Hal's Dentist.mkv	1288.687375000000	-24.9	8.8	-6.08	-35.93
 317	0	Malcolm in the Middle/6/Malcolm in the Middle 0608 Lois Battles Jamie.mkv	1315.447500000000	-23.33	15.3	-7.87	-34.94
 321	0	Malcolm in the Middle/6/Malcolm in the Middle 0612 Living Will.mkv	1317.449500000000	-24.11	11.5	-10.28	-35.49
+376	0	3rd Rock from the Sun/2/3rd Rock from the Sun 203 Hotel Dick.mkv	1272.896000000000	-24.75	9.5	-4.57	-35.56
+381	0	3rd Rock from the Sun/2/3rd Rock from the Sun 208 World's Greatest Dick.mkv	1275.050000000000	-24.41	8.6	-4.63	-35.03
+377	0	3rd Rock from the Sun/2/3rd Rock from the Sun 204 Big Angry Virgin from Outer Space.mkv	1262.613000000000	-24.27	10	-3.85	-35.14
+380	0	3rd Rock from the Sun/2/3rd Rock from the Sun 207 Fourth and Dick.mkv	1279.381000000000	-24.99	7.9	-8.07	-35.48
+382	0	3rd Rock from the Sun/2/3rd Rock from the Sun 209 My Mother the Alien.mkv	1277.781000000000	-23	9.4	-3.03	-33.63
+407	0	3rd Rock from the Sun/3/3rd Rock from the Sun 306 Moby Dick.mkv	1277.973000000000	-24.66	9.4	-5.68	-35.48
+383	0	3rd Rock from the Sun/2/3rd Rock from the Sun 210 Gobble, Gobble, Dick, Dick.mkv	1276.970000000000	-23.79	9.8	-4	-34.59
+378	0	3rd Rock from the Sun/2/3rd Rock from the Sun 205 Much Ado About Dick.mkv	1275.925000000000	-24.98	10.2	-5.27	-35.84
+384	0	3rd Rock from the Sun/2/3rd Rock from the Sun 211 Dick Jokes.mkv	1277.930000000000	-23.38	8.6	-5.92	-34.07
+395	0	3rd Rock from the Sun/2/3rd Rock from the Sun 222 Will Work for Dick.mkv	1275.370000000000	-23.6	9	-5.47	-34.33
+389	0	3rd Rock from the Sun/2/3rd Rock from the Sun 216 Dick on One Knee.mkv	1277.973000000000	-23.59	9.5	-6.49	-34.21
+386	0	3rd Rock from the Sun/2/3rd Rock from the Sun 213 Proud Dick.mkv	1275.882000000000	-23.28	7.7	-3.06	-33.9
+390	0	3rd Rock from the Sun/2/3rd Rock from the Sun 217 Same Old Song and Dick.mkv	1277.098000000000	-23.74	8.7	-5.99	-34.44
+397	0	3rd Rock from the Sun/2/3rd Rock from the Sun 224 Dick and the Single Girl.mkv	1275.178000000000	-23.61	10.6	-4.61	-34.5
+388	0	3rd Rock from the Sun/2/3rd Rock from the Sun 215 Guilty as Dick.mkv	1276.138000000000	-24.19	9.2	-4.53	-34.89
+391	0	3rd Rock from the Sun/2/3rd Rock from the Sun 218 I Brake for Dick.mkv	1275.136000000000	-23.81	8.1	-4.7	-34.43
+403	0	3rd Rock from the Sun/3/3rd Rock from the Sun 302 Fun with Dick and Janet (Part 2).mkv	1275.925000000000	-24.44	7.7	-5.28	-35.14
+393	0	3rd Rock from the Sun/2/3rd Rock from the Sun 220 Dickmalion.mkv	1270.698000000000	-24.29	8.7	-5.34	-34.87
+394	0	3rd Rock from the Sun/2/3rd Rock from the Sun 221 Sensitive Dick.mkv	1275.925000000000	-23.53	8.7	-3.03	-34.23
+404	0	3rd Rock from the Sun/3/3rd Rock from the Sun 303 Tricky Dick.mkv	1276.928000000000	-23.15	7.5	-4.66	-33.78
+406	0	3rd Rock from the Sun/3/3rd Rock from the Sun 305 Scaredy Dick.mkv	1279.125000000000	-23.82	9	-4.39	-34.53
+399	0	3rd Rock from the Sun/2/3rd Rock from the Sun 225 A Nightmare on Dick Street (Part 1).mkv	1277.973000000000	-25.52	10.1	-3.89	-36.14
+398	0	3rd Rock from the Sun/2/3rd Rock from the Sun 225 A Nightmare on Dick Street (Part 1) 3D Version.mkv	1494.058000000000	-25.04	10.1	-4.53	-35.69
+400	0	3rd Rock from the Sun/2/3rd Rock from the Sun 226 A Nightmare on Dick Street (Part 2) 3D Version.mkv	1501.205000000000	-23.53	10.4	-5.54	-34.17
+405	0	3rd Rock from the Sun/3/3rd Rock from the Sun 304 Dick-In-Law.mkv	1275.925000000000	-23.21	7.4	-5.01	-33.82
 21	0	Commercials/N64/Extreme-G/Extreme-G Beta Trailer.mp4	18.970000000000	-8.74	1.3	1.04	-18.79
 22	0	Commercials/N64/Goldeneye/Goldeneye 007 Promotional Trailer.mp4	30.510000000000	-14.1	3	-0.08	-24.56
 19	0	Commercials/N64/Diddy Kong Racing/Diddy Kong Racing Meet the Fastest Monkey in the Jungle.mp4	49.851667000000	-15.05	2.1	0.1	-25.23
@@ -2238,6 +2849,128 @@ COPY public.videos (id, title_id, uri, duration, loudnorm_input_i, loudnorm_inpu
 267	0	Malcolm in the Middle/4/Malcolm in the Middle 0402 Humilithon.mkv	1314.613250000000	-25.33	11.7	-2.26	-36.52
 353	0	Malcolm in the Middle/7/Malcolm in the Middle 0722 Graduation.mkv	1354.753375000000	-25.02	7.5	-7.33	-35.97
 334	0	Malcolm in the Middle/7/Malcolm in the Middle 0703 Reese vs. Stevie.mkv	1321.720375000000	-25.46	10	-6.15	-36.54
+410	0	3rd Rock from the Sun/3/3rd Rock from the Sun 309 Seven Deadly Clips.mkv	1277.333000000000	-22.54	7.5	-4.31	-33.17
+413	0	3rd Rock from the Sun/3/3rd Rock from the Sun 312 Dick on a Roll.mkv	1277.333000000000	-23.07	8.3	-4.99	-33.56
+457	0	3rd Rock from the Sun/5/3rd Rock from the Sun 505 Dick and Tuck.mkv	1247.253000000000	-22.99	8.8	-4.31	-33.8
+459	0	3rd Rock from the Sun/5/3rd Rock from the Sun 507 Sex and the Sally.mkv	1246.762000000000	-23.73	8.5	-5.32	-34.45
+415	0	3rd Rock from the Sun/3/3rd Rock from the Sun 314 36! 24! 36! Dick! (Part 1).mkv	1277.973000000000	-23.2	7	-4.7	-33.79
+419	0	3rd Rock from the Sun/3/3rd Rock from the Sun 318 Stuck with Dick.mkv	1277.973000000000	-23.06	8.2	-6.2	-33.72
+411	0	3rd Rock from the Sun/3/3rd Rock from the Sun 310 Tom, Dick and Mary.mkv	1279.082000000000	-22.8	8.5	-4.96	-33.47
+414	0	3rd Rock from the Sun/3/3rd Rock from the Sun 313 The Great Dick-Dater.mkv	1277.525000000000	-23.77	9.6	-4.7	-34.58
+425	0	3rd Rock from the Sun/3/3rd Rock from the Sun 324 Sally and Don's First Kiss.mkv	1277.653000000000	-23.01	7.9	-5.08	-33.82
+438	0	3rd Rock from the Sun/4/3rd Rock from the Sun 410 Two-Faced Dick.mkv	1272.362000000000	-28.92	7.4	-11.31	-39.57
+417	0	3rd Rock from the Sun/3/3rd Rock from the Sun 316 Pickles and Ice Cream.mkv	1277.696000000000	-22.69	8.4	-6.05	-33.43
+418	0	3rd Rock from the Sun/3/3rd Rock from the Sun 317 Auto Eurodicka.mkv	1277.653000000000	-23.17	7.3	-3.61	-33.74
+440	0	3rd Rock from the Sun/4/3rd Rock from the Sun 412 Dick and Taxes.mkv	1272.853000000000	-29.08	5.8	-11.78	-39.56
+421	0	3rd Rock from the Sun/3/3rd Rock from the Sun 320 My Daddy's Little Girl.mkv	1280.725000000000	-22.95	8.4	-7.12	-33.53
+422	0	3rd Rock from the Sun/3/3rd Rock from the Sun 321 The Physics of Being Dick.mkv	1277.973000000000	-22.91	7.3	-3.51	-33.53
+423	0	3rd Rock from the Sun/3/3rd Rock from the Sun 322 Just Your Average Dick (Part 1).mkv	1277.568000000000	-23.45	7.8	-4.19	-34.09
+434	0	3rd Rock from the Sun/4/3rd Rock from the Sun 406 I am Dick Pentameter!.mkv	1275.178000000000	-22.92	7.3	-5.36	-33.56
+426	0	3rd Rock from the Sun/3/3rd Rock from the Sun 325 When Aliens Camp.mkv	1279.082000000000	-22.81	7.5	-5.31	-33.38
+427	0	3rd Rock from the Sun/3/3rd Rock from the Sun 326 The Tooth Harry.mkv	1279.530000000000	-22.6	8.4	-4.45	-33.34
+430	0	3rd Rock from the Sun/4/3rd Rock from the Sun 402 Power Mad Dick.mkv	1272.362000000000	-22.78	9.2	-3.6	-33.59
+432	0	3rd Rock from the Sun/4/3rd Rock from the Sun 404 Collect Call for Dick.mkv	1272.853000000000	-23.09	7.5	-6.5	-33.67
+428	0	3rd Rock from the Sun/3/3rd Rock from the Sun 327 Eat, Drink, Dick, Mary.mkv	1359.722000000000	-18.2	10	-0.92	-29.1
+435	0	3rd Rock from the Sun/4/3rd Rock from the Sun 407 D3 Judgment Day.mkv	1272.533000000000	-23.36	7.5	-6.05	-33.94
+455	0	3rd Rock from the Sun/5/3rd Rock from the Sun 503 The Fifth Solomon.mkv	1247.253000000000	-23.59	8.5	-5.2	-34.21
+436	0	3rd Rock from the Sun/4/3rd Rock from the Sun 408 Indecent Dick.mkv	1272.682000000000	-22.62	8.2	-3.26	-33.25
+437	0	3rd Rock from the Sun/4/3rd Rock from the Sun 409 Happy New Dick!.mkv	1272.405000000000	-29.09	6.8	-10.2	-39.56
+439	0	3rd Rock from the Sun/4/3rd Rock from the Sun 411 Dick Solomon of the Indiana Solomons.mkv	1272.853000000000	-28.88	5.6	-11.88	-39.34
+449	0	3rd Rock from the Sun/4/3rd Rock from the Sun 421 Dick vs. Strudwick.mkv	1272.533000000000	-22.34	7.5	-5.43	-32.91
+443	0	3rd Rock from the Sun/4/3rd Rock from the Sun 415 The House That Dick Built.mkv	1273.962000000000	-29.1	7.6	-11.31	-39.78
+445	0	3rd Rock from the Sun/4/3rd Rock from the Sun 417 Y2Dick.mkv	1273.962000000000	-28.35	7.6	-11.07	-38.87
+446	0	3rd Rock from the Sun/4/3rd Rock from the Sun 418 Dick 'The Mouth' Solomon.mkv	1272.576000000000	-29.65	8.2	-11.03	-40.41
+447	0	3rd Rock from the Sun/4/3rd Rock from the Sun 419 Citizen Solomon.mkv	1272.533000000000	-29.69	7	-11.47	-40.31
+448	0	3rd Rock from the Sun/4/3rd Rock from the Sun 420 Alien Hunter.mkv	1274.922000000000	-23.21	7.5	-5.47	-33.75
+451	0	3rd Rock from the Sun/4/3rd Rock from the Sun 423 Dick's Big Giant Headache (Part 1).mkv	1272.362000000000	-23.63	6.3	-7.06	-34.12
+453	0	3rd Rock from the Sun/5/3rd Rock from the Sun 501 Episode I The Baby Menace.mkv	1247.253000000000	-23.52	8.2	-5.44	-34.18
+454	0	3rd Rock from the Sun/5/3rd Rock from the Sun 502 Dick for Tat.mkv	1247.253000000000	-22.89	8.7	-2.03	-33.66
+456	0	3rd Rock from the Sun/5/3rd Rock from the Sun 504 Dial M for Dick.mkv	1247.253000000000	-23.72	7.7	-5.91	-34.39
+355	0	3rd Rock from the Sun/1/3rd Rock from the Sun 103 Dick's First Birthday.mkv	1304.853000000000	-24.37	7.1	-6.5	-35.04
+357	0	3rd Rock from the Sun/1/3rd Rock from the Sun 105 Dick, Smoker.mkv	1303.253000000000	-23.69	9.2	-4.58	-34.49
+356	0	3rd Rock from the Sun/1/3rd Rock from the Sun 104 Dick Is from Mars, Sally Is from Venus.mkv	1306.133000000000	-22.91	6.4	-7.5	-33.51
+358	0	3rd Rock from the Sun/1/3rd Rock from the Sun 106 Green-Eyed Dick.mkv	1305.322000000000	-23.89	9.7	-7.29	-34.71
+429	0	3rd Rock from the Sun/4/3rd Rock from the Sun 401 Dr. Solomon's Traveling Alien Show.mkv	1272.576000000000	-22.34	8.4	-2.65	-32.97
+371	0	3rd Rock from the Sun/1/3rd Rock from the Sun 119 Selfish Dick.mkv	1304.682000000000	-22.23	6.8	-5.92	-32.81
+373	0	3rd Rock from the Sun/1/3rd Rock from the Sun 101 Brains and Eggs.mkv	1303.573000000000	-26.57	9.4	-7.89	-37.27
+375	0	3rd Rock from the Sun/2/3rd Rock from the Sun 202 See Dick Continue to Run, Part 2.mkv	1279.530000000000	-25.2	11	-4.43	-36.1
+374	0	3rd Rock from the Sun/2/3rd Rock from the Sun 201 See Dick Continue to Run, Part 1.mkv	1275.925000000000	-25.83	10	-5.1	-36.62
+379	0	3rd Rock from the Sun/2/3rd Rock from the Sun 206 Dick the Vote.mkv	1276.501000000000	-25.55	9.3	-4.81	-36.31
+385	0	3rd Rock from the Sun/2/3rd Rock from the Sun 212 Jolly Old St. Dick.mkv	1275.925000000000	-23.49	8.7	-5.22	-34.09
+387	0	3rd Rock from the Sun/2/3rd Rock from the Sun 214 Romeo & Juliet & Dick.mkv	1280.896000000000	-24.04	8.9	-5.53	-34.72
+392	0	3rd Rock from the Sun/2/3rd Rock from the Sun 219 Dick Behaving Badly.mkv	1275.648000000000	-23.08	8	-6.61	-33.61
+396	0	3rd Rock from the Sun/2/3rd Rock from the Sun 223 Fifteen Minutes of Dick.mkv	1275.178000000000	-23.47	9.1	-4.64	-34.15
+401	0	3rd Rock from the Sun/2/3rd Rock from the Sun 226 A Nightmare on Dick Street (Part 2).mkv	1277.973000000000	-23.3	10	-5.63	-33.94
+402	0	3rd Rock from the Sun/3/3rd Rock from the Sun 301 Fun with Dick and Janet (Part 1).mkv	1277.333000000000	-24.51	8.9	-5.94	-35.14
+409	0	3rd Rock from the Sun/3/3rd Rock from the Sun 308 A Friend in Dick.mkv	1277.333000000000	-23.13	8.7	-4.76	-33.93
+408	0	3rd Rock from the Sun/3/3rd Rock from the Sun 307 Eleven Angry Men and One Dick.mkv	1279.125000000000	-24.16	9.3	-5.37	-35
+476	0	3rd Rock from the Sun/6/3rd Rock from the Sun 602 Fear and Loathing in Rutherford.mkv	1241.493000000000	-22.82	6.5	-5.11	-33.43
+467	0	3rd Rock from the Sun/5/3rd Rock from the Sun 515 Youth Is Wasted on the Dick.mkv	1244.565000000000	-23.27	8.6	-5.42	-34.05
+464	0	3rd Rock from the Sun/5/3rd Rock from the Sun 512 The Big Giant Head Returns.mkv	1244.373000000000	-23.87	9.2	-6.45	-34.77
+460	0	3rd Rock from the Sun/5/3rd Rock from the Sun 508 Charitable Dick.mkv	1247.253000000000	-23.58	10.1	-3.45	-34.53
+461	0	3rd Rock from the Sun/5/3rd Rock from the Sun 509 The Loud Solomon Family A Dickumentary.mkv	1248.981000000000	-24.06	9.5	-6.05	-34.88
+462	0	3rd Rock from the Sun/5/3rd Rock from the Sun 510 Gwen, Larry, Dick & Mary.mkv	1242.133000000000	-23.44	7.9	-6.58	-34.04
+480	0	3rd Rock from the Sun/6/3rd Rock from the Sun 606 Why Dickie Can't Teach.mkv	1242.133000000000	-24.12	7.5	-6.34	-34.88
+465	0	3rd Rock from the Sun/5/3rd Rock from the Sun 513 Rutherford Beauty.mkv	1242.133000000000	-23.13	7.6	-6.81	-33.67
+474	0	3rd Rock from the Sun/5/3rd Rock from the Sun 522 The Big Giant Head Returns Again (Part 2).mkv	1243.178000000000	-23.5	8.4	-6.99	-34.3
+468	0	3rd Rock from the Sun/5/3rd Rock from the Sun 516 Dick Strikes Out.mkv	1247.253000000000	-23.47	7.1	-5.82	-34.16
+469	0	3rd Rock from the Sun/5/3rd Rock from the Sun 517 Shall We Dick.mkv	1245.568000000000	-22.19	10.6	-4.62	-32.93
+471	0	3rd Rock from the Sun/5/3rd Rock from the Sun 519 Frankie Goes to Rutherford.mkv	1243.562000000000	-23.58	9.3	-5.22	-34.44
+485	0	3rd Rock from the Sun/6/3rd Rock from the Sun 611 A Dick Replacement.mkv	1241.856000000000	-23.52	7.2	-6.2	-34.12
+483	0	3rd Rock from the Sun/6/3rd Rock from the Sun 609 Dick Digs.mkv	1242.133000000000	-23.58	7.5	-6.56	-34.24
+475	0	3rd Rock from the Sun/6/3rd Rock from the Sun 601 Les Liaisons Dickgereuses.mkv	1241.130000000000	-22.21	6.6	-6.02	-32.89
+477	0	3rd Rock from the Sun/6/3rd Rock from the Sun 603 InDickscretion.mkv	1242.133000000000	-22.97	6.7	-5.56	-33.56
+478	0	3rd Rock from the Sun/6/3rd Rock from the Sun 604 Dick'll Take Manhattan (Part 1).mkv	1240.085000000000	-22.41	6.1	-4.55	-32.97
+488	0	3rd Rock from the Sun/6/3rd Rock from the Sun 614 My Mother, My Dick.mkv	1240.085000000000	-22.46	6.9	-5.54	-33.24
+481	0	3rd Rock from the Sun/6/3rd Rock from the Sun 607 B.D.O.C..mkv	1240.085000000000	-23.03	7.5	-3.91	-33.8
+490	0	3rd Rock from the Sun/6/3rd Rock from the Sun 616 Dick Soup for the Soul.mkv	1241.536000000000	-23.29	8.7	-5.03	-34.27
+487	0	3rd Rock from the Sun/6/3rd Rock from the Sun 613 You Don't Know Dick.mkv	1241.813000000000	-22.62	5.5	-5.13	-33.16
+482	0	3rd Rock from the Sun/6/3rd Rock from the Sun 608 Red, White & Dick.mkv	1242.133000000000	-22.71	7.2	-4.93	-33.39
+492	0	3rd Rock from the Sun/6/3rd Rock from the Sun 618 Mary Loves Scoochie (Part 2).mkv	1246.976000000000	-22.57	6.2	-4.84	-33.18
+486	0	3rd Rock from the Sun/6/3rd Rock from the Sun 612 Dick's Ark.mkv	1241.962000000000	-22.54	5.9	-5.14	-33.1
+491	0	3rd Rock from the Sun/6/3rd Rock from the Sun 617 Mary Loves Scoochie (Part 1).mkv	1246.933000000000	-23.07	7.2	-5.09	-33.8
+489	0	3rd Rock from the Sun/6/3rd Rock from the Sun 615 Glengarry Glen Dick.mkv	1241.258000000000	-22.35	6.3	-4.91	-33.09
+495	0	3rd Rock from the Sun/6/3rd Rock from the Sun 620 The Thing that Wouldn't Die (Part 2).mkv	1241.450000000000	-22.29	8.6	-5.29	-33.16
+412	0	3rd Rock from the Sun/3/3rd Rock from the Sun 311 Jailhouse Dick.mkv	1277.973000000000	-23.07	6.9	-5.99	-33.65
+416	0	3rd Rock from the Sun/3/3rd Rock from the Sun 315 36! 24! 36! Dick! (Part 2).mkv	1277.973000000000	-22.82	6.1	-6.21	-33.28
+420	0	3rd Rock from the Sun/3/3rd Rock from the Sun 319 Portrait of Tommy as an Old Man.mkv	1277.376000000000	-23.11	8.6	-5.69	-33.86
+424	0	3rd Rock from the Sun/3/3rd Rock from the Sun 323 Dick and the Other Guy (Part 2).mkv	1275.925000000000	-22.9	8.5	-4.01	-33.65
+431	0	3rd Rock from the Sun/4/3rd Rock from the Sun 403 Feeling' Albright.mkv	1272.362000000000	-23.21	8.8	-2.67	-34.01
+433	0	3rd Rock from the Sun/4/3rd Rock from the Sun 405 What's Love Got to Do, Got to Do with Dick.mkv	1272.533000000000	-24	8.9	-6.33	-34.76
+441	0	3rd Rock from the Sun/4/3rd Rock from the Sun 413 Sally Forth.mkv	1272.853000000000	-29.52	9.1	-12	-40.46
+442	0	3rd Rock from the Sun/4/3rd Rock from the Sun 414 Paranoid Dick.mkv	1272.853000000000	-29.79	7.5	-11.73	-40.39
+444	0	3rd Rock from the Sun/4/3rd Rock from the Sun 416 Superstitious Dick.mkv	1274.133000000000	-29.17	5.7	-10.39	-39.49
+450	0	3rd Rock from the Sun/4/3rd Rock from the Sun 422 Near Dick Experience.mkv	1272.853000000000	-23	7.2	-5.17	-33.61
+452	0	3rd Rock from the Sun/4/3rd Rock from the Sun 424 Dick's Big Giant Headache (Part 2).mkv	1274.133000000000	-23.67	7.4	-7.64	-34.2
+458	0	3rd Rock from the Sun/5/3rd Rock from the Sun 506 Dick, Who's Coming to Dinner.mkv	1247.616000000000	-22.29	10.4	-3.65	-33.09
+463	0	3rd Rock from the Sun/5/3rd Rock from the Sun 511 Dick Puts the Id in Cupid.mkv	1243.370000000000	-23.07	8.8	-5.4	-33.9
+466	0	3rd Rock from the Sun/5/3rd Rock from the Sun 514 This Little Dick Goes to Market.mkv	1244.778000000000	-23.18	9	-4.15	-34.05
+470	0	3rd Rock from the Sun/5/3rd Rock from the Sun 518 Dick and Harry Fall in a Hole.mkv	1244.373000000000	-22.04	8	-3.63	-32.81
+473	0	3rd Rock from the Sun/5/3rd Rock from the Sun 521 The Big Giant Head Returns Again (Part 1).mkv	1242.965000000000	-23.3	7.2	-5.44	-33.9
+472	0	3rd Rock from the Sun/5/3rd Rock from the Sun 520 Dick Solomon's Day Off.mkv	1243.541000000000	-23.13	8.2	-7.17	-33.77
+479	0	3rd Rock from the Sun/6/3rd Rock from the Sun 605 Dick'll Take Manhattan (Part 2).mkv	1241.856000000000	-22.42	6.8	-5.57	-33.17
+484	0	3rd Rock from the Sun/6/3rd Rock from the Sun 610 There's No Business Like Dick Business.mkv	1241.536000000000	-21.99	6.9	-3.28	-32.59
+493	0	3rd Rock from the Sun/6/3rd Rock from the Sun 619 The Thing that Wouldn't Die (Part 1).mkv	1242.133000000000	-22.6	7.5	-3.97	-33.52
+494	0	3rd Rock from the Sun/6/3rd Rock from the Sun 620 The Thing That Wouldn't Die (Alternate Ending).mkv	265.962000000000	-15.54	15.1	0.14	-27.37
+498	0	Beyond Belief Fact or Fiction/1/Beyond Belief Fact or Fiction 103 The Prophecy, Couch Potato, Love Over the Counter, Imaginary Friend, Last Man on Earth.avi	2574.972400000000	-20.66	5.7	-2.59	-31.12
+499	0	Beyond Belief Fact or Fiction/1/Beyond Belief Fact or Fiction 104 E-Mail, Cup of Joe, Secret of the Family Tomb, Wheezer, The Unknown Patient.avi	2581.979400000000	-20.41	5.8	-2.89	-30.8
+502	0	Beyond Belief Fact or Fiction/2/Beyond Belief Fact or Fiction 201 The Plane, The Gun, The Portrait, The Pass, The Caller.avi	2581.979400000000	-22.54	12.3	-2.35	-33.46
+497	0	Beyond Belief Fact or Fiction/1/Beyond Belief Fact or Fiction 102 The Viewing, The Subway, Kid in the Closet, Justice is Served, The Tractor.avi	2580.978400000000	-17.6	6	-0.24	-28.05
+501	0	Beyond Belief Fact or Fiction/1/Beyond Belief Fact or Fiction 106 The Candlestick, The Diner, From the Agency, The Magic Rose Garden, The Jeep.avi	2581.979400000000	-21.12	12.7	-1.88	-32.53
+496	0	Beyond Belief Fact or Fiction/1/Beyond Belief Fact or Fiction 101 The Apparition, The Electric Chair, On the Road, Number One With a Bullet, Dream House.avi	2579.944033000000	-20.13	5.7	-1.25	-30.63
+500	0	Beyond Belief Fact or Fiction/1/Beyond Belief Fact or Fiction 105 Needle Point, Toy to the Rescue, Mystery Lock, The House on Baker Street, The Train.avi	2582.980400000000	-23.66	12.3	-5.46	-34.82
+504	0	Beyond Belief Fact or Fiction/2/Beyond Belief Fact or Fiction 203 The Wall, The Chalkboard, The Getaway, The Prescription, Summer Camp.avi	2584.982400000000	-20.36	4	-1.64	-30.49
+507	0	Beyond Belief Fact or Fiction/2/Beyond Belief Fact or Fiction 206 Bright Lights, Magic Mightyman, The Student, Scribbles, Count Mystery.avi	2581.979400000000	-20.24	6.6	-1.7	-30.61
+505	0	Beyond Belief Fact or Fiction/2/Beyond Belief Fact or Fiction 204 The Wrestler, The Escape, Dead Friday, Ghost Visitor, The Lady in a Black Dress.avi	2581.745833000000	-20.4	5.3	-2.4	-30.6
+508	0	Beyond Belief Fact or Fiction/2/Beyond Belief Fact or Fiction 207 The Mummy, The Perfect Record, Grave Sitting, Murder on the Second Floor, They Towed My Car.avi	2582.980400000000	-20.31	5.7	-2.28	-30.61
+510	0	Beyond Belief Fact or Fiction/2/Beyond Belief Fact or Fiction 209 Rock & Roll Ears, The Bucket, The Bridesmaid, Voice from the Grave, The Chess Game.avi	2581.979400000000	-22.1	12.2	-3.24	-32.98
+506	0	Beyond Belief Fact or Fiction/2/Beyond Belief Fact or Fiction 205 The Land, Titan, The Diary, Town of Remembrance, The House on Barry Avenue.avi	2581.979400000000	-21.36	7.5	-2.94	-31.81
+511	0	Beyond Belief Fact or Fiction/2/Beyond Belief Fact or Fiction 210 The Motorcycle, Blind Man's Dog, Deer Hunters, Tribal Curse, The Card Game.avi	2582.980400000000	-20.26	3.9	-2.99	-30.48
+513	0	Beyond Belief Fact or Fiction/2/Beyond Belief Fact or Fiction 212 Merry-Go-Round, Red Eyed Creature, Used Car Salesman, Surveillance Camera, Graffiti.avi	2580.978400000000	-20.6	4.9	-2.82	-30.9
+514	0	Beyond Belief Fact or Fiction/2/Beyond Belief Fact or Fiction 213 The Warning, Bus Stop, The Cure, The Guardian, The Gift.avi	2578.976400000000	-25.67	7	-5.95	-36.27
+503	0	Beyond Belief Fact or Fiction/2/Beyond Belief Fact or Fiction 202 Firestation 32, The Computer, The Girl Next Door, The Wallet, The Woods.avi	2581.779200000000	-22.67	8.4	-5.19	-33.15
+509	0	Beyond Belief Fact or Fiction/2/Beyond Belief Fact or Fiction 208 Kirby, Dust, Malibu Cop, A Joyful Noise, The Hooded Chair.avi	2581.979400000000	-20.3	6	-2.63	-30.67
+512	0	Beyond Belief Fact or Fiction/2/Beyond Belief Fact or Fiction 211 Bon Voyage, The Man in the Model T, The Scoop, Angel on Board, Buenos Dias.avi	2563.994767000000	-21.65	5.2	-2.73	-31.9
 \.
 
 
@@ -2265,7 +2998,7 @@ SELECT pg_catalog.setval('public.segments_id_seq', 25, false);
 -- Name: station_videos_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.station_videos_id_seq', 300, true);
+SELECT pg_catalog.setval('public.station_videos_id_seq', 440, true);
 
 
 --
@@ -2274,7 +3007,7 @@ SELECT pg_catalog.setval('public.station_videos_id_seq', 300, true);
 -- Name: stations_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.stations_id_seq', 3, true);
+SELECT pg_catalog.setval('public.stations_id_seq', 4, true);
 
 
 --
@@ -2301,7 +3034,7 @@ SELECT pg_catalog.setval('public.title_metadata_id_seq', 15, true);
 -- Name: titles_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.titles_id_seq', 2, true);
+SELECT pg_catalog.setval('public.titles_id_seq', 3, true);
 
 
 --
@@ -2310,7 +3043,7 @@ SELECT pg_catalog.setval('public.titles_id_seq', 2, true);
 -- Name: video_metadata_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.video_metadata_id_seq', 926, true);
+SELECT pg_catalog.setval('public.video_metadata_id_seq', 1377, true);
 
 
 --
@@ -2328,7 +3061,7 @@ SELECT pg_catalog.setval('public.video_tags_id_seq', 53, true);
 -- Name: videos_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.videos_id_seq', 373, true);
+SELECT pg_catalog.setval('public.videos_id_seq', 514, true);
 
 
 --
@@ -2594,11 +3327,11 @@ ALTER TABLE ONLY public.videos
     ADD CONSTRAINT videos_title_id_fkey FOREIGN KEY (title_id) REFERENCES public.titles(id) ON DELETE CASCADE;
 
 
--- Completed on 2025-10-05 16:32:38
+-- Completed on 2025-10-07 16:28:23
 
 --
 -- PostgreSQL database dump complete
 --
 
-\unrestrict ui8qXSEb81rpXiAuBveVujNfTuKUI5oTvoYTWlLocclCabT67iK4sL7oHfCAumA
+\unrestrict fJ3LYnu3uQPJlsWMx24MG7S3PbIs52gzna5vyhyvFPzt0dpg700xGTFIBvKCzJF
 
