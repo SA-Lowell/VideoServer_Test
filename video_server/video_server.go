@@ -159,11 +159,11 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 			return nil, nil, "", 0, fpsPair{}, fmt.Errorf("no remaining duration for video %d at start time %f", videoID, startTime)
 		}
 	}
-	tempDir := filepath.Join(".", "temp_encoded_segments")
-	if err := os.MkdirAll(tempDir, 0755); err != nil {
-		return nil, nil, "", 0, fpsPair{}, fmt.Errorf("failed to create temp_encoded_segments directory for video %d: %v", videoID, err)
+	tempDir, err := os.MkdirTemp("", DefaultTempPrefix)
+	if err != nil {
+		return nil, nil, "", 0, fpsPair{}, fmt.Errorf("failed to create temp dir for video %d: %v", videoID, err)
 	}
-	defer os.RemoveAll(tempDir) // Clean up the directory when done
+	defer os.RemoveAll(tempDir)
 	if err := os.MkdirAll(HlsDir, 0755); err != nil {
 		return nil, nil, "", 0, fpsPair{}, fmt.Errorf("failed to create webrtc_segments directory: %v", err)
 	}
@@ -198,7 +198,9 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 		channels = 2 // Fallback
 	}
 
-	// Initial attempt: Encode audio and video separately with sync flags
+	// Initial attempt: Encode audio and video separately
+	var cmdAudio *exec.Cmd
+	var outputAudio []byte
 	argsAudio := []string{
 		"-y",
 		"-ss", fmt.Sprintf("%.3f", startTime),
@@ -240,14 +242,17 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 	} else {
 		log.Printf("Station %s: No loudnorm measurements for video %d, skipping normalization", st.name, videoID)
 	}
-	cmdAudio := exec.Command("ffmpeg", argsAudio...)
-	outputAudio, err := cmdAudio.CombinedOutput()
+	cmdAudio = exec.Command("ffmpeg", argsAudio...)
+	outputAudio, err = cmdAudio.CombinedOutput()
 	if err != nil {
 		log.Printf("Station %s: ffmpeg audio command failed: %v\nOutput: %s", st.name, err, string(outputAudio))
 	} else {
 		log.Printf("Station %s: ffmpeg audio succeeded for %s", st.name, opusPath)
 	}
 
+	// Initial video encoding
+	var cmdVideo *exec.Cmd
+	var outputVideo []byte
 	argsVideo := []string{
 		"-y",
 		"-ss", fmt.Sprintf("%.3f", startTime),
@@ -268,8 +273,8 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 		"-vsync", "1", // Enforce constant frame rate to prevent drift
 		fullSegPath,
 	}
-	cmdVideo := exec.Command("ffmpeg", argsVideo...)
-	outputVideo, err := cmdVideo.CombinedOutput()
+	cmdVideo = exec.Command("ffmpeg", argsVideo...)
+	outputVideo, err = cmdVideo.CombinedOutput()
 	if err != nil {
 		log.Printf("Station %s: ffmpeg video command failed: %v\nOutput: %s", st.name, err, string(outputVideo))
 	} else {
@@ -280,6 +285,8 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 	if err != nil {
 		log.Printf("Station %s: Initial encoding failed for video %d at %.3fs, performing full re-encode", st.name, videoID, startTime)
 		// Full re-encode to temp MP4 with sync flags
+		var cmdReencode *exec.Cmd
+		var outputReencode []byte
 		tempMP4Args := []string{
 			"-y",
 			"-ss", fmt.Sprintf("%.3f", startTime),
@@ -305,8 +312,8 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 			"-f", "mp4",
 			tempMP4Path,
 		}
-		cmdReencode := exec.Command("ffmpeg", tempMP4Args...)
-		outputReencode, err := cmdReencode.CombinedOutput()
+		cmdReencode = exec.Command("ffmpeg", tempMP4Args...)
+		outputReencode, err = cmdReencode.CombinedOutput()
 		if err != nil {
 			log.Printf("Station %s: Full re-encode failed for video %d at %.3fs: %v\nOutput: %s", st.name, videoID, startTime, err, string(outputReencode))
 			return nil, nil, "", 0, fpsPair{}, fmt.Errorf("full re-encode failed for video %d at %.3fs: %v", videoID, startTime, err)
@@ -314,7 +321,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 		log.Printf("Station %s: Full re-encode succeeded, creating segments from %s", st.name, tempMP4Path)
 
 		// Extract video (h264)
-		argsVideo = []string{
+		cmdVideo = exec.Command("ffmpeg", []string{
 			"-y",
 			"-i", tempMP4Path,
 			"-c:v", "copy",
@@ -322,8 +329,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 			"-bsf:v", "h264_mp4toannexb",
 			"-f", "h264",
 			fullSegPath,
-		}
-		cmdVideo = exec.Command("ffmpeg", argsVideo...)
+		}...)
 		outputVideo, err = cmdVideo.CombinedOutput()
 		if err != nil {
 			log.Printf("Station %s: Extracting h264 failed for %s: %v\nOutput: %s", st.name, fullSegPath, err, string(outputVideo))
@@ -333,15 +339,14 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 		segments = append(segments, fullSegPath)
 
 		// Extract audio (opus)
-		argsAudio = []string{
+		cmdAudio = exec.Command("ffmpeg", []string{
 			"-y",
 			"-i", tempMP4Path,
 			"-c:a", "copy",
 			"-vn",
 			"-f", "opus",
 			opusPath,
-		}
-		cmdAudio = exec.Command("ffmpeg", argsAudio...)
+		}...)
 		outputAudio, err = cmdAudio.CombinedOutput()
 		if err != nil {
 			log.Printf("Station %s: Extracting opus failed for %s: %v\nOutput: %s", st.name, opusPath, err, string(outputAudio))
@@ -365,7 +370,9 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 	// Get FPS
 	fpsNum := DefaultFPSNum
 	fpsDen := DefaultFPSDen
-	cmdFPS := exec.Command(
+	var cmdFPS *exec.Cmd
+	var outputFPS []byte
+	cmdFPS = exec.Command(
 		"ffprobe",
 		"-v", "error",
 		"-select_streams", "v:0",
@@ -373,7 +380,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 		"-of", "default=noprint_wrappers=1:nokey=1",
 		fullEpisodePath,
 	)
-	outputFPS, err := cmdFPS.Output() // Declare outputFPS here
+	outputFPS, err = cmdFPS.Output()
 	if err == nil {
 		rate := strings.TrimSpace(string(outputFPS))
 		if rate == "0/0" || rate == "" {
@@ -400,14 +407,16 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 	}
 
 	// Get video duration
-	cmdDur := exec.Command(
+	var cmdDur *exec.Cmd
+	var outputDur []byte
+	cmdDur = exec.Command(
 		"ffprobe",
 		"-v", "error",
 		"-show_entries", "format=duration",
 		"-of", "json",
 		fullSegPath,
 	)
-	outputDur, err := cmdDur.Output() // Declare outputDur here
+	outputDur, err = cmdDur.Output()
 	var actualDur float64
 	if err == nil {
 		var result struct {
@@ -460,14 +469,16 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 	}
 
 	// Check audio duration (after re-encode if applied)
-	cmdAudioDur := exec.Command(
+	var cmdAudioDur *exec.Cmd
+	var outputAudioDur []byte
+	cmdAudioDur = exec.Command(
 		"ffprobe",
 		"-v", "error",
 		"-show_entries", "format=duration",
 		"-of", "json",
 		opusPath,
 	)
-	outputAudioDur, err := cmdAudioDur.Output()
+	outputAudioDur, err = cmdAudioDur.Output()
 	var audioDur float64
 	if err == nil {
 		var result struct {
@@ -527,7 +538,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 			}
 			log.Printf("Station %s: Applying loudnorm filter to re-encoded audio for video %d: %s", st.name, videoID, loudnormFilter)
 		}
-		cmdAudio := exec.Command("ffmpeg", argsAudio...)
+		cmdAudio = exec.Command("ffmpeg", argsAudio...)
 		outputAudio, err = cmdAudio.CombinedOutput()
 		if err != nil {
 			log.Printf("Station %s: ffmpeg audio re-encode failed: %v\nOutput: %s", st.name, err, string(outputAudio))
@@ -568,6 +579,8 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 	if !hasIDR {
 		log.Printf("Station %s: No IDR frame in segment %s, attempting repair", st.name, fullSegPath)
 		repairedSegPath := filepath.Join(tempDir, baseName+"_repaired.h264")
+		var cmdRepair *exec.Cmd
+		var outputRepair []byte
 		args := []string{
 			"-y",
 			"-i", fullSegPath,
@@ -584,8 +597,8 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 			"-f", "h264",
 			repairedSegPath,
 		}
-		cmdRepair := exec.Command("ffmpeg", args...)
-		outputRepair, err := cmdRepair.CombinedOutput()
+		cmdRepair = exec.Command("ffmpeg", args...)
+		outputRepair, err = cmdRepair.CombinedOutput()
 		if err != nil {
 			log.Printf("Station %s: Failed to repair segment %s: %v\nOutput: %s", st.name, fullSegPath, err, string(outputRepair))
 		} else {
