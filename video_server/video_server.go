@@ -159,11 +159,11 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 			return nil, nil, "", 0, fpsPair{}, fmt.Errorf("no remaining duration for video %d at start time %f", videoID, startTime)
 		}
 	}
-	tempDir, err := os.MkdirTemp("", DefaultTempPrefix)
-	if err != nil {
-		return nil, nil, "", 0, fpsPair{}, fmt.Errorf("failed to create temp dir for video %d: %v", videoID, err)
+	tempDir := filepath.Join(".", "temp_encoded_segments")
+	if err := os.MkdirAll(tempDir, 0755); err != nil {
+		return nil, nil, "", 0, fpsPair{}, fmt.Errorf("failed to create temp_encoded_segments directory for video %d: %v", videoID, err)
 	}
-	defer os.RemoveAll(tempDir)
+	//defer os.RemoveAll(tempDir) // Clean up the directory when done
 	if err := os.MkdirAll(HlsDir, 0755); err != nil {
 		return nil, nil, "", 0, fpsPair{}, fmt.Errorf("failed to create webrtc_segments directory: %v", err)
 	}
@@ -287,6 +287,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 		// Full re-encode to temp MP4 with sync flags
 		var cmdReencode *exec.Cmd
 		var outputReencode []byte
+		// Full re-encode to temp MP4 with sync flags
 		tempMP4Args := []string{
 			"-y",
 			"-ss", fmt.Sprintf("%.3f", startTime),
@@ -301,6 +302,8 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 			"-force_key_frames", "expr:gte(t,n_forced*2)",
 			"-sc_threshold", "0",
 			"-g", "60",
+			"-bf", "0", // Disable B-frames for WebRTC compatibility
+			"-keyint_min", "1", // Frequent key frames to avoid black screens
 			"-r", "30", // Force constant 30 FPS for compatibility
 			"-vsync", "1", // Enforce constant frame rate
 			"-c:a", "libopus",
