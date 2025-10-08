@@ -167,7 +167,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
 	if err := os.MkdirAll(tempDir, 0755); err != nil {
 		return nil, nil, "", 0, fpsPair{}, fmt.Errorf("failed to create temp_encoded_segments directory for video %d: %v", videoID, err)
 	}
-	defer os.RemoveAll(tempDir) // Clean up the directory when done
+	//defer os.RemoveAll(tempDir) // Clean up the directory when done
 	if err := os.MkdirAll(HlsDir, 0755); err != nil {
 		return nil, nil, "", 0, fpsPair{}, fmt.Errorf("failed to create webrtc_segments directory: %v", err)
 	}
@@ -1156,7 +1156,7 @@ func manageProcessing(st *Station, db *sql.DB) {
 						adID := availableAds[idx]
 						adDur := getVideoDur(adID, db)
 						if adDur <= 0 {
-							errorLogger.Printf("Station %s (adsEnabled: %v): Invalid duration for video %d, advancing to next video", st.name, st.adsEnabled, st.currentVideo)
+							errorLogger.Printf("Station %s (adsEnabled: %v): Invalid duration for ad %d, skipping", st.name, st.adsEnabled, adID)
 							availableAds = append(availableAds[:idx], availableAds[idx+1:]...)
 							continue
 						}
