@@ -1569,11 +1569,11 @@ func sender(st *Station, db *sql.DB) {
 							st.mu.Unlock()
 							return
 						}
-						log.Printf("Station %s (adsEnabled: %v): Sent audio packet %d, timestamp=%d, samples=%d", st.name, st.adsEnabled, packetIdx, audioTimestamp, samples)
+						//log.Printf("Station %s (adsEnabled: %v): Sent audio packet %d, timestamp=%d, samples=%d", st.name, st.adsEnabled, packetIdx, audioTimestamp, samples)
 						audioTimestamp += uint32(samples)
 						packetIdx++
 					}
-					log.Printf("Station %s (adsEnabled: %v): Sent %d audio packets for %s, final timestamp: %d samples", st.name, st.adsEnabled, len(packets), audioPath, audioTimestamp)
+					//log.Printf("Station %s (adsEnabled: %v): Sent %d audio packets for %s, final timestamp: %d samples", st.name, st.adsEnabled, len(packets), audioPath, audioTimestamp)
 					st.mu.Lock()
 					st.currentAudioSamples = audioTimestamp
 					st.mu.Unlock()
@@ -1694,11 +1694,11 @@ func sender(st *Station, db *sql.DB) {
 						st.mu.Unlock()
 						return
 					}
-					log.Printf("Station %s (adsEnabled: %v): Sent video frame %d, timestamp=%d, duration=%v", st.name, st.adsEnabled, frameIdx, videoTimestamp, frameInterval)
+					//log.Printf("Station %s (adsEnabled: %v): Sent video frame %d, timestamp=%d, duration=%v", st.name, st.adsEnabled, frameIdx, videoTimestamp, frameInterval)
 					videoTimestamp += uint32(frameIntervalSeconds * float64(videoClockRate))
 					frameIdx++
 				}
-				log.Printf("Station %s (adsEnabled: %v): Sent %d video frames for %s, final timestamp: %d", st.name, st.adsEnabled, actualFrames, segPath, videoTimestamp)
+				//log.Printf("Station %s (adsEnabled: %v): Sent %d video frames for %s, final timestamp: %d", st.name, st.adsEnabled, actualFrames, segPath, videoTimestamp)
 				st.mu.Lock()
 				st.currentVideoRTPTS = videoTimestamp
 				st.mu.Unlock()
