@@ -27,6 +27,8 @@ import (
 	"github.com/pion/webrtc/v3/pkg/media/oggreader"
 )
 
+var errorLogger *log.Logger
+
 const (
 	HlsDir              = "./webrtc_segments"
 	Port                = ":8081"
@@ -998,7 +1000,7 @@ func manageProcessing(st *Station, db *sql.DB) {
 			if remainingDur < BufferThreshold {
 				videoDur := getVideoDur(st.currentVideo, db)
 				if videoDur <= 0 {
-					log.Printf("Station %s (adsEnabled: %v): Invalid duration for video %d, advancing to next video", st.name, st.adsEnabled, st.currentVideo)
+					errorLogger.Printf("Station %s (adsEnabled: %v): Invalid duration for video %d, advancing to next video", st.name, st.adsEnabled, st.currentVideo)
 					st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
 					st.currentVideo = st.videoQueue[st.currentIndex]
 					st.currentOffset = 0.0
@@ -1010,7 +1012,7 @@ func manageProcessing(st *Station, db *sql.DB) {
 				}
 				nextStart := st.currentOffset + sumNonAd
 				if nextStart >= videoDur {
-					log.Printf("Station %s (adsEnabled: %v): Reached end of video %d (%.3fs >= %.3fs), advancing", st.name, st.adsEnabled, st.currentVideo, nextStart, videoDur)
+					errorLogger.Printf("Station %s (adsEnabled: %v): Reached end of video %d (%.3fs >= %.3fs), advancing", st.name, st.adsEnabled, st.currentVideo, nextStart, videoDur)
 					st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
 					st.currentVideo = st.videoQueue[st.currentIndex]
 					st.currentOffset = 0.0
@@ -1048,14 +1050,14 @@ func manageProcessing(st *Station, db *sql.DB) {
 					for retryCount < maxRetries {
 						segments, spsPPS, fmtpLine, actualDur, fps, err := processVideo(st, st.currentVideo, db, nextStart, chunkDur)
 						if err != nil {
-							log.Printf("Station %s (adsEnabled: %v): Failed to process episode chunk for video %d at %.3fs (retry %d/%d): %v", st.name, st.adsEnabled, st.currentVideo, nextStart, retryCount+1, maxRetries, err)
+							errorLogger.Printf("Station %s (adsEnabled: %v): Failed to process episode chunk for video %d at %.3fs (retry %d/%d): %v", st.name, st.adsEnabled, st.currentVideo, nextStart, retryCount+1, maxRetries, err)
 							if segments != nil && len(segments) > 0 {
 								os.Remove(segments[0])
 								os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
 							}
 							retryCount++
 							if retryCount == maxRetries {
-								log.Printf("Station %s (adsEnabled: %v): Max retries failed for video %d at %.3fs, skipping to next video to avoid stall", st.name, st.adsEnabled, st.currentVideo, nextStart)
+								errorLogger.Printf("Station %s (adsEnabled: %v): Max retries failed for video %d at %.3fs, skipping to next video to avoid stall", st.name, st.adsEnabled, st.currentVideo, nextStart)
 								st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
 								st.currentVideo = st.videoQueue[st.currentIndex]
 								st.currentOffset = 0.0
@@ -1088,7 +1090,7 @@ func manageProcessing(st *Station, db *sql.DB) {
 				}
 				// Skip ad insertion for no-ads stations
 				if !st.adsEnabled && nextBreak == chunkEnd && len(breaks) > 0 {
-					log.Printf("Station %s (adsEnabled: %v): Skipping ad break at %.3fs for video %d", st.name, st.adsEnabled, nextBreak, st.currentVideo)
+					errorLogger.Printf("Station %s (adsEnabled: %v): Skipping ad break at %.3fs for video %d", st.name, st.adsEnabled, nextBreak, st.currentVideo)
 					// Pre-queue next episode segment
 					nextStart = st.currentOffset + sumNonAd
 					if nextStart < videoDur {
@@ -1138,7 +1140,7 @@ func manageProcessing(st *Station, db *sql.DB) {
 				if st.adsEnabled && nextBreak == chunkEnd && len(breaks) > 0 {
 					log.Printf("Station %s (adsEnabled: %v): Inserting ad break at %.3fs for video %d", st.name, st.adsEnabled, nextBreak, st.currentVideo)
 					if len(adIDs) == 0 {
-						log.Printf("Station %s: No adIDs available, skipping ad break", st.name)
+						errorLogger.Printf("Station %s: No adIDs available, skipping ad break", st.name)
 						st.mu.Unlock()
 						continue
 					}
@@ -1154,7 +1156,7 @@ func manageProcessing(st *Station, db *sql.DB) {
 						adID := availableAds[idx]
 						adDur := getVideoDur(adID, db)
 						if adDur <= 0 {
-							log.Printf("Station %s (adsEnabled: %v): Invalid duration for ad %d, skipping and removing from pool", st.name, st.adsEnabled, adID)
+							errorLogger.Printf("Station %s (adsEnabled: %v): Invalid duration for video %d, advancing to next video", st.name, st.adsEnabled, st.currentVideo)
 							availableAds = append(availableAds[:idx], availableAds[idx+1:]...)
 							continue
 						}
@@ -1162,14 +1164,14 @@ func manageProcessing(st *Station, db *sql.DB) {
 						for retryCount < maxRetries {
 							segments, spsPPS, fmtpLine, actualDur, fps, err := processVideo(st, adID, db, 0, adDur)
 							if err != nil {
-								log.Printf("Station %s (adsEnabled: %v): Failed to process ad %d (retry %d/%d): %v", st.name, st.adsEnabled, adID, retryCount+1, maxRetries, err)
+								errorLogger.Printf("Station %s (adsEnabled: %v): Failed to process ad %d (retry %d/%d): %v", st.name, st.adsEnabled, adID, retryCount+1, maxRetries, err)
 								if segments != nil && len(segments) > 0 {
 									os.Remove(segments[0])
 									os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
 								}
 								retryCount++
 								if retryCount == maxRetries {
-									log.Printf("Station %s: All %d retries failed for ad %d, skipping", st.name, maxRetries, adID)
+									errorLogger.Printf("Station %s: All %d retries failed for ad %d, skipping", st.name, maxRetries, adID)
 									break
 								}
 								continue
@@ -1956,7 +1958,7 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
 					adID := adIDs[rand.Intn(len(adIDs))]
 					adDur := getVideoDur(adID, db)
 					if adDur <= 0 {
-						log.Printf("Station %s: Invalid duration for ad %d, skipping", st.name, adID)
+						errorLogger.Printf("Station %s: Invalid duration for ad %d, skipping", st.name, adID)
 						continue
 					}
 					segments, spsPPS, fmtpLine, actualDur, fps, err := processVideo(st, adID, db, 0, adDur)
@@ -2584,6 +2586,12 @@ type Station struct {
 }
 
 func main() {
+	errorLogFile, err := os.OpenFile("error.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Fatal("Failed to open error.log: ", err)
+	}
+	defer errorLogFile.Close()
+	errorLogger = log.New(errorLogFile, "", log.LstdFlags)
 	runtime.GOMAXPROCS(runtime.NumCPU()) // Optimize concurrency
 	rand.Seed(time.Now().UnixNano())
 	if err := os.MkdirAll(HlsDir, 0755); err != nil {
