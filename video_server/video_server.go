@@ -30,20 +30,20 @@ import (
 var errorLogger *log.Logger
 
 const (
-    HlsDir             = "./webrtc_segments"
-    Port               = ":8081"
-    ClockRate          = 90000
-    AudioFrameMs       = 20
-    DefaultFPSNum      = 30000
-    DefaultFPSDen      = 1001
-    DefaultDur         = 0.0
-    DefaultStation     = "default"
-    AdInsertPath       = "./ad_insert.exe"
+    HlsDir              = "./webrtc_segments"
+    Port                = ":8081"
+    ClockRate           = 90000
+    AudioFrameMs        = 20
+    DefaultFPSNum       = 30000
+    DefaultFPSDen       = 1001
+    DefaultDur          = 0.0
+    DefaultStation      = "default"
+    AdInsertPath        = "./ad_insert.exe"
     DefaultVideoBaseDir = "Z:/Videos"
-    DefaultTempPrefix  = "ad_insert_"
-    ChunkDuration      = 30.0 // Process 30-second chunks
-    BufferThreshold    = 60.0 // Start processing more chunks when buffer < 60s
-    maxAdRetries       = 5    // Higher retry limit for ads
+    DefaultTempPrefix   = "ad_insert_"
+    ChunkDuration       = 30.0 // Process 30-second chunks
+    BufferThreshold     = 120.0 // Start processing more chunks when buffer < 120s
+    maxAdRetries        = 5     // Higher retry limit for ads
 )
 
 const dbConnString = "user=postgres password=aaaaaaaaaa dbname=webrtc_tv sslmode=disable host=localhost port=5432"
@@ -74,22 +74,22 @@ type LoudnormOutput struct {
 }
 
 type Station struct {
-    name              string
-    segmentList       []bufferedChunk
-    spsPPS            [][]byte
-    fmtpLine          string
-    trackVideo        *webrtc.TrackLocalStaticSample
-    trackAudio        *webrtc.TrackLocalStaticSample
-    videoQueue        []int64
-    currentVideo      int64
-    currentIndex      int
-    currentOffset     float64
-    viewers           int
-    processing        bool
-    stopCh            chan struct{}
-    adsEnabled        bool
-    mu                sync.Mutex
-    currentVideoRTPTS uint32
+    name                string
+    segmentList         []bufferedChunk
+    spsPPS              [][]byte
+    fmtpLine            string
+    trackVideo          *webrtc.TrackLocalStaticSample
+    trackAudio          *webrtc.TrackLocalStaticSample
+    videoQueue          []int64
+    currentVideo        int64
+    currentIndex        int
+    currentOffset       float64
+    viewers             int
+    processing          bool
+    stopCh              chan struct{}
+    adsEnabled          bool
+    mu                  sync.Mutex
+    currentVideoRTPTS   uint32
     currentAudioSamples uint32
 }
 
@@ -227,7 +227,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         var probeResult struct {
             Streams []struct {
                 SampleRate string `json:"sample_rate"`
-                Channels   int    `json:"channels"`
+                Channels int `json:"channels"`
             } `json:"streams"`
         }
         if err := json.Unmarshal(outputProbe, &probeResult); err != nil {
@@ -319,6 +319,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-avoid_negative_ts", "make_zero",
             "-fflags", "+genpts",
             "-async", "1",
+            "-max_delay", "0", // Added to minimize sync issues
             "-threads", "0",
             "-f", "opus",
             opusPath,
@@ -358,6 +359,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
                 "-avoid_negative_ts", "make_zero",
                 "-fflags", "+genpts",
                 "-async", "1",
+                "-max_delay", "0", // Added to minimize sync issues
                 "-threads", "0",
                 "-f", "opus",
                 opusPath,
@@ -396,6 +398,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-vbr", "on",
             "-avoid_negative_ts", "make_zero",
             "-fflags", "+genpts",
+            "-max_delay", "0", // Added for silent audio
             "-threads", "0",
             "-f", "opus",
             opusPath,
@@ -445,7 +448,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         "-i", fullEpisodePath,
         "-t", fmt.Sprintf("%.3f", adjustedChunkDur),
         "-c:v", "libx264",
-        "-preset", "veryfast",
+        "-preset", "ultrafast", // Changed to ultrafast
         "-crf", "23",
         "-bf", "0",
         "-maxrate", "20M",
@@ -495,7 +498,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-i", fullEpisodePath,
             "-t", fmt.Sprintf("%.3f", adjustedChunkDur),
             "-c:v", "libx264",
-            "-preset", "veryfast",
+            "-preset", "ultrafast", // Changed to ultrafast
             "-crf", "23",
             "-maxrate", "20M",
             "-bufsize", "40M",
@@ -543,7 +546,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-y",
             "-i", tempMP4Path,
             "-c:v", "libx264",
-            "-preset", "veryfast",
+            "-preset", "ultrafast", // Changed to ultrafast
             "-crf", "23",
             "-maxrate", "20M",
             "-bufsize", "40M",
@@ -588,6 +591,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
                 "-ar", "48000",
                 "-ac", "2",
                 "-async", "1",
+                "-max_delay", "0", // Added to minimize sync issues
                 "-threads", "0",
                 "-vn",
                 "-f", "opus",
@@ -618,6 +622,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
                     "-ar", "48000",
                     "-ac", "2",
                     "-async", "1",
+                    "-max_delay", "0", // Added to minimize sync issues
                     "-threads", "0",
                     "-vn",
                     "-f", "opus",
@@ -780,6 +785,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-avoid_negative_ts", "make_zero",
             "-fflags", "+genpts",
             "-async", "1",
+            "-max_delay", "0", // Added to minimize sync issues
             "-threads", "0",
             "-f", "opus",
             opusPath,
@@ -812,6 +818,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
                 "-vbr", "on",
                 "-avoid_negative_ts", "make_zero",
                 "-fflags", "+genpts",
+                "-max_delay", "0", // Added to minimize sync issues
                 "-threads", "0",
                 "-f", "opus",
                 opusPath,
@@ -840,6 +847,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
                     "-avoid_negative_ts", "make_zero",
                     "-fflags", "+genpts",
                     "-async", "1",
+                    "-max_delay", "0", // Added to minimize sync issues
                     "-threads", "0",
                     "-f", "opus",
                     opusPath,
@@ -897,7 +905,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-y",
             "-i", fullSegPath,
             "-c:v", "libx264",
-            "-preset", "veryfast",
+            "-preset", "ultrafast", // Changed to ultrafast
             "-crf", "23",
             "-bf", "0",
             "-maxrate", "20M",
@@ -1176,9 +1184,39 @@ func manageProcessing(st *Station, db *sql.DB) {
         default:
             st.mu.Lock()
             if st.viewers == 0 {
+                log.Printf("Station %s (adsEnabled: %v): No viewers, waiting", st.name, st.adsEnabled)
                 st.mu.Unlock()
                 time.Sleep(time.Second)
                 continue
+            }
+            // Resource monitoring
+            var memStats runtime.MemStats
+            runtime.ReadMemStats(&memStats)
+            if memStats.Alloc > 4*1024*1024*1024 { // 4GB
+                errorLogger.Printf("Station %s: High memory usage (%d bytes), pausing processing", st.name, memStats.Alloc)
+                st.mu.Unlock()
+                time.Sleep(5 * time.Second)
+                continue
+            }
+            // Remove stale chunks
+            for i := 0; i < len(st.segmentList); i++ {
+                chunk := st.segmentList[i]
+                if !chunk.isAd && chunk.videoID != st.currentVideo {
+                    found := false
+                    for _, vid := range st.videoQueue {
+                        if vid == chunk.videoID {
+                            found = true
+                            break
+                        }
+                    }
+                    if !found {
+                        log.Printf("Station %s (adsEnabled: %v): Removing stale chunk %s from video %d", st.name, st.adsEnabled, chunk.segPath, chunk.videoID)
+                        os.Remove(chunk.segPath)
+                        os.Remove(strings.Replace(chunk.segPath, ".h264", ".opus", 1))
+                        st.segmentList = append(st.segmentList[:i], st.segmentList[i+1:]...)
+                        i--
+                    }
+                }
             }
             remainingDur := 0.0
             sumNonAd := 0.0
@@ -1188,32 +1226,32 @@ func manageProcessing(st *Station, db *sql.DB) {
                     sumNonAd += chunk.dur
                 }
             }
-            log.Printf("Station %s (adsEnabled: %v): Remaining buffer %.3fs, non-ad (current video only) %.3fs, current video %d, offset %.3fs", st.name, st.adsEnabled, remainingDur, sumNonAd, st.currentVideo, st.currentOffset)
-            if remainingDur < BufferThreshold {
+            log.Printf("Station %s (adsEnabled: %v): Remaining buffer %.3fs, non-ad %.3fs, current video %d, offset %.3fs", st.name, st.adsEnabled, remainingDur, sumNonAd, st.currentVideo, st.currentOffset)
+            if remainingDur < BufferThreshold || len(st.segmentList) < 4 { // Changed to 4 chunks
                 videoDur := getVideoDur(st.currentVideo, db)
                 if videoDur <= 0 {
-                    errorLogger.Printf("Station %s (adsEnabled: %v): Invalid duration for video %d, advancing to next video", st.name, st.adsEnabled, st.currentVideo)
+                    errorLogger.Printf("Station %s (adsEnabled: %v): Invalid duration for video %d, advancing", st.name, st.adsEnabled, st.currentVideo)
                     st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
                     st.currentVideo = st.videoQueue[st.currentIndex]
                     st.currentOffset = 0.0
                     st.spsPPS = nil
                     st.fmtpLine = ""
-                    st.currentVideoRTPTS = 0
-                    st.currentAudioSamples = 0
+                    st.currentVideoRTPTS = st.currentVideoRTPTS // Maintain continuity
+                    st.currentAudioSamples = st.currentAudioSamples
                     log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s", st.name, st.adsEnabled, st.currentVideo)
                     st.mu.Unlock()
                     continue
                 }
                 nextStart := st.currentOffset + sumNonAd
                 if nextStart >= videoDur || math.Abs(nextStart-videoDur) < 0.001 {
-                    errorLogger.Printf("Station %s (adsEnabled: %v): Reached end of video %d (%.3fs >= %.3fs), advancing", st.name, st.adsEnabled, st.currentVideo, nextStart, videoDur)
+                    log.Printf("Station %s (adsEnabled: %v): Reached end of video %d (%.3fs >= %.3fs), advancing", st.name, st.adsEnabled, st.currentVideo, nextStart, videoDur)
                     st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
                     st.currentVideo = st.videoQueue[st.currentIndex]
                     st.currentOffset = 0.0
                     st.spsPPS = nil
                     st.fmtpLine = ""
-                    st.currentVideoRTPTS = 0
-                    st.currentAudioSamples = 0
+                    st.currentVideoRTPTS = st.currentVideoRTPTS // Maintain continuity
+                    st.currentAudioSamples = st.currentAudioSamples
                     log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s", st.name, st.adsEnabled, st.currentVideo)
                     st.mu.Unlock()
                     continue
@@ -1241,228 +1279,203 @@ func manageProcessing(st *Station, db *sql.DB) {
                     chunkEnd = nextBreak
                     chunkDur = nextBreak - nextStart
                 }
-                if chunkDur > 0 {
-                    if nextStart == 0 {
-                        log.Printf("Station %s (adsEnabled: %v): Starting new video %d at offset 0.0s", st.name, st.adsEnabled, st.currentVideo)
-                    }
-                    retryLimit := maxRetries
-                    if isFinalChunk {
-                        retryLimit = maxFinalChunkRetries
-                        log.Printf("Station %s (adsEnabled: %v): Processing final chunk for video %d at %.3fs, duration %.3fs", st.name, st.adsEnabled, st.currentVideo, nextStart, chunkDur)
-                    }
-                    var retryCount int
-                    for retryCount < retryLimit {
-                        segments, spsPPS, fmtpLine, actualDur, fps, err := processVideo(st, st.currentVideo, db, nextStart, chunkDur)
-                        if err != nil {
-                            errorLogger.Printf("Station %s (adsEnabled: %v): Failed to process %s chunk for video %d at %.3fs (retry %d/%d): %v", st.name, st.adsEnabled, map[bool]string{true: "final", false: "episode"}[isFinalChunk], st.currentVideo, nextStart, retryCount+1, retryLimit, err)
-                            if segments != nil && len(segments) > 0 {
-                                os.Remove(segments[0])
-                                os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
-                            }
-                            retryCount++
-                            if retryCount == retryLimit && !isFinalChunk {
-                                errorLogger.Printf("Station %s (adsEnabled: %v): Max retries failed for chunk at %.3fs, advancing video", st.name, st.adsEnabled, nextStart)
-                                st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
-                                st.currentVideo = st.videoQueue[st.currentIndex]
-                                st.currentOffset = 0.0
-                                st.spsPPS = nil
-                                st.fmtpLine = ""
-                                st.currentVideoRTPTS = 0
-                                st.currentAudioSamples = 0
-                                log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s", st.name, st.adsEnabled, st.currentVideo)
-                                break
-                            }
-                            continue
+                if chunkDur <= 0 {
+                    errorLogger.Printf("Station %s (adsEnabled: %v): Invalid chunk duration (%.3fs) at %.3fs for video %d, advancing", st.name, st.adsEnabled, chunkDur, nextStart, st.currentVideo)
+                    st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
+                    st.currentVideo = st.videoQueue[st.currentIndex]
+                    st.currentOffset = 0.0
+                    st.spsPPS = nil
+                    st.fmtpLine = ""
+                    st.currentVideoRTPTS = st.currentVideoRTPTS
+                    st.currentAudioSamples = st.currentAudioSamples
+                    log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s", st.name, st.adsEnabled, st.currentVideo)
+                    st.mu.Unlock()
+                    continue
+                }
+                retryLimit := maxRetries
+                if isFinalChunk {
+                    retryLimit = maxFinalChunkRetries
+                    log.Printf("Station %s (adsEnabled: %v): Processing final chunk for video %d at %.3fs, duration %.3fs", st.name, st.adsEnabled, st.currentVideo, nextStart, chunkDur)
+                }
+                var segments []string
+                var spsPPS [][]byte
+                var fmtpLine string
+                var actualDur float64
+                var fps fpsPair
+                var retryCount int // Explicit declaration
+                for retryCount = 0; retryCount < retryLimit; retryCount++ {
+                    segments, spsPPS, fmtpLine, actualDur, fps, err = processVideo(st, st.currentVideo, db, nextStart, chunkDur)
+                    if err != nil {
+                        errorLogger.Printf("Station %s (adsEnabled: %v): Failed to process %s chunk for video %d at %.3fs (retry %d/%d): %v", st.name, st.adsEnabled, map[bool]string{true: "final", false: "episode"}[isFinalChunk], st.currentVideo, nextStart, retryCount+1, retryLimit, err)
+                        if segments != nil && len(segments) > 0 {
+                            os.Remove(segments[0])
+                            os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
                         }
-                        if len(st.spsPPS) == 0 {
-                            st.spsPPS = spsPPS
-                            st.fmtpLine = fmtpLine
-                        }
-                        newChunk := bufferedChunk{
-                            segPath: segments[0],
-                            dur:     actualDur,
-                            isAd:    false,
-                            videoID: st.currentVideo,
-                            fps:     fps,
-                        }
-                        st.segmentList = append(st.segmentList, newChunk)
-                        remainingDur += actualDur
-                        sumNonAd += actualDur
-                        log.Printf("Station %s (adsEnabled: %v): Queued %s chunk for video %d at %.3fs, duration %.3fs", st.name, st.adsEnabled, map[bool]string{true: "final", false: "episode"}[isFinalChunk], st.currentVideo, nextStart, actualDur)
-                        break
-                    }
-                    if retryCount == retryLimit {
+                        time.Sleep(time.Millisecond * 500)
                         continue
                     }
+                    if actualDur <= 0 {
+                        errorLogger.Printf("Station %s (adsEnabled: %v): Invalid duration (%.3fs) for chunk %s, retrying", st.name, st.adsEnabled, actualDur, segments[0])
+                        if segments != nil && len(segments) > 0 {
+                            os.Remove(segments[0])
+                            os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
+                        }
+                        continue
+                    }
+                    if len(st.spsPPS) == 0 {
+                        st.spsPPS = spsPPS
+                        st.fmtpLine = fmtpLine
+                    }
+                    newChunk := bufferedChunk{
+                        segPath: segments[0],
+                        dur: actualDur,
+                        isAd: false,
+                        videoID: st.currentVideo,
+                        fps: fps,
+                    }
+                    st.segmentList = append(st.segmentList, newChunk)
+                    remainingDur += actualDur
+                    sumNonAd += actualDur
+                    log.Printf("Station %s (adsEnabled: %v): Queued %s chunk for video %d at %.3fs, duration %.3fs", st.name, st.adsEnabled, map[bool]string{true: "final", false: "episode"}[isFinalChunk], st.currentVideo, nextStart, actualDur)
+                    break
+                }
+                if retryCount == retryLimit {
+                    errorLogger.Printf("Station %s (adsEnabled: %v): Max retries (%d) failed for chunk at %.3fs, advancing video", st.name, st.adsEnabled, retryLimit, nextStart)
+                    st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
+                    st.currentVideo = st.videoQueue[st.currentIndex]
+                    st.currentOffset = 0.0
+                    st.spsPPS = nil
+                    st.fmtpLine = ""
+                    st.currentVideoRTPTS = st.currentVideoRTPTS
+                    st.currentAudioSamples = st.currentAudioSamples
+                    log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s", st.name, st.adsEnabled, st.currentVideo)
+                    st.mu.Unlock()
+                    continue
                 }
                 if st.adsEnabled && nextBreak == chunkEnd && len(breaks) > 0 {
                     log.Printf("Station %s (adsEnabled: %v): Inserting ad break at %.3fs for video %d", st.name, st.adsEnabled, nextBreak, st.currentVideo)
                     if len(adIDs) == 0 {
                         errorLogger.Printf("Station %s (adsEnabled: %v): No adIDs available, skipping ad break", st.name, st.adsEnabled)
-                        st.mu.Unlock()
-                        continue
-                    }
-                    availableAds := make([]int64, len(adIDs))
-                    copy(availableAds, adIDs)
-                    adDurTotal := 0.0
-                    for i := 0; i < 3; i++ {
-                        if len(availableAds) == 0 {
-                            log.Printf("Station %s (adsEnabled: %v): No more available ads, stopping at %d of 3", st.name, st.adsEnabled, i)
-                            break
-                        }
-                        idx := rand.Intn(len(availableAds))
-                        adID := availableAds[idx]
-                        adDur := getVideoDur(adID, db)
-                        if adDur <= 0 {
-                            errorLogger.Printf("Station %s (adsEnabled: %v): Invalid duration for ad %d, skipping", st.name, st.adsEnabled, adID)
-                            availableAds = append(availableAds[:idx], availableAds[idx+1:]...)
-                            continue
-                        }
-                        var retryCount int
-                        for retryCount < maxAdRetries {
-                            segments, spsPPS, fmtpLine, actualDur, fps, err := processVideo(st, adID, db, 0, adDur)
-                            if err != nil {
-                                errorLogger.Printf("Station %s (adsEnabled: %v): Failed to process ad %d (retry %d/%d): %v", st.name, st.adsEnabled, adID, retryCount+1, maxAdRetries, err)
-                                if segments != nil && len(segments) > 0 {
-                                    os.Remove(segments[0])
-                                    os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
-                                }
-                                retryCount++
-                                if retryCount == maxAdRetries {
-                                    errorLogger.Printf("Station %s (adsEnabled: %v): All %d retries failed for ad %d, skipping", st.name, st.adsEnabled, maxAdRetries, adID)
-                                    break
-                                }
+                    } else {
+                        availableAds := make([]int64, len(adIDs))
+                        copy(availableAds, adIDs)
+                        adDurTotal := 0.0
+                        for i := 0; i < 3 && len(availableAds) > 0; i++ {
+                            idx := rand.Intn(len(availableAds))
+                            adID := availableAds[idx]
+                            adDur := getVideoDur(adID, db)
+                            if adDur <= 0 {
+                                errorLogger.Printf("Station %s (adsEnabled: %v): Invalid duration for ad %d, skipping", st.name, st.adsEnabled, adID)
+                                availableAds = append(availableAds[:idx], availableAds[idx+1:]...)
                                 continue
                             }
-                            if len(st.spsPPS) == 0 {
-                                st.spsPPS = spsPPS
-                                st.fmtpLine = fmtpLine
+                            var adRetryCount int
+                            for adRetryCount = 0; adRetryCount < maxAdRetries; adRetryCount++ {
+                                segments, spsPPS, fmtpLine, actualDur, fps, err = processVideo(st, adID, db, 0, adDur)
+                                if err != nil {
+                                    errorLogger.Printf("Station %s (adsEnabled: %v): Failed to process ad %d (retry %d/%d): %v", st.name, st.adsEnabled, adID, adRetryCount+1, maxAdRetries, err)
+                                    if segments != nil && len(segments) > 0 {
+                                        os.Remove(segments[0])
+                                        os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
+                                    }
+                                    time.Sleep(time.Millisecond * 500)
+                                    continue
+                                }
+                                if actualDur <= 0 {
+                                    errorLogger.Printf("Station %s (adsEnabled: %v): Invalid duration (%.3fs) for ad %d, retrying", st.name, st.adsEnabled, actualDur, adID)
+                                    if segments != nil && len(segments) > 0 {
+                                        os.Remove(segments[0])
+                                        os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
+                                    }
+                                    continue
+                                }
+                                if len(st.spsPPS) == 0 {
+                                    st.spsPPS = spsPPS
+                                    st.fmtpLine = fmtpLine
+                                }
+                                adChunk := bufferedChunk{
+                                    segPath: segments[0],
+                                    dur: actualDur,
+                                    isAd: true,
+                                    videoID: adID,
+                                    fps: fps,
+                                }
+                                st.segmentList = append(st.segmentList, adChunk)
+                                remainingDur += actualDur
+                                adDurTotal += actualDur
+                                log.Printf("Station %s (adsEnabled: %v): Queued ad %d with duration %.3fs at break %.3fs", st.name, st.adsEnabled, adID, actualDur, nextBreak)
+                                break
                             }
-                            adChunk := bufferedChunk{
-                                segPath: segments[0],
-                                dur:     actualDur,
-                                isAd:    true,
-                                videoID: adID,
-                                fps:     fps,
+                            if adRetryCount == maxAdRetries {
+                                errorLogger.Printf("Station %s (adsEnabled: %v): All %d retries failed for ad %d, skipping", st.name, st.adsEnabled, maxAdRetries, adID)
+                                availableAds = append(availableAds[:idx], availableAds[idx+1:]...)
+                                continue
                             }
-                            st.segmentList = append(st.segmentList, adChunk)
-                            remainingDur += actualDur
-                            adDurTotal += actualDur
-                            log.Printf("Station %s (adsEnabled: %v): Queued ad %d with duration %.3fs at break %.3fs", st.name, st.adsEnabled, adID, actualDur, nextBreak)
                             availableAds = append(availableAds[:idx], availableAds[idx+1:]...)
-                            break
                         }
-                    }
-                    if adDurTotal > 0 {
-                        sumNonAd = 0.0
-                        for _, c := range st.segmentList {
-                            if !c.isAd && c.videoID == st.currentVideo {
-                                sumNonAd += c.dur
+                        if adDurTotal > 0 {
+                            sumNonAd = 0.0
+                            for _, c := range st.segmentList {
+                                if !c.isAd && c.videoID == st.currentVideo {
+                                    sumNonAd += c.dur
+                                }
                             }
-                        }
-                        nextStart = st.currentOffset + sumNonAd
-                        if nextStart < videoDur {
-                            retryLimit := maxRetries
-                            if nextStart+ChunkDuration >= videoDur || math.Abs(nextStart+ChunkDuration-videoDur) < 0.001 {
-                                retryLimit = maxFinalChunkRetries
-                            }
-                            var retryCount int
-                            for retryCount < retryLimit {
-                                segments, spsPPS, fmtpLine, actualDur, fps, err := processVideo(st, st.currentVideo, db, nextStart, ChunkDuration)
-                                if err != nil {
-                                    errorLogger.Printf("Station %s (adsEnabled: %v): Failed to pre-queue %s chunk after ads for video %d at %.3fs (retry %d/%d): %v", st.name, st.adsEnabled, map[bool]string{true: "final", false: "episode"}[nextStart+ChunkDuration >= videoDur], st.currentVideo, nextStart, retryCount+1, retryLimit, err)
-                                    if segments != nil && len(segments) > 0 {
-                                        os.Remove(segments[0])
-                                        os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
+                            nextStart = st.currentOffset + sumNonAd
+                            if nextStart < videoDur {
+                                retryLimit := maxRetries
+                                isPostAdFinalChunk := nextStart+ChunkDuration >= videoDur || math.Abs(nextStart+ChunkDuration-videoDur) < 0.001
+                                if isPostAdFinalChunk {
+                                    retryLimit = maxFinalChunkRetries
+                                    log.Printf("Station %s (adsEnabled: %v): Processing final chunk after ads for video %d at %.3fs", st.name, st.adsEnabled, st.currentVideo, nextStart)
+                                }
+                                var postAdRetryCount int // Explicit declaration
+                                for postAdRetryCount = 0; postAdRetryCount < retryLimit; postAdRetryCount++ {
+                                    segments, spsPPS, fmtpLine, actualDur, fps, err = processVideo(st, st.currentVideo, db, nextStart, ChunkDuration)
+                                    if err != nil {
+                                        errorLogger.Printf("Station %s (adsEnabled: %v): Failed to pre-queue %s chunk after ads for video %d at %.3fs (retry %d/%d): %v", st.name, st.adsEnabled, map[bool]string{true: "final", false: "episode"}[isPostAdFinalChunk], st.currentVideo, nextStart, postAdRetryCount+1, retryLimit, err)
+                                        if segments != nil && len(segments) > 0 {
+                                            os.Remove(segments[0])
+                                            os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
+                                        }
+                                        time.Sleep(time.Millisecond * 500)
+                                        continue
                                     }
-                                    retryCount++
-                                    if retryCount == retryLimit && nextStart+ChunkDuration < videoDur {
-                                        errorLogger.Printf("Station %s (adsEnabled: %v): Max retries failed for chunk after ads at %.3fs, advancing video", st.name, st.adsEnabled, nextStart)
-                                        st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
-                                        st.currentVideo = st.videoQueue[st.currentIndex]
-                                        st.currentOffset = 0.0
-                                        st.spsPPS = nil
-                                        st.fmtpLine = ""
-                                        st.currentVideoRTPTS = 0
-                                        st.currentAudioSamples = 0
-                                        log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s", st.name, st.adsEnabled, st.currentVideo)
-                                        break
+                                    if actualDur <= 0 {
+                                        errorLogger.Printf("Station %s (adsEnabled: %v): Invalid duration (%.3fs) for chunk after ads at %.3fs, retrying", st.name, st.adsEnabled, actualDur, nextStart)
+                                        if segments != nil && len(segments) > 0 {
+                                            os.Remove(segments[0])
+                                            os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
+                                        }
+                                        continue
                                     }
-                                    continue
-                                }
-                                if len(st.spsPPS) == 0 {
-                                    st.spsPPS = spsPPS
-                                    st.fmtpLine = fmtpLine
-                                }
-                                newChunk := bufferedChunk{
-                                    segPath: segments[0],
-                                    dur:     actualDur,
-                                    isAd:    false,
-                                    videoID: st.currentVideo,
-                                    fps:     fps,
-                                }
-                                st.segmentList = append(st.segmentList, newChunk)
-                                remainingDur += actualDur
-                                sumNonAd += actualDur
-                                log.Printf("Station %s (adsEnabled: %v): Pre-queued %s chunk after ads for video %d at %.3fs, duration %.3fs", st.name, st.adsEnabled, map[bool]string{true: "final", false: "episode"}[nextStart+ChunkDuration >= videoDur], st.currentVideo, nextStart, actualDur)
-                                break
-                            }
-                        }
-                    } else if !st.adsEnabled && nextBreak == chunkEnd && len(breaks) > 0 {
-                        errorLogger.Printf("Station %s (adsEnabled: %v): Skipping ad break at %.3fs for video %d", st.name, st.adsEnabled, nextBreak, st.currentVideo)
-                        sumNonAd = 0.0
-                        for _, c := range st.segmentList {
-                            if !c.isAd && c.videoID == st.currentVideo {
-                                sumNonAd += c.dur
-                            }
-                        }
-                        nextStart = st.currentOffset + sumNonAd
-                        if nextStart < videoDur {
-                            retryLimit := maxRetries
-                            if nextStart+ChunkDuration >= videoDur || math.Abs(nextStart+ChunkDuration-videoDur) < 0.001 {
-                                retryLimit = maxFinalChunkRetries
-                                log.Printf("Station %s (adsEnabled: %v): Processing final chunk after skipped ad break for video %d at %.3fs", st.name, st.adsEnabled, st.currentVideo, nextStart)
-                            }
-                            var retryCount int
-                            for retryCount < retryLimit {
-                                segments, spsPPS, fmtpLine, actualDur, fps, err := processVideo(st, st.currentVideo, db, nextStart, ChunkDuration)
-                                if err != nil {
-                                    errorLogger.Printf("Station %s (adsEnabled: %v): Failed to pre-queue %s chunk after skipped ad break for video %d at %.3fs (retry %d/%d): %v", st.name, st.adsEnabled, map[bool]string{true: "final", false: "episode"}[nextStart+ChunkDuration >= videoDur], st.currentVideo, nextStart, retryCount+1, retryLimit, err)
-                                    if segments != nil && len(segments) > 0 {
-                                        os.Remove(segments[0])
-                                        os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
+                                    if len(st.spsPPS) == 0 {
+                                        st.spsPPS = spsPPS
+                                        st.fmtpLine = fmtpLine
                                     }
-                                    retryCount++
-                                    if retryCount == retryLimit && nextStart+ChunkDuration < videoDur {
-                                        errorLogger.Printf("Station %s (adsEnabled: %v): Max retries failed for chunk after skipped ad at %.3fs, advancing video", st.name, st.adsEnabled, nextStart)
-                                        st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
-                                        st.currentVideo = st.videoQueue[st.currentIndex]
-                                        st.currentOffset = 0.0
-                                        st.spsPPS = nil
-                                        st.fmtpLine = ""
-                                        st.currentVideoRTPTS = 0
-                                        st.currentAudioSamples = 0
-                                        log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s", st.name, st.adsEnabled, st.currentVideo)
-                                        break
+                                    newChunk := bufferedChunk{
+                                        segPath: segments[0],
+                                        dur: actualDur,
+                                        isAd: false,
+                                        videoID: st.currentVideo,
+                                        fps: fps,
                                     }
-                                    continue
+                                    st.segmentList = append(st.segmentList, newChunk)
+                                    remainingDur += actualDur
+                                    sumNonAd += actualDur
+                                    log.Printf("Station %s (adsEnabled: %v): Pre-queued %s chunk after ads for video %d at %.3fs, duration %.3fs", st.name, st.adsEnabled, map[bool]string{true: "final", false: "episode"}[isPostAdFinalChunk], st.currentVideo, nextStart, actualDur)
+                                    break
                                 }
-                                if len(st.spsPPS) == 0 {
-                                    st.spsPPS = spsPPS
-                                    st.fmtpLine = fmtpLine
+                                if postAdRetryCount == retryLimit && !isPostAdFinalChunk {
+                                    errorLogger.Printf("Station %s (adsEnabled: %v): Max retries failed for chunk after ads at %.3fs, advancing video", st.name, st.adsEnabled, nextStart)
+                                    st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
+                                    st.currentVideo = st.videoQueue[st.currentIndex]
+                                    st.currentOffset = 0.0
+                                    st.spsPPS = nil
+                                    st.fmtpLine = ""
+                                    st.currentVideoRTPTS = st.currentVideoRTPTS
+                                    st.currentAudioSamples = st.currentAudioSamples
+                                    log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s", st.name, st.adsEnabled, st.currentVideo)
                                 }
-                                newChunk := bufferedChunk{
-                                    segPath: segments[0],
-                                    dur:     actualDur,
-                                    isAd:    false,
-                                    videoID: st.currentVideo,
-                                    fps:     fps,
-                                }
-                                st.segmentList = append(st.segmentList, newChunk)
-                                remainingDur += actualDur
-                                sumNonAd += actualDur
-                                log.Printf("Station %s (adsEnabled: %v): Pre-queued %s chunk after skipped ad break for video %d at %.3fs, duration %.3fs", st.name, st.adsEnabled, map[bool]string{true: "final", false: "episode"}[nextStart+ChunkDuration >= videoDur], st.currentVideo, nextStart, actualDur)
-                                break
                             }
                         }
                     }
@@ -1470,7 +1483,7 @@ func manageProcessing(st *Station, db *sql.DB) {
             }
             log.Printf("Station %s (adsEnabled: %v): Buffer check complete, remainingDur %.3fs, segmentList: %v", st.name, st.adsEnabled, remainingDur, st.segmentList)
             st.mu.Unlock()
-            time.Sleep(time.Second)
+            time.Sleep(time.Millisecond * 500) // Reduced for faster processing
         }
     }
 }
@@ -1493,6 +1506,13 @@ func sender(st *Station, db *sql.DB) {
                 time.Sleep(time.Second)
                 continue
             }
+            // Ensure stopCh is not closed
+            select {
+            case <-st.stopCh:
+                st.stopCh = make(chan struct{})
+                log.Printf("Station %s (adsEnabled: %v): Reinitialized stopCh due to previous closure", st.name, st.adsEnabled)
+            default:
+            }
             chunk := st.segmentList[0]
             videoDur := getVideoDur(st.currentVideo, db)
             sumNonAd := 0.0
@@ -1504,8 +1524,8 @@ func sender(st *Station, db *sql.DB) {
             isFinalChunk := !chunk.isAd && (st.currentOffset+sumNonAd >= videoDur || math.Abs(st.currentOffset+sumNonAd-videoDur) < 0.001)
             if !chunk.isAd && chunk.videoID != st.currentVideo {
                 found := false
-                for i := st.currentIndex - 1; i >= 0; i-- {
-                    if st.videoQueue[i] == chunk.videoID {
+                for _, vid := range st.videoQueue {
+                    if vid == chunk.videoID {
                         found = true
                         break
                     }
@@ -1518,43 +1538,75 @@ func sender(st *Station, db *sql.DB) {
                     log.Printf("Station %s (adsEnabled: %v): Removed stale chunk %s, new segmentList: %v", st.name, st.adsEnabled, chunk.segPath, st.segmentList)
                     st.mu.Unlock()
                     continue
-                } else {
-                    log.Printf("Station %s (adsEnabled: %v): Keeping non-ad chunk from video %d (current video %d, segment: %s) as it may be valid", st.name, st.adsEnabled, chunk.videoID, st.currentVideo, chunk.segPath)
                 }
             }
             segPath := chunk.segPath
             fpsNum := chunk.fps.num
             fpsDen := chunk.fps.den
             fps := float64(fpsNum) / float64(fpsDen)
-            log.Printf("Station %s (adsEnabled: %v): Processing chunk %d/%d: %s, videoID=%d, isAd=%v, duration=%.3fs, fps=%d/%d, offset=%.3fs", st.name, st.adsEnabled, 1, len(st.segmentList), map[bool]string{true: "final", false: "chunk"}[isFinalChunk], chunk.videoID, chunk.isAd, chunk.dur, fpsNum, fpsDen, st.currentOffset)
+            log.Printf("Station %s (adsEnabled: %v): Processing chunk %d/%d: segPath=%s, videoID=%d, isAd=%v, dur=%.3fs, fps=%d/%d", st.name, st.adsEnabled, 1, len(st.segmentList), chunk.segPath, chunk.videoID, chunk.isAd, chunk.dur, fpsNum, fpsDen)
+            // Load chunk-specific SPS/PPS
+            data, err := os.ReadFile(segPath)
+            if err != nil {
+                errorLogger.Printf("Station %s (adsEnabled: %v): %s segment %s read error: %v", st.name, st.adsEnabled, map[bool]string{true: "Final", false: "Segment"}[isFinalChunk], segPath, err)
+                st.mu.Unlock()
+                continue
+            }
+            nalus := splitNALUs(data)
+            chunkSpsPPS := [][]byte{}
+            for _, nalu := range nalus {
+                if len(nalu) > 0 {
+                    nalType := int(nalu[0] & 0x1F)
+                    if nalType == 7 || nalType == 8 {
+                        chunkSpsPPS = append(chunkSpsPPS, nalu)
+                        if nalType == 8 && len(chunkSpsPPS) >= 2 {
+                            break
+                        }
+                    }
+                }
+            }
+            if len(chunkSpsPPS) < 2 {
+                chunkSpsPPS = st.spsPPS
+                log.Printf("Station %s (adsEnabled: %v): Using station SPS/PPS for chunk %s", st.name, st.adsEnabled, segPath)
+            }
             st.mu.Unlock()
             testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
-            err := st.trackVideo.WriteSample(testSample)
-            if err != nil {
+            if err := st.trackVideo.WriteSample(testSample); err != nil {
                 errorLogger.Printf("Station %s (adsEnabled: %v): Video track write test error for %s: %v", st.name, st.adsEnabled, segPath, err)
                 if strings.Contains(err.Error(), "not bound") {
-                    log.Printf("Station %s (adsEnabled: %v): Video track not bound, checking viewers", st.name, st.adsEnabled)
                     st.mu.Lock()
                     if st.viewers == 0 {
                         close(st.stopCh)
                         st.stopCh = make(chan struct{})
+                        st.mu.Unlock()
+                        return
                     }
+                    newTrackVideo, err := webrtc.NewTrackLocalStaticSample(
+                        webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264},
+                        fmt.Sprintf("video_%s_%t", sanitizeTrackID(st.name), st.adsEnabled),
+                        "pion",
+                    )
+                    if err != nil {
+                        errorLogger.Printf("Station %s (adsEnabled: %v): Failed to reinitialize video track: %v", st.name, st.adsEnabled, err)
+                        st.viewers = 0
+                        close(st.stopCh)
+                        st.stopCh = make(chan struct{})
+                        st.mu.Unlock()
+                        return
+                    }
+                    st.trackVideo = newTrackVideo
+                    log.Printf("Station %s (adsEnabled: %v): Reinitialized video track", st.name, st.adsEnabled)
                     st.mu.Unlock()
                     time.Sleep(time.Second)
                     continue
                 }
             }
-            data, err := os.ReadFile(segPath)
-            if err != nil {
-                errorLogger.Printf("Station %s (adsEnabled: %v): %s segment %s read error: %v, size=%d", st.name, st.adsEnabled, map[bool]string{true: "Final", false: "Segment"}[isFinalChunk], segPath, err, len(data))
-            }
-            nalus := splitNALUs(data)
             audioPath := strings.Replace(segPath, ".h264", ".opus", 1)
-            var audioPackets [][]byte
             audioData, err := os.ReadFile(audioPath)
             if err != nil {
-                errorLogger.Printf("Station %s (adsEnabled: %v): Failed to read audio %s: %v, size=%d", st.name, st.adsEnabled, audioPath, err, len(audioData))
+                errorLogger.Printf("Station %s (adsEnabled: %v): Failed to read audio %s: %v", st.name, st.adsEnabled, audioPath, err)
             }
+            var audioPackets [][]byte
             if len(audioData) > 0 {
                 reader := bytes.NewReader(audioData)
                 ogg, _, err := oggreader.NewWith(reader)
@@ -1570,11 +1622,7 @@ func sender(st *Station, db *sql.DB) {
                             errorLogger.Printf("Station %s (adsEnabled: %v): Failed to parse ogg page for %s: %v", st.name, st.adsEnabled, audioPath, err)
                             continue
                         }
-                        if len(payload) < 1 {
-                            errorLogger.Printf("Station %s (adsEnabled: %v): Empty ogg payload for %s, skipping", st.name, st.adsEnabled, audioPath)
-                            continue
-                        }
-                        if len(payload) >= 8 && (string(payload[:8]) == "OpusHead" || string(payload[:8]) == "OpusTags") {
+                        if len(payload) < 1 || (len(payload) >= 8 && (string(payload[:8]) == "OpusHead" || string(payload[:8]) == "OpusTags")) {
                             log.Printf("Station %s (adsEnabled: %v): Skipping header packet: %s", st.name, st.adsEnabled, string(payload[:8]))
                             continue
                         }
@@ -1583,63 +1631,24 @@ func sender(st *Station, db *sql.DB) {
                     log.Printf("Station %s (adsEnabled: %v): Parsed %d audio packets for %s", st.name, st.adsEnabled, len(audioPackets), audioPath)
                 }
             }
-            if len(data) == 0 || len(nalus) == 0 || len(audioData) == 0 {
-                errorLogger.Printf("Station %s (adsEnabled: %v): %s chunk %s is empty or has no NALUs/audio, treating as minimal duration", st.name, st.adsEnabled, map[bool]string{true: "Final", false: "Segment"}[isFinalChunk], segPath)
-                if chunk.dur <= 0 {
-                    chunk.dur = 0.001
-                }
-                sample := media.Sample{
-                    Data:           []byte{},
-                    Duration:       time.Duration(chunk.dur * float64(time.Second)),
-                    PacketTimestamp: currentVideoTS,
-                }
-                if err := st.trackVideo.WriteSample(sample); err != nil {
-                    errorLogger.Printf("Station %s (adsEnabled: %v): Video sample write error for empty chunk %s: %v - resetting video TS", st.name, st.adsEnabled, segPath, err)
-                    st.mu.Lock()
-                    st.currentVideoRTPTS = 0
-                    st.mu.Unlock()
-                } else {
-                    st.mu.Lock()
-                    st.currentVideoRTPTS += uint32(chunk.dur * float64(ClockRate))
-                    st.mu.Unlock()
-                }
-                sample = media.Sample{
-                    Data:           []byte{},
-                    Duration:       time.Duration(chunk.dur * float64(time.Second)),
-                    PacketTimestamp: currentAudioTS,
-                }
-                if err := st.trackAudio.WriteSample(sample); err != nil {
-                    errorLogger.Printf("Station %s (adsEnabled: %v): Audio sample write error for empty chunk %s: %v - resetting audio TS", st.name, st.adsEnabled, audioPath, err)
-                    st.mu.Lock()
-                    st.currentAudioSamples = 0
-                    st.mu.Unlock()
-                } else {
-                    st.mu.Lock()
-                    st.currentAudioSamples += uint32(chunk.dur * 48000)
-                    st.mu.Unlock()
-                }
+            if len(nalus) == 0 || len(audioData) == 0 {
+                errorLogger.Printf("Station %s (adsEnabled: %v): %s chunk %s is empty or has no NALUs/audio, advancing", st.name, st.adsEnabled, map[bool]string{true: "Final", false: "Segment"}[isFinalChunk], segPath)
                 st.mu.Lock()
                 os.Remove(segPath)
                 os.Remove(audioPath)
                 if !chunk.isAd {
                     st.currentOffset += chunk.dur
-                    log.Printf("Station %s (adsEnabled: %v): Advanced offset to %.3fs after processing empty chunk", st.name, st.adsEnabled, st.currentOffset)
                     if videoDur > 0 && (st.currentOffset >= videoDur || math.Abs(st.currentOffset-videoDur) < 0.001) {
-                        log.Printf("Station %s (adsEnabled: %v): Completed video %d, advancing to next", st.name, st.adsEnabled, st.currentVideo)
                         st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
                         st.currentVideo = st.videoQueue[st.currentIndex]
                         st.currentOffset = 0.0
                         st.spsPPS = nil
                         st.fmtpLine = ""
-                        st.currentVideoRTPTS = 0
-                        st.currentAudioSamples = 0
-                        currentVideoTS = 0
-                        currentAudioTS = 0
-                        log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s", st.name, st.adsEnabled, st.currentVideo)
+                        // Maintain RTP timestamps
+                        log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s, maintaining videoTS=%d, audioTS=%d", st.name, st.adsEnabled, st.currentVideo, currentVideoTS, currentAudioTS)
                     }
                 }
                 st.segmentList = st.segmentList[1:]
-                log.Printf("Station %s (adsEnabled: %v): Removed empty %s chunk %s, new segmentList: %v", st.name, st.adsEnabled, map[bool]string{true: "final", false: "chunk"}[isFinalChunk], segPath, st.segmentList)
                 st.mu.Unlock()
                 continue
             }
@@ -1649,9 +1658,9 @@ func sender(st *Station, db *sql.DB) {
             go func(nalus [][]byte, startTS uint32) {
                 defer wg.Done()
                 var allNALUs [][]byte
-                if len(st.spsPPS) > 0 {
-                    allNALUs = append(st.spsPPS, nalus...)
-                    log.Printf("Station %s (adsEnabled: %v): Prefixed %d config NALUs to %s segment %s", st.name, st.adsEnabled, len(st.spsPPS), map[bool]string{true: "final", false: "chunk"}[isFinalChunk], segPath)
+                if len(chunkSpsPPS) > 0 {
+                    allNALUs = append(chunkSpsPPS, nalus...)
+                    log.Printf("Station %s (adsEnabled: %v): Prefixed %d SPS/PPS NALUs to %s", st.name, st.adsEnabled, len(chunkSpsPPS), segPath)
                 } else {
                     allNALUs = nalus
                 }
@@ -1659,8 +1668,7 @@ func sender(st *Station, db *sql.DB) {
                 var currentFrame [][]byte
                 var hasVCL bool
                 for _, nalu := range allNALUs {
-                    if len(nalu) == 0 && !isFinalChunk {
-                        errorLogger.Printf("Station %s (adsEnabled: %v): Empty NALU in segment %s, skipping", st.name, st.adsEnabled, segPath)
+                    if len(nalu) == 0 {
                         continue
                     }
                     nalType := int(nalu[0] & 0x1F)
@@ -1706,15 +1714,14 @@ func sender(st *Station, db *sql.DB) {
                     }
                     frames = append(frames, frameData.Bytes())
                 }
-                if len(frames) == 0 && !isFinalChunk {
-                    errorLogger.Printf("Station %s (adsEnabled: %v): No frames in segment %s - resetting video TS", st.name, st.adsEnabled, segPath)
+                if len(frames) == 0 {
+                    errorLogger.Printf("Station %s (adsEnabled: %v): No frames in segment %s", st.name, st.adsEnabled, segPath)
                     st.mu.Lock()
-                    st.currentVideoRTPTS = 0
+                    st.currentVideoRTPTS = currentVideoTS // Maintain continuity
                     st.mu.Unlock()
                     select {
                     case done <- struct{}{}:
-                    case <-time.After(time.Duration(chunk.dur*float64(time.Second)) + time.Second):
-                        errorLogger.Printf("Station %s (adsEnabled: %v): Video goroutine timeout for %s", st.name, st.adsEnabled, segPath)
+                    default:
                     }
                     return
                 }
@@ -1726,9 +1733,6 @@ func sender(st *Station, db *sql.DB) {
                 frameIntervalSeconds := chunk.dur / float64(max(1, actualFrames))
                 frameInterval := time.Duration(frameIntervalSeconds * float64(time.Second))
                 log.Printf("Station %s (adsEnabled: %v): %s segment %s, expected %d frames, actual %d frames, interval %.3fs", st.name, st.adsEnabled, map[bool]string{true: "Final", false: "Segment"}[isFinalChunk], segPath, expectedFrames, actualFrames, frameIntervalSeconds)
-                if math.Abs(float64(actualFrames-expectedFrames)) > float64(expectedFrames)*0.1 && !isFinalChunk {
-                    errorLogger.Printf("Station %s (adsEnabled: %v): Significant frame count mismatch for %s: expected %d, got %d - possible VFR source", st.name, st.adsEnabled, segPath, expectedFrames, actualFrames)
-                }
                 videoTimestamp := startTS
                 const videoClockRate = 90000
                 boundChecked := false
@@ -1737,44 +1741,55 @@ func sender(st *Station, db *sql.DB) {
                 frameIdx := 0
                 expectedSamples := uint32(chunk.dur * float64(videoClockRate))
                 for range ticker.C {
-                    if frameIdx >= actualFrames && !isFinalChunk {
+                    if frameIdx >= actualFrames {
                         break
-                    }
-                    var frameData []byte
-                    if frameIdx < actualFrames {
-                        frameData = frames[frameIdx]
-                    } else {
-                        frameData = []byte{}
                     }
                     if !boundChecked {
                         if err := st.trackVideo.WriteSample(testSample); err != nil {
-                            errorLogger.Printf("Station %s (adsEnabled: %v): Video track not bound for frame %d in %s: %v - resetting video TS", st.name, st.adsEnabled, frameIdx, segPath, err)
+                            errorLogger.Printf("Station %s (adsEnabled: %v): Video track not bound for frame %d in %s: %v", st.name, st.adsEnabled, frameIdx, segPath, err)
                             st.mu.Lock()
-                            st.currentVideoRTPTS = 0
+                            st.currentVideoRTPTS = currentVideoTS
+                            newTrackVideo, err := webrtc.NewTrackLocalStaticSample(
+                                webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264},
+                                fmt.Sprintf("video_%s_%t", sanitizeTrackID(st.name), st.adsEnabled),
+                                "pion",
+                            )
+                            if err != nil {
+                                errorLogger.Printf("Station %s (adsEnabled: %v): Failed to reinitialize video track: %v", st.name, st.adsEnabled, err)
+                                st.viewers = 0
+                                close(st.stopCh)
+                                st.stopCh = make(chan struct{})
+                                st.mu.Unlock()
+                                select {
+                                case done <- struct{}{}:
+                                default:
+                                }
+                                return
+                            }
+                            st.trackVideo = newTrackVideo
+                            log.Printf("Station %s (adsEnabled: %v): Reinitialized video track", st.name, st.adsEnabled)
                             st.mu.Unlock()
                             select {
                             case done <- struct{}{}:
-                            case <-time.After(time.Duration(chunk.dur*float64(time.Second)) + time.Second):
-                                errorLogger.Printf("Station %s (adsEnabled: %v): Video goroutine timeout for %s", st.name, st.adsEnabled, segPath)
+                            default:
                             }
                             return
                         }
                         boundChecked = true
                     }
                     sample := media.Sample{
-                        Data:           frameData,
-                        Duration:       frameInterval,
+                        Data: frames[frameIdx],
+                        Duration: frameInterval,
                         PacketTimestamp: videoTimestamp,
                     }
                     if err := st.trackVideo.WriteSample(sample); err != nil {
-                        errorLogger.Printf("Station %s (adsEnabled: %v): Video sample %d write error for %s: %v - resetting video TS", st.name, st.adsEnabled, frameIdx, segPath, err)
+                        errorLogger.Printf("Station %s (adsEnabled: %v): Video sample %d write error for %s: %v", st.name, st.adsEnabled, frameIdx, segPath, err)
                         st.mu.Lock()
-                        st.currentVideoRTPTS = 0
+                        st.currentVideoRTPTS = currentVideoTS
                         st.mu.Unlock()
                         select {
                         case done <- struct{}{}:
-                        case <-time.After(time.Duration(chunk.dur*float64(time.Second)) + time.Second):
-                            errorLogger.Printf("Station %s (adsEnabled: %v): Video goroutine timeout for %s", st.name, st.adsEnabled, segPath)
+                        default:
                         }
                         return
                     }
@@ -1790,8 +1805,7 @@ func sender(st *Station, db *sql.DB) {
                 log.Printf("Station %s (adsEnabled: %v): Completed video transmission for %s, final videoTS=%d", st.name, st.adsEnabled, segPath, videoTimestamp)
                 select {
                 case done <- struct{}{}:
-                case <-time.After(time.Duration(chunk.dur*float64(time.Second)) + time.Second):
-                    errorLogger.Printf("Station %s (adsEnabled: %v): Video goroutine timeout for %s", st.name, st.adsEnabled, segPath)
+                default:
                 }
             }(nalus, currentVideoTS)
             go func(packets [][]byte, startTS uint32) {
@@ -1805,63 +1819,74 @@ func sender(st *Station, db *sql.DB) {
                 packetIdx := 0
                 expectedSamples := uint32(chunk.dur * float64(sampleRate))
                 for range ticker.C {
-                    if packetIdx >= len(packets) && !isFinalChunk {
+                    if packetIdx >= len(packets) {
                         break
                     }
-                    var pkt []byte
-                    baseFrameDurationMs := 20
-                    var samples uint32
-                    if packetIdx < len(packets) {
-                        pkt = packets[packetIdx]
-                        if len(pkt) < 1 {
-                            errorLogger.Printf("Station %s (adsEnabled: %v): Empty audio packet %d for %s, skipping", st.name, st.adsEnabled, packetIdx, audioPath)
-                            packetIdx++
-                            continue
-                        }
-                        toc := pkt[0]
-                        config := (toc >> 3) & 0x1F
-                        switch config {
-                        case 0, 1, 2, 3, 16, 17, 18, 19:
-                            baseFrameDurationMs = 10
-                        case 4, 5, 6, 7, 20, 21, 22, 23:
-                            baseFrameDurationMs = 20
-                        case 8, 9, 10, 11:
-                            baseFrameDurationMs = 40
-                        case 12, 13, 14, 15:
-                            baseFrameDurationMs = 60
-                        }
-                        samples = uint32((baseFrameDurationMs * sampleRate) / 1000)
-                    } else {
-                        samples = uint32((20 * sampleRate) / 1000)
-                        pkt = []byte{}
-                        baseFrameDurationMs = 20
+                    pkt := packets[packetIdx]
+                    if len(pkt) < 1 {
+                        errorLogger.Printf("Station %s (adsEnabled: %v): Empty audio packet %d for %s, skipping", st.name, st.adsEnabled, packetIdx, audioPath)
+                        packetIdx++
+                        continue
                     }
+                    toc := pkt[0]
+                    config := (toc >> 3) & 0x1F
+                    baseFrameDurationMs := 20
+                    switch config {
+                    case 0, 1, 2, 3, 16, 17, 18, 19:
+                        baseFrameDurationMs = 10
+                    case 4, 5, 6, 7, 20, 21, 22, 23:
+                        baseFrameDurationMs = 20
+                    case 8, 9, 10, 11:
+                        baseFrameDurationMs = 40
+                    case 12, 13, 14, 15:
+                        baseFrameDurationMs = 60
+                    }
+                    samples := uint32((baseFrameDurationMs * sampleRate) / 1000)
                     if !boundChecked {
                         if err := st.trackAudio.WriteSample(testSample); err != nil {
                             errorLogger.Printf("Station %s (adsEnabled: %v): Audio track not bound for sample %d in %s: %v", st.name, st.adsEnabled, packetIdx, audioPath, err)
+                            st.mu.Lock()
+                            newTrackAudio, err := webrtc.NewTrackLocalStaticSample(
+                                webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
+                                fmt.Sprintf("audio_%s_%t", sanitizeTrackID(st.name), st.adsEnabled),
+                                "pion",
+                            )
+                            if err != nil {
+                                errorLogger.Printf("Station %s (adsEnabled: %v): Failed to reinitialize audio track: %v", st.name, st.adsEnabled, err)
+                                st.viewers = 0
+                                close(st.stopCh)
+                                st.stopCh = make(chan struct{})
+                                st.mu.Unlock()
+                                select {
+                                case done <- struct{}{}:
+                                default:
+                                }
+                                return
+                            }
+                            st.trackAudio = newTrackAudio
+                            log.Printf("Station %s (adsEnabled: %v): Reinitialized audio track", st.name, st.adsEnabled)
+                            st.mu.Unlock()
                             select {
                             case done <- struct{}{}:
-                            case <-time.After(time.Duration(chunk.dur*float64(time.Second)) + time.Second):
-                                errorLogger.Printf("Station %s (adsEnabled: %v): Audio goroutine timeout for %s", st.name, st.adsEnabled, audioPath)
+                            default:
                             }
                             return
                         }
                         boundChecked = true
                     }
                     sample := media.Sample{
-                        Data:           pkt,
-                        Duration:       time.Duration(baseFrameDurationMs) * time.Millisecond,
+                        Data: pkt,
+                        Duration: time.Duration(baseFrameDurationMs) * time.Millisecond,
                         PacketTimestamp: audioTimestamp,
                     }
                     if err := st.trackAudio.WriteSample(sample); err != nil {
-                        errorLogger.Printf("Station %s (adsEnabled: %v): Audio sample %d write error for %s: %v, packet size: %d - resetting audio TS", st.name, st.adsEnabled, packetIdx, audioPath, err, len(pkt))
+                        errorLogger.Printf("Station %s (adsEnabled: %v): Audio sample %d write error for %s: %v", st.name, st.adsEnabled, packetIdx, audioPath, err)
                         st.mu.Lock()
-                        st.currentAudioSamples = 0
+                        st.currentAudioSamples = audioTimestamp
                         st.mu.Unlock()
                         select {
                         case done <- struct{}{}:
-                        case <-time.After(time.Duration(chunk.dur*float64(time.Second)) + time.Second):
-                            errorLogger.Printf("Station %s (adsEnabled: %v): Audio goroutine timeout for %s", st.name, st.adsEnabled, audioPath)
+                        default:
                         }
                         return
                     }
@@ -1877,15 +1902,14 @@ func sender(st *Station, db *sql.DB) {
                 log.Printf("Station %s (adsEnabled: %v): Completed audio transmission for %s, final audioTS=%d", st.name, st.adsEnabled, audioPath, audioTimestamp)
                 select {
                 case done <- struct{}{}:
-                case <-time.After(time.Duration(chunk.dur*float64(time.Second)) + time.Second):
-                    errorLogger.Printf("Station %s (adsEnabled: %v): Audio goroutine timeout for %s", st.name, st.adsEnabled, audioPath)
+                default:
                 }
             }(audioPackets, currentAudioTS)
             go func() {
                 for i := 0; i < 2; i++ {
                     select {
                     case <-done:
-                    case <-time.After(time.Duration(chunk.dur*float64(time.Second)) + 2*time.Second):
+                    case <-time.After(time.Duration(chunk.dur*float64(time.Second)) + 5*time.Second):
                         errorLogger.Printf("Station %s (adsEnabled: %v): Timeout waiting for audio/video transmission for %s", st.name, st.adsEnabled, segPath)
                     }
                 }
@@ -1893,7 +1917,7 @@ func sender(st *Station, db *sql.DB) {
             }()
             select {
             case <-done:
-            case <-time.After(time.Duration(chunk.dur*float64(time.Second)) + 2*time.Second):
+            case <-time.After(time.Duration(chunk.dur*float64(time.Second)) + 5*time.Second):
                 errorLogger.Printf("Station %s (adsEnabled: %v): Timeout waiting for audio/video transmission completion for %s", st.name, st.adsEnabled, segPath)
             }
             st.mu.Lock()
@@ -1909,11 +1933,8 @@ func sender(st *Station, db *sql.DB) {
                     st.currentOffset = 0.0
                     st.spsPPS = nil
                     st.fmtpLine = ""
-                    st.currentVideoRTPTS = 0
-                    st.currentAudioSamples = 0
-                    currentVideoTS = 0
-                    currentAudioTS = 0
-                    log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s", st.name, st.adsEnabled, st.currentVideo)
+                    // Maintain RTP timestamps
+                    log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s, maintaining videoTS=%d, audioTS=%d", st.name, st.adsEnabled, st.currentVideo, currentVideoTS, currentAudioTS)
                 }
             }
             st.segmentList = st.segmentList[1:]
@@ -1922,7 +1943,7 @@ func sender(st *Station, db *sql.DB) {
             currentAudioTS = st.currentAudioSamples
             st.mu.Unlock()
             wg.Wait()
-            time.Sleep(time.Millisecond * 100)
+            time.Sleep(time.Millisecond * 20) // Reduced delay for smoother transitions
         }
     }
 }
@@ -1967,415 +1988,415 @@ func splitNALUs(data []byte) [][]byte {
 }
 
 func signalingHandler(db *sql.DB, c *gin.Context) {
-	stationName := c.Query("station")
-	if stationName == "" {
-		stationName = DefaultStation
-	}
-	adsEnabled := c.Query("adsEnabled") != "false"
-	mu.Lock()
-	var st *Station
-	var ok bool
-	if adsEnabled {
-		st, ok = stations[stationName]
-		if !ok {
-			st = loadStation(stationName, db, true, nil)
-			if st == nil {
-				mu.Unlock()
-				c.JSON(400, gin.H{"error": "Invalid station"})
-				return
-			}
-			stations[stationName] = st
-		}
-	} else {
-		st, ok = noAdsStations[stationName]
-		if !ok {
-			originalSt, origOk := stations[stationName]
-			if !origOk {
-				originalSt = loadStation(stationName, db, true, nil)
-				if originalSt == nil {
-					mu.Unlock()
-					c.JSON(400, gin.H{"error": "Base station does not exist"})
-					return
-				}
-				stations[stationName] = originalSt
-			}
-			st = loadStation(stationName, db, false, originalSt)
-			if st == nil {
-				mu.Unlock()
-				c.JSON(400, gin.H{"error": "Failed to create no-ads station"})
-				return
-			}
-			noAdsStations[stationName] = st
-			log.Printf("Created no-ads station for %s", stationName)
-		}
-	}
-	mu.Unlock()
-	log.Printf("Signaling for station %s, adsEnabled: %v", stationName, adsEnabled)
-	var msg struct {
-		Type string `json:"type"`
-		SDP  string `json:"sdp,omitempty"`
-	}
-	if err := c.BindJSON(&msg); err != nil {
-		log.Printf("JSON bind error: %v", err)
-		c.JSON(400, gin.H{"error": err.Error()})
-		return
-	}
-	m := &webrtc.MediaEngine{}
-	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: webrtc.RTPCodecCapability{
-			MimeType:     webrtc.MimeTypeH264,
-			ClockRate:    90000,
-			SDPFmtpLine:  "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640034",
-			RTCPFeedback: []webrtc.RTCPFeedback{{"goog-remb", ""}, {"ccm", "fir"}, {"nack", ""}, {"nack", "pli"}},
-		},
-		PayloadType: 96,
-	}, webrtc.RTPCodecTypeVideo); err != nil {
-		log.Printf("RegisterCodec video error: %v", err)
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
-	}
-	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: webrtc.RTPCodecCapability{
-			MimeType:     webrtc.MimeTypeOpus,
-			ClockRate:    48000,
-			Channels:     2,
-			SDPFmtpLine:  "minptime=10;useinbandfec=1;stereo=1",
-		},
-		PayloadType: 111,
-	}, webrtc.RTPCodecTypeAudio); err != nil {
-		log.Printf("RegisterCodec audio error: %v", err)
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
-	}
-	s := webrtc.SettingEngine{}
-	s.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4, webrtc.NetworkTypeTCP4})
-	api := webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithSettingEngine(s))
-	pc, err := api.NewPeerConnection(webrtc.Configuration{
-		ICEServers: []webrtc.ICEServer{
-			{URLs: []string{"stun:stun.l.google.com:19302"}},
-			{URLs: []string{"turn:openrelay.metered.ca:80"}, Username: "openrelayproject", Credential: "openrelayproject"},
-			{URLs: []string{"turn:openrelay.metered.ca:443"}, Username: "openrelayproject", Credential: "openrelayproject"},
-		},
-	})
-	if err != nil {
-		log.Printf("NewPeerConnection error: %v", err)
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
-	}
-	st.mu.Lock()
-	st.viewers++
-	if !st.processing {
-		st.processing = true
-		if err := os.MkdirAll(HlsDir, 0755); err != nil {
-			log.Printf("Station %s: Failed to create webrtc_segments directory: %v", st.name, err)
-			st.viewers--
-			st.mu.Unlock()
-			c.JSON(500, gin.H{"error": "Failed to create webrtc_segments directory"})
-			pc.Close()
-			return
-		}
-		videoDur := getVideoDur(st.currentVideo, db)
-		if videoDur <= 0 {
-			log.Printf("Station %s: Invalid duration for initial video %d, advancing", st.name, st.currentVideo)
-			st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
-			st.currentVideo = st.videoQueue[st.currentIndex]
-			st.currentOffset = 0.0
-			videoDur = getVideoDur(st.currentVideo, db)
-		}
-		breaks, err := getBreakPoints(st.currentVideo, db)
-		if err != nil {
-			log.Printf("Station %s: Failed to get break points for initial video %d: %v", st.name, st.currentVideo, err)
-			breaks = []float64{}
-		}
-		log.Printf("Station %s: Initial break points for video %d: %v", st.name, st.currentVideo, breaks)
-		nextStart := st.currentOffset
-		st.segmentList = nil // Initialize empty segmentList
-		totalDur := 0.0
-		const maxRetries = 3
-		var nextBreak float64 = math.MaxFloat64
-		for _, b := range breaks {
-			if b > nextStart {
-				nextBreak = b
-				break
-			}
-		}
-		for totalDur < BufferThreshold && nextStart < videoDur {
-			chunkDur := ChunkDuration
-			chunkEnd := nextStart + chunkDur
-			if chunkEnd > videoDur {
-				chunkEnd = videoDur
-				chunkDur = videoDur - nextStart
-			}
-			if nextBreak < chunkEnd {
-				chunkEnd = nextBreak
-				chunkDur = nextBreak - nextStart
-			}
-			if chunkDur <= 0 {
-				log.Printf("Station %s: Zero chunk duration at %.3fs, breaking", st.name, nextStart)
-				break
-			}
-			var retryCount int
-			var segments []string
-			var spsPPS [][]byte
-			var fmtpLine string
-			var actualDur float64
-			var fps fpsPair
-for retryCount < maxRetries {
-    segments, spsPPS, fmtpLine, actualDur, fps, err = processVideo(st, st.currentVideo, db, nextStart, chunkDur)
-    if err != nil {
-        log.Printf("Station %s: Failed to process initial chunk for video %d at %.3fs (retry %d/%d): %v", st.name, st.currentVideo, nextStart, retryCount+1, maxRetries, err)
-        if segments != nil && len(segments) > 0 {
-            os.Remove(segments[0])
-            os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
+    stationName := c.Query("station")
+    if stationName == "" {
+        stationName = DefaultStation
+    }
+    adsEnabled := c.Query("adsEnabled") != "false"
+    mu.Lock()
+    var st *Station
+    var ok bool
+    if adsEnabled {
+        st, ok = stations[stationName]
+        if !ok {
+            st = loadStation(stationName, db, true, nil)
+            if st == nil {
+                mu.Unlock()
+                c.JSON(400, gin.H{"error": "Invalid station"})
+                return
+            }
+            stations[stationName] = st
         }
-        retryCount++
-        if retryCount == maxRetries {
-            log.Printf("Station %s: Max retries failed for initial chunk at %.3fs, advancing video", st.name, nextStart)
-            st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
-            st.currentVideo = st.videoQueue[st.currentIndex]
-            st.currentOffset = 0.0
-            st.spsPPS = nil
-            st.fmtpLine = ""
-            st.currentVideoRTPTS = 0
-            st.currentAudioSamples = 0
+    } else {
+        st, ok = noAdsStations[stationName]
+        if !ok {
+            originalSt, origOk := stations[stationName]
+            if !origOk {
+                originalSt = loadStation(stationName, db, true, nil)
+                if originalSt == nil {
+                    mu.Unlock()
+                    c.JSON(400, gin.H{"error": "Base station does not exist"})
+                    return
+                }
+                stations[stationName] = originalSt
+            }
+            st = loadStation(stationName, db, false, originalSt)
+            if st == nil {
+                mu.Unlock()
+                c.JSON(400, gin.H{"error": "Failed to create no-ads station"})
+                return
+            }
+            noAdsStations[stationName] = st
+            log.Printf("Created no-ads station for %s", stationName)
+        }
+    }
+    mu.Unlock()
+    log.Printf("Signaling for station %s, adsEnabled: %v", stationName, adsEnabled)
+    var msg struct {
+        Type string `json:"type"`
+        SDP  string `json:"sdp,omitempty"`
+    }
+    if err := c.BindJSON(&msg); err != nil {
+        log.Printf("JSON bind error: %v", err)
+        c.JSON(400, gin.H{"error": err.Error()})
+        return
+    }
+    m := &webrtc.MediaEngine{}
+    if err := m.RegisterCodec(webrtc.RTPCodecParameters{
+        RTPCodecCapability: webrtc.RTPCodecCapability{
+            MimeType:     webrtc.MimeTypeH264,
+            ClockRate:    90000,
+            SDPFmtpLine:  "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640034",
+            RTCPFeedback: []webrtc.RTCPFeedback{{"goog-remb", ""}, {"ccm", "fir"}, {"nack", ""}, {"nack", "pli"}},
+        },
+        PayloadType: 96,
+    }, webrtc.RTPCodecTypeVideo); err != nil {
+        log.Printf("RegisterCodec video error: %v", err)
+        c.JSON(500, gin.H{"error": err.Error()})
+        return
+    }
+    if err := m.RegisterCodec(webrtc.RTPCodecParameters{
+        RTPCodecCapability: webrtc.RTPCodecCapability{
+            MimeType:     webrtc.MimeTypeOpus,
+            ClockRate:    48000,
+            Channels:     2,
+            SDPFmtpLine:  "minptime=10;useinbandfec=1;stereo=1",
+        },
+        PayloadType: 111,
+    }, webrtc.RTPCodecTypeAudio); err != nil {
+        log.Printf("RegisterCodec audio error: %v", err)
+        c.JSON(500, gin.H{"error": err.Error()})
+        return
+    }
+    s := webrtc.SettingEngine{}
+    s.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4, webrtc.NetworkTypeTCP4})
+    api := webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithSettingEngine(s))
+    pc, err := api.NewPeerConnection(webrtc.Configuration{
+        ICEServers: []webrtc.ICEServer{
+            {URLs: []string{"stun:stun.l.google.com:19302"}},
+            {URLs: []string{"turn:openrelay.metered.ca:80"}, Username: "openrelayproject", Credential: "openrelayproject"},
+            {URLs: []string{"turn:openrelay.metered.ca:443"}, Username: "openrelayproject", Credential: "openrelayproject"},
+        },
+    })
+    if err != nil {
+        log.Printf("NewPeerConnection error: %v", err)
+        c.JSON(500, gin.H{"error": err.Error()})
+        return
+    }
+    st.mu.Lock()
+    st.viewers++
+    if !st.processing {
+        st.processing = true
+        if err := os.MkdirAll(HlsDir, 0755); err != nil {
+            log.Printf("Station %s: Failed to create webrtc_segments directory: %v", st.name, err)
             st.viewers--
             st.mu.Unlock()
-            c.JSON(500, gin.H{"error": "Failed to process initial video chunk after retries"})
+            c.JSON(500, gin.H{"error": "Failed to create webrtc_segments directory"})
             pc.Close()
             return
         }
-        continue
-    }
-    // Skip strict validation; trust processVideo output
-    if len(st.spsPPS) == 0 {
-        st.spsPPS = spsPPS
-        st.fmtpLine = fmtpLine
-    }
-    st.segmentList = append(st.segmentList, bufferedChunk{
-        segPath: segments[0],
-        dur:     actualDur,
-        isAd:    false,
-        videoID: st.currentVideo,
-        fps:     fps,
-    })
-    log.Printf("Station %s: Queued initial chunk for video %d at %.3fs, duration %.3fs", st.name, st.currentVideo, nextStart, actualDur)
-    totalDur += actualDur
-    nextStart += actualDur
-    // Update nextBreak for the next iteration
-    nextBreak = math.MaxFloat64
-    for _, b := range breaks {
-        if b > nextStart {
-            nextBreak = b
-            break
+        videoDur := getVideoDur(st.currentVideo, db)
+        if videoDur <= 0 {
+            log.Printf("Station %s: Invalid duration for initial video %d, advancing", st.name, st.currentVideo)
+            st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
+            st.currentVideo = st.videoQueue[st.currentIndex]
+            st.currentOffset = 0.0
+            videoDur = getVideoDur(st.currentVideo, db)
         }
+        breaks, err := getBreakPoints(st.currentVideo, db)
+        if err != nil {
+            log.Printf("Station %s: Failed to get break points for initial video %d: %v", st.name, st.currentVideo, err)
+            breaks = []float64{}
+        }
+        log.Printf("Station %s: Initial break points for video %d: %v", st.name, st.currentVideo, breaks)
+        nextStart := st.currentOffset
+        st.segmentList = nil // Initialize empty segmentList
+        totalDur := 0.0
+        const maxRetries = 3
+        var nextBreak float64 = math.MaxFloat64
+        for _, b := range breaks {
+            if b > nextStart {
+                nextBreak = b
+                break
+            }
+        }
+        for totalDur < BufferThreshold && nextStart < videoDur {
+            chunkDur := ChunkDuration
+            chunkEnd := nextStart + chunkDur
+            if chunkEnd > videoDur {
+                chunkEnd = videoDur
+                chunkDur = videoDur - nextStart
+            }
+            if nextBreak < chunkEnd {
+                chunkEnd = nextBreak
+                chunkDur = nextBreak - nextStart
+            }
+            if chunkDur <= 0 {
+                log.Printf("Station %s: Zero chunk duration at %.3fs, breaking", st.name, nextStart)
+                break
+            }
+            var retryCount int
+            var segments []string
+            var spsPPS [][]byte
+            var fmtpLine string
+            var actualDur float64
+            var fps fpsPair
+            for retryCount < maxRetries {
+                segments, spsPPS, fmtpLine, actualDur, fps, err = processVideo(st, st.currentVideo, db, nextStart, chunkDur)
+                if err != nil {
+                    log.Printf("Station %s: Failed to process initial chunk for video %d at %.3fs (retry %d/%d): %v", st.name, st.currentVideo, nextStart, retryCount+1, maxRetries, err)
+                    if segments != nil && len(segments) > 0 {
+                        os.Remove(segments[0])
+                        os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
+                    }
+                    retryCount++
+                    if retryCount == maxRetries {
+                        log.Printf("Station %s: Max retries failed for initial chunk at %.3fs, advancing video", st.name, nextStart)
+                        st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
+                        st.currentVideo = st.videoQueue[st.currentIndex]
+                        st.currentOffset = 0.0
+                        st.spsPPS = nil
+                        st.fmtpLine = ""
+                        st.currentVideoRTPTS = 0
+                        st.currentAudioSamples = 0
+                        st.viewers--
+                        st.mu.Unlock()
+                        c.JSON(500, gin.H{"error": "Failed to process initial video chunk after retries"})
+                        pc.Close()
+                        return
+                    }
+                    continue
+                }
+                // Skip strict validation; trust processVideo output
+                if len(st.spsPPS) == 0 {
+                    st.spsPPS = spsPPS
+                    st.fmtpLine = fmtpLine
+                }
+                st.segmentList = append(st.segmentList, bufferedChunk{
+                    segPath: segments[0],
+                    dur:     actualDur,
+                    isAd:    false,
+                    videoID: st.currentVideo,
+                    fps:     fps,
+                })
+                log.Printf("Station %s: Queued initial chunk for video %d at %.3fs, duration %.3fs", st.name, st.currentVideo, nextStart, actualDur)
+                totalDur += actualDur
+                nextStart += actualDur
+                // Update nextBreak for the next iteration
+                nextBreak = math.MaxFloat64
+                for _, b := range breaks {
+                    if b > nextStart {
+                        nextBreak = b
+                        break
+                    }
+                }
+                break
+            }
+            if retryCount == maxRetries {
+                break
+            }
+        }
+        if st.adsEnabled && totalDur < BufferThreshold && nextStart >= nextBreak && len(breaks) > 0 {
+            log.Printf("Station %s: Inserting initial ad break at %.3fs for video %d", st.name, nextBreak, st.currentVideo)
+            availableAds := make([]int64, len(adIDs))
+            copy(availableAds, adIDs)
+            adDurTotal := 0.0
+            for i := 0; i < 3 && totalDur < BufferThreshold; i++ {
+                if len(availableAds) == 0 {
+                    log.Printf("Station %s: No more available ads, stopping at %d of 3", st.name, i)
+                    break
+                }
+                idx := rand.Intn(len(availableAds))
+                adID := availableAds[idx]
+                adDur := getVideoDur(adID, db)
+                if adDur <= 0 {
+                    errorLogger.Printf("Station %s: Invalid duration for ad %d, skipping", st.name, adID)
+                    availableAds = append(availableAds[:idx], availableAds[idx+1:]...)
+                    continue
+                }
+                var retryCount int
+                for retryCount < maxAdRetries {
+                    segments, spsPPS, fmtpLine, actualDur, fps, err := processVideo(st, adID, db, 0, adDur)
+                    if err != nil {
+                        log.Printf("Station %s: Failed to process initial ad %d (retry %d/%d): %v", st.name, adID, retryCount+1, maxAdRetries, err)
+                        if segments != nil && len(segments) > 0 {
+                            os.Remove(segments[0])
+                            os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
+                        }
+                        retryCount++
+                        if retryCount == maxAdRetries {
+                            errorLogger.Printf("Station %s: All %d retries failed for ad %d, skipping", st.name, maxAdRetries, adID)
+                            break
+                        }
+                        continue
+                    }
+                    data, err := os.ReadFile(segments[0])
+                    if err != nil || len(data) == 0 {
+                        log.Printf("Station %s: Invalid ad segment %s: read error or empty (retry %d/%d): %v", st.name, segments[0], retryCount+1, maxAdRetries, err)
+                        os.Remove(segments[0])
+                        os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
+                        retryCount++
+                        if retryCount == maxAdRetries {
+                            errorLogger.Printf("Station %s: All %d retries failed for ad %d due to invalid segment, skipping", st.name, maxAdRetries, adID)
+                            break
+                        }
+                        continue
+                    }
+                    nalus := splitNALUs(data)
+                    if len(nalus) == 0 {
+                        log.Printf("Station %s: No NALUs in ad segment %s (retry %d/%d)", st.name, segments[0], retryCount+1, maxAdRetries)
+                        os.Remove(segments[0])
+                        os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
+                        retryCount++
+                        if retryCount == maxAdRetries {
+                            errorLogger.Printf("Station %s: All %d retries failed for ad %d due to no NALUs, skipping", st.name, maxAdRetries, adID)
+                            break
+                        }
+                        continue
+                    }
+                    audioPath := strings.Replace(segments[0], ".h264", ".opus", 1)
+                    if _, err := os.Stat(audioPath); os.IsNotExist(err) {
+                        log.Printf("Station %s: Ad audio file %s not found (retry %d/%d)", st.name, audioPath, retryCount+1, maxAdRetries)
+                        os.Remove(segments[0])
+                        os.Remove(audioPath)
+                        retryCount++
+                        if retryCount == maxAdRetries {
+                            errorLogger.Printf("Station %s: All %d retries failed for ad %d due to missing audio, skipping", st.name, maxAdRetries, adID)
+                            break
+                        }
+                        continue
+                    }
+                    if len(st.spsPPS) == 0 {
+                        st.spsPPS = spsPPS
+                        st.fmtpLine = fmtpLine
+                    }
+                    adChunk := bufferedChunk{
+                        segPath: segments[0],
+                        dur: actualDur,
+                        isAd: true,
+                        videoID: adID,
+                        fps: fps,
+                    }
+                    st.segmentList = append(st.segmentList, adChunk)
+                    totalDur += actualDur
+                    adDurTotal += actualDur
+                    log.Printf("Station %s: Queued initial ad %d with duration %.3fs at break %.3fs", st.name, adID, actualDur, nextBreak)
+                    availableAds = append(availableAds[:idx], availableAds[idx+1:]...)
+                    break
+                }
+            }
+            if adDurTotal > 0 {
+                log.Printf("Station %s: Queued %f seconds of ads at break %.3fs", st.name, adDurTotal, nextBreak)
+            } else {
+                log.Printf("Station %s: Failed to queue any initial ads at break %.3fs", st.name, nextBreak)
+            }
+        }
+        log.Printf("Station %s: Initial segmentList: %v", st.name, st.segmentList)
+        go manageProcessing(st, db)
+        go sender(st, db)
     }
-    break
-}
-			if retryCount == maxRetries {
-				break
-			}
-		}
-		if st.adsEnabled && totalDur < BufferThreshold && nextStart >= nextBreak && len(breaks) > 0 {
-			log.Printf("Station %s: Inserting initial ad break at %.3fs for video %d", st.name, nextBreak, st.currentVideo)
-			availableAds := make([]int64, len(adIDs))
-			copy(availableAds, adIDs)
-			adDurTotal := 0.0
-			for i := 0; i < 3 && totalDur < BufferThreshold; i++ {
-				if len(availableAds) == 0 {
-					log.Printf("Station %s: No more available ads, stopping at %d of 3", st.name, i)
-					break
-				}
-				idx := rand.Intn(len(availableAds))
-				adID := availableAds[idx]
-				adDur := getVideoDur(adID, db)
-				if adDur <= 0 {
-					errorLogger.Printf("Station %s: Invalid duration for ad %d, skipping", st.name, adID)
-					availableAds = append(availableAds[:idx], availableAds[idx+1:]...)
-					continue
-				}
-				var retryCount int
-				for retryCount < maxAdRetries {
-					segments, spsPPS, fmtpLine, actualDur, fps, err := processVideo(st, adID, db, 0, adDur)
-					if err != nil {
-						log.Printf("Station %s: Failed to process initial ad %d (retry %d/%d): %v", st.name, adID, retryCount+1, maxAdRetries, err)
-						if segments != nil && len(segments) > 0 {
-							os.Remove(segments[0])
-							os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
-						}
-						retryCount++
-						if retryCount == maxAdRetries {
-							errorLogger.Printf("Station %s: All %d retries failed for ad %d, skipping", st.name, maxAdRetries, adID)
-							break
-						}
-						continue
-					}
-					data, err := os.ReadFile(segments[0])
-					if err != nil || len(data) == 0 {
-						log.Printf("Station %s: Invalid ad segment %s: read error or empty (retry %d/%d): %v", st.name, segments[0], retryCount+1, maxAdRetries, err)
-						os.Remove(segments[0])
-						os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
-						retryCount++
-						if retryCount == maxAdRetries {
-							errorLogger.Printf("Station %s: All %d retries failed for ad %d due to invalid segment, skipping", st.name, maxAdRetries, adID)
-							break
-						}
-						continue
-					}
-					nalus := splitNALUs(data)
-					if len(nalus) == 0 {
-						log.Printf("Station %s: No NALUs in ad segment %s (retry %d/%d)", st.name, segments[0], retryCount+1, maxAdRetries)
-						os.Remove(segments[0])
-						os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
-						retryCount++
-						if retryCount == maxAdRetries {
-							errorLogger.Printf("Station %s: All %d retries failed for ad %d due to no NALUs, skipping", st.name, maxAdRetries, adID)
-							break
-						}
-						continue
-					}
-					audioPath := strings.Replace(segments[0], ".h264", ".opus", 1)
-					if _, err := os.Stat(audioPath); os.IsNotExist(err) {
-						log.Printf("Station %s: Ad audio file %s not found (retry %d/%d)", st.name, audioPath, retryCount+1, maxAdRetries)
-						os.Remove(segments[0])
-						os.Remove(audioPath)
-						retryCount++
-						if retryCount == maxAdRetries {
-							errorLogger.Printf("Station %s: All %d retries failed for ad %d due to missing audio, skipping", st.name, maxAdRetries, adID)
-							break
-						}
-						continue
-					}
-					if len(st.spsPPS) == 0 {
-						st.spsPPS = spsPPS
-						st.fmtpLine = fmtpLine
-					}
-					adChunk := bufferedChunk{
-						segPath: segments[0],
-						dur:     actualDur,
-						isAd:    true,
-						videoID: adID,
-						fps:     fps,
-					}
-					st.segmentList = append(st.segmentList, adChunk)
-					totalDur += actualDur
-					adDurTotal += actualDur
-					log.Printf("Station %s: Queued initial ad %d with duration %.3fs at break %.3fs", st.name, adID, actualDur, nextBreak)
-					availableAds = append(availableAds[:idx], availableAds[idx+1:]...)
-					break
-				}
-			}
-			if adDurTotal > 0 {
-				log.Printf("Station %s: Queued %f seconds of ads at break %.3fs", st.name, adDurTotal, nextBreak)
-			} else {
-				log.Printf("Station %s: Failed to queue any initial ads at break %.3fs", st.name, nextBreak)
-			}
-		}
-		log.Printf("Station %s: Initial segmentList: %v", st.name, st.segmentList)
-		go manageProcessing(st, db)
-		go sender(st, db)
-	}
-	st.mu.Unlock()
-	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
-		log.Printf("Station %s: ICE state: %s", stationName, state.String())
-	})
-	if msg.Type == "offer" {
-		offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: msg.SDP}
-		if err := pc.SetRemoteDescription(offer); err != nil {
-			log.Printf("SetRemoteDescription error: %v", err)
-			st.mu.Lock()
-			st.viewers--
-			if st.viewers == 0 {
-				close(st.stopCh)
-				st.stopCh = make(chan struct{})
-			}
-			st.mu.Unlock()
-			c.JSON(500, gin.H{"error": err.Error()})
-			pc.Close()
-			return
-		}
-		if _, err = pc.AddTrack(st.trackVideo); err != nil {
-			log.Printf("AddTrack video error: %v", err)
-			st.mu.Lock()
-			st.viewers--
-			if st.viewers == 0 {
-				close(st.stopCh)
-				st.stopCh = make(chan struct{})
-			}
-			st.mu.Unlock()
-			c.JSON(500, gin.H{"error": err.Error()})
-			pc.Close()
-			return
-		}
-		if _, err = pc.AddTrack(st.trackAudio); err != nil {
-			log.Printf("AddTrack audio error: %v", err)
-			st.mu.Lock()
-			st.viewers--
-			if st.viewers == 0 {
-				close(st.stopCh)
-				st.stopCh = make(chan struct{})
-			}
-			st.mu.Unlock()
-			c.JSON(500, gin.H{"error": err.Error()})
-			pc.Close()
-			return
-		}
-		log.Printf("Station %s: Tracks added", stationName)
-		answer, err := pc.CreateAnswer(nil)
-		if err != nil {
-			log.Printf("CreateAnswer error: %v", err)
-			st.mu.Lock()
-			st.viewers--
-			if st.viewers == 0 {
-				close(st.stopCh)
-				st.stopCh = make(chan struct{})
-			}
-			st.mu.Unlock()
-			c.JSON(500, gin.H{"error": err.Error()})
-			pc.Close()
-			return
-		}
-		gatherComplete := webrtc.GatheringCompletePromise(pc)
-		if err := pc.SetLocalDescription(answer); err != nil {
-			log.Printf("SetLocalDescription error: %v", err)
-			st.mu.Lock()
-			st.viewers--
-			if st.viewers == 0 {
-				close(st.stopCh)
-				st.stopCh = make(chan struct{})
-			}
-			st.mu.Unlock()
-			c.JSON(500, gin.H{"error": err.Error()})
-			pc.Close()
-			return
-		}
-		<-gatherComplete
-		log.Printf("Station %s: SDP Answer: %s", stationName, pc.LocalDescription().SDP)
-		c.JSON(200, gin.H{"type": "answer", "sdp": pc.LocalDescription().SDP})
-	}
-	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
-		log.Printf("Station %s: PC state: %s", stationName, s.String())
-		if s == webrtc.PeerConnectionStateFailed || s == webrtc.PeerConnectionStateDisconnected {
-			st.mu.Lock()
-			st.viewers--
-			if st.viewers == 0 {
-				close(st.stopCh)
-				st.stopCh = make(chan struct{})
-				mu.Lock()
-				if !st.adsEnabled {
-					delete(noAdsStations, stationName)
-					log.Printf("Removed no-ads station %s due to no viewers", stationName)
-				} else {
-					delete(stations, stationName)
-					log.Printf("Removed station %s due to no viewers", stationName)
-				}
-				mu.Unlock()
-			}
-			st.mu.Unlock()
-			if err := pc.Close(); err != nil {
-				log.Printf("Failed to close PC: %v", err)
-			}
-		}
-	})
+    st.mu.Unlock()
+    pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
+        log.Printf("Station %s: ICE state: %s", stationName, state.String())
+    })
+    if msg.Type == "offer" {
+        offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: msg.SDP}
+        if err := pc.SetRemoteDescription(offer); err != nil {
+            log.Printf("SetRemoteDescription error: %v", err)
+            st.mu.Lock()
+            st.viewers--
+            if st.viewers == 0 {
+                close(st.stopCh)
+                st.stopCh = make(chan struct{})
+            }
+            st.mu.Unlock()
+            c.JSON(500, gin.H{"error": err.Error()})
+            pc.Close()
+            return
+        }
+        if _, err = pc.AddTrack(st.trackVideo); err != nil {
+            log.Printf("AddTrack video error: %v", err)
+            st.mu.Lock()
+            st.viewers--
+            if st.viewers == 0 {
+                close(st.stopCh)
+                st.stopCh = make(chan struct{})
+            }
+            st.mu.Unlock()
+            c.JSON(500, gin.H{"error": err.Error()})
+            pc.Close()
+            return
+        }
+        if _, err = pc.AddTrack(st.trackAudio); err != nil {
+            log.Printf("AddTrack audio error: %v", err)
+            st.mu.Lock()
+            st.viewers--
+            if st.viewers == 0 {
+                close(st.stopCh)
+                st.stopCh = make(chan struct{})
+            }
+            st.mu.Unlock()
+            c.JSON(500, gin.H{"error": err.Error()})
+            pc.Close()
+            return
+        }
+        log.Printf("Station %s: Tracks added", stationName)
+        answer, err := pc.CreateAnswer(nil)
+        if err != nil {
+            log.Printf("CreateAnswer error: %v", err)
+            st.mu.Lock()
+            st.viewers--
+            if st.viewers == 0 {
+                close(st.stopCh)
+                st.stopCh = make(chan struct{})
+            }
+            st.mu.Unlock()
+            c.JSON(500, gin.H{"error": err.Error()})
+            pc.Close()
+            return
+        }
+        gatherComplete := webrtc.GatheringCompletePromise(pc)
+        if err := pc.SetLocalDescription(answer); err != nil {
+            log.Printf("SetLocalDescription error: %v", err)
+            st.mu.Lock()
+            st.viewers--
+            if st.viewers == 0 {
+                close(st.stopCh)
+                st.stopCh = make(chan struct{})
+            }
+            st.mu.Unlock()
+            c.JSON(500, gin.H{"error": err.Error()})
+            pc.Close()
+            return
+        }
+        <-gatherComplete
+        log.Printf("Station %s: SDP Answer: %s", stationName, pc.LocalDescription().SDP)
+        c.JSON(200, gin.H{"type": "answer", "sdp": pc.LocalDescription().SDP})
+    }
+    pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
+        log.Printf("Station %s: PC state: %s", stationName, s.String())
+        if s == webrtc.PeerConnectionStateFailed || s == webrtc.PeerConnectionStateDisconnected {
+            st.mu.Lock()
+            st.viewers--
+            if st.viewers == 0 {
+                close(st.stopCh)
+                st.stopCh = make(chan struct{})
+                mu.Lock()
+                if !st.adsEnabled {
+                    delete(noAdsStations, stationName)
+                    log.Printf("Removed no-ads station %s due to no viewers", stationName)
+                } else {
+                    delete(stations, stationName)
+                    log.Printf("Removed station %s due to no viewers", stationName)
+                }
+                mu.Unlock()
+            }
+            st.mu.Unlock()
+            if err := pc.Close(); err != nil {
+                log.Printf("Failed to close PC: %v", err)
+            }
+        }
+    })
 }
 
 func indexHandler(c *gin.Context) {
@@ -2521,22 +2542,23 @@ async function createOffer() {
             log('ICE failed - manual restart may be needed.');
             document.getElementById('restartIceButton').disabled = false;
         }
-        if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-            log('ICE connected - assigned stream to video element.');
-        }
-    };
-    pc.onconnectionstatechange = () => log('Peer connection state: ' + pc.connectionState);
-    pc.onicecandidate = event => {
-        if (event.candidate) {
-            log('New ICE candidate: ' + JSON.stringify(event.candidate));
-        } else {
-            log('All ICE candidates gathered (end-of-candidates)');
-        }
-    };
-    const offer = await pc.createOffer({ offerToReceiveVideo: true, offerToReceiveAudio: true });
-    await pc.setLocalDescription(offer);
-    log('Local Offer SDP: ' + offer.sdp);
-    document.getElementById('sendOfferButton').disabled = false;
+            if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+                log('ICE connected - assigned stream to video element.');
+            }
+        };
+        pc.onconnectionstatechange = () => log('Peer connection state: ' + pc.connectionState);
+        pc.onicecandidate = event => {
+            if (event.candidate) {
+                log('New ICE candidate: ' + JSON.stringify(event.candidate));
+            } else {
+                log('All ICE candidates gathered (end-of-candidates)');
+            }
+        };
+        const offer = await pc.createOffer({ offerToReceiveVideo: true, offerToReceiveAudio: true });
+        await pc.setLocalDescription(offer);
+        log('Local Offer SDP: ' + offer.sdp);
+        document.getElementById('sendOfferButton').disabled = false;
+    }
 }
 async function sendOfferToServer() {
     let baseUrl = document.getElementById('serverUrl').value;
