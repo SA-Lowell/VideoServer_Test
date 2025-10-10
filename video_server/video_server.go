@@ -1,5 +1,4 @@
 package main
-
 import (
     "bytes"
     "database/sql"
@@ -18,7 +17,6 @@ import (
     "strings"
     "sync"
     "time"
-
     _ "github.com/lib/pq"
     "github.com/gin-contrib/cors"
     "github.com/gin-gonic/gin"
@@ -26,95 +24,83 @@ import (
     "github.com/pion/webrtc/v3/pkg/media"
     "github.com/pion/webrtc/v3/pkg/media/oggreader"
 )
-
 var errorLogger *log.Logger
-
 const (
-    HlsDir              = "./webrtc_segments"
-    Port                = ":8081"
-    ClockRate           = 90000
-    AudioFrameMs        = 20
-    DefaultFPSNum       = 30000
-    DefaultFPSDen       = 1001
-    DefaultDur          = 0.0
-    DefaultStation      = "default"
-    AdInsertPath        = "./ad_insert.exe"
+    HlsDir = "./webrtc_segments"
+    Port = ":8081"
+    ClockRate = 90000
+    AudioFrameMs = 20
+    DefaultFPSNum = 30000
+    DefaultFPSDen = 1001
+    DefaultDur = 0.0
+    DefaultStation = "default"
+    AdInsertPath = "./ad_insert.exe"
     DefaultVideoBaseDir = "Z:/Videos"
-    DefaultTempPrefix   = "ad_insert_"
-    ChunkDuration       = 30.0 // Process 30-second chunks
-    BufferThreshold     = 120.0 // Start processing more chunks when buffer < 120s
-    maxAdRetries        = 5     // Higher retry limit for ads
+    DefaultTempPrefix = "ad_insert_"
+    ChunkDuration = 30.0 // Process 30-second chunks
+    BufferThreshold = 120.0 // Start processing more chunks when buffer < 120s
+    maxAdRetries = 5 // Higher retry limit for ads
 )
-
 const dbConnString = "user=postgres password=aaaaaaaaaa dbname=webrtc_tv sslmode=disable host=localhost port=5432"
-
 type fpsPair struct {
     num int
     den int
 }
-
 type bufferedChunk struct {
     segPath string
-    dur     float64
-    isAd    bool
+    dur float64
+    isAd bool
     videoID int64
-    fps     fpsPair
+    fps fpsPair
 }
-
 type bitReader struct {
     data []byte
-    pos  int
+    pos int
 }
-
 type LoudnormOutput struct {
-    InputI      string `json:"input_i"`
-    InputLRA    string `json:"input_lra"`
-    InputTP     string `json:"input_tp"`
+    InputI string `json:"input_i"`
+    InputLRA string `json:"input_lra"`
+    InputTP string `json:"input_tp"`
     InputThresh string `json:"input_thresh"`
 }
-
 type Station struct {
-    name                string
-    segmentList         []bufferedChunk
-    spsPPS              [][]byte
-    fmtpLine            string
-    trackVideo          *webrtc.TrackLocalStaticSample
-    trackAudio          *webrtc.TrackLocalStaticSample
-    videoQueue          []int64
-    currentVideo        int64
-    currentIndex        int
-    currentOffset       float64
-    viewers             int
-    processing          bool
-    stopCh              chan struct{}
-    adsEnabled          bool
-    mu                  sync.Mutex
-    currentVideoRTPTS   uint32
+    name string
+    segmentList []bufferedChunk
+    spsPPS [][]byte
+    fmtpLine string
+    trackVideo *webrtc.TrackLocalStaticSample
+    trackAudio *webrtc.TrackLocalStaticSample
+    videoQueue []int64
+    currentVideo int64
+    currentIndex int
+    currentOffset float64
+    viewers int
+    processing bool
+    stopCh chan struct{}
+    adsEnabled bool
+    mu sync.Mutex
+    currentVideoRTPTS uint32
     currentAudioSamples uint32
 }
-
 var adIDs []int64
 var videoBaseDir string
 var stations = make(map[string]*Station)
 var noAdsStations = make(map[string]*Station)
 var mu sync.Mutex
 var globalStart = time.Now()
-
 func newBitReader(data []byte) *bitReader {
     return &bitReader{data: data, pos: 0}
 }
-
 func (br *bitReader) readBit() (uint, error) {
     if br.pos/8 >= len(br.data) {
         return 0, fmt.Errorf("EOF")
     }
     byteIdx := br.pos / 8
-    bitIdx := 7 - (br.pos % 8)
+    bitIdx := 7 - (br.pos % 8) // Declare bitIdx here
     bit := uint((br.data[byteIdx] >> bitIdx) & 1)
     br.pos++
     return bit, nil
 }
-
 func (br *bitReader) readUe() (uint, error) {
     leadingZeros := 0
     for {
@@ -137,7 +123,6 @@ func (br *bitReader) readUe() (uint, error) {
     }
     return val, nil
 }
-
 func getFirstMbInSlice(nalu []byte) (uint, error) {
     if len(nalu) < 2 {
         return 0, fmt.Errorf("NALU too short")
@@ -156,7 +141,6 @@ func getFirstMbInSlice(nalu []byte) (uint, error) {
     br := newBitReader(rbsp)
     return br.readUe()
 }
-
 func sanitizeTrackID(name string) string {
     return strings.ReplaceAll(strings.ReplaceAll(name, " ", "_"), "'", "")
 }
@@ -227,7 +211,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         var probeResult struct {
             Streams []struct {
                 SampleRate string `json:"sample_rate"`
-                Channels int `json:"channels"`
+                Channels   int    `json:"channels"`
             } `json:"streams"`
         }
         if err := json.Unmarshal(outputProbe, &probeResult); err != nil {
@@ -319,7 +303,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-avoid_negative_ts", "make_zero",
             "-fflags", "+genpts",
             "-async", "1",
-            "-max_delay", "0", // Added to minimize sync issues
+            "-max_delay", "0",
             "-threads", "0",
             "-f", "opus",
             opusPath,
@@ -342,37 +326,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         log.Printf("Station %s: FFmpeg audio output for %s: %s", st.name, opusPath, string(outputAudio))
         if err != nil {
             errorLogger.Printf("Station %s: ffmpeg audio command failed for %s: %v", st.name, opusPath, err)
-            argsAudio = []string{
-                "-y",
-                "-ss", fmt.Sprintf("%.3f", startTime),
-                "-i", fullEpisodePath,
-                "-t", fmt.Sprintf("%.3f", adjustedChunkDur),
-                "-map", "0:a:0",
-                "-c:a", "libopus",
-                "-b:a", "128k",
-                "-ar", "48000",
-                "-ac", "2",
-                "-frame_duration", "20",
-                "-page_duration", "20000",
-                "-application", "audio",
-                "-vbr", "on",
-                "-avoid_negative_ts", "make_zero",
-                "-fflags", "+genpts",
-                "-async", "1",
-                "-max_delay", "0", // Added to minimize sync issues
-                "-threads", "0",
-                "-f", "opus",
-                opusPath,
-            }
-            log.Printf("Station %s: Retrying audio encode without loudnorm for %s", st.name, opusPath)
-            cmdAudio = exec.Command("ffmpeg", argsAudio...)
-            outputAudio, err = cmdAudio.CombinedOutput()
-            log.Printf("Station %s: FFmpeg audio retry output for %s: %s", st.name, opusPath, string(outputAudio))
-            if err != nil {
-                errorLogger.Printf("Station %s: ffmpeg audio retry failed for %s: %v", st.name, opusPath, err)
-            } else {
-                log.Printf("Station %s: ffmpeg audio retry succeeded for %s", st.name, opusPath)
-            }
+            return nil, nil, "", 0, fpsPair{}, fmt.Errorf("ffmpeg audio with loudnorm failed for video %d at %fs: %v", videoID, startTime, err)
         } else {
             log.Printf("Station %s: ffmpeg audio succeeded for %s", st.name, opusPath)
         }
@@ -398,7 +352,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-vbr", "on",
             "-avoid_negative_ts", "make_zero",
             "-fflags", "+genpts",
-            "-max_delay", "0", // Added for silent audio
+            "-max_delay", "0",
             "-threads", "0",
             "-f", "opus",
             opusPath,
@@ -448,11 +402,11 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         "-i", fullEpisodePath,
         "-t", fmt.Sprintf("%.3f", adjustedChunkDur),
         "-c:v", "libx264",
-        "-preset", "ultrafast", // Changed to ultrafast
+        "-preset", "ultrafast",
         "-crf", "23",
         "-bf", "0",
-        "-maxrate", "20M",
-        "-bufsize", "40M",
+        "-maxrate", "5M",
+        "-bufsize", "10M",
         "-profile:v", "high",
         "-level", "5.2",
         "-pix_fmt", "yuv420p",
@@ -470,7 +424,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         fullSegPath,
     }
     if isFinalChunk {
-        insertIndex := len(argsVideo) - 7 // Before -g
+        insertIndex := len(argsVideo) - 7
         argsVideo = append(argsVideo[:insertIndex], append([]string{"-force_key_frames", "0:expr=eq(n,0)"}, argsVideo[insertIndex:]...)...)
         log.Printf("Station %s: Forcing IDR frame at start for final chunk %s", st.name, fullSegPath)
     }
@@ -498,7 +452,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-i", fullEpisodePath,
             "-t", fmt.Sprintf("%.3f", adjustedChunkDur),
             "-c:v", "libx264",
-            "-preset", "ultrafast", // Changed to ultrafast
+            "-preset", "ultrafast",
             "-crf", "23",
             "-maxrate", "20M",
             "-bufsize", "40M",
@@ -546,7 +500,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-y",
             "-i", tempMP4Path,
             "-c:v", "libx264",
-            "-preset", "ultrafast", // Changed to ultrafast
+            "-preset", "ultrafast",
             "-crf", "23",
             "-maxrate", "20M",
             "-bufsize", "40M",
@@ -591,7 +545,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
                 "-ar", "48000",
                 "-ac", "2",
                 "-async", "1",
-                "-max_delay", "0", // Added to minimize sync issues
+                "-max_delay", "0",
                 "-threads", "0",
                 "-vn",
                 "-f", "opus",
@@ -614,29 +568,9 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             log.Printf("Station %s: FFmpeg re-encode audio output for %s: %s", st.name, opusPath, string(outputReencodeAudio))
             if err != nil {
                 errorLogger.Printf("Station %s: Re-encoding audio failed for %s: %v", st.name, opusPath, err)
-                argsReencodeAudio = []string{
-                    "-y",
-                    "-i", tempMP4Path,
-                    "-c:a", "libopus",
-                    "-b:a", "128k",
-                    "-ar", "48000",
-                    "-ac", "2",
-                    "-async", "1",
-                    "-max_delay", "0", // Added to minimize sync issues
-                    "-threads", "0",
-                    "-vn",
-                    "-f", "opus",
-                    opusPath,
-                }
-                cmdReencodeAudio = exec.Command("ffmpeg", argsReencodeAudio...)
-                outputReencodeAudio, err = cmdReencodeAudio.CombinedOutput()
-                log.Printf("Station %s: FFmpeg re-encode audio retry output for %s: %s", st.name, opusPath, string(outputReencodeAudio))
-                if err != nil {
-                    errorLogger.Printf("Station %s: Re-encoding audio retry failed for %s: %v", st.name, opusPath, err)
-                    os.Remove(fullSegPath)
-                    os.Remove(tempMP4Path)
-                    return nil, nil, "", 0, fpsPair{}, fmt.Errorf("re-encoding audio failed for video %d: %v", videoID, err)
-                }
+                os.Remove(fullSegPath)
+                os.Remove(tempMP4Path)
+                return nil, nil, "", 0, fpsPair{}, fmt.Errorf("re-encoding audio with loudnorm failed for video %d: %v", videoID, err)
             }
             audioData, err = os.ReadFile(opusPath)
             if err != nil || len(audioData) == 0 {
@@ -673,43 +607,63 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
     } else {
         segments = append(segments, fullSegPath)
     }
-    var cmdDur *exec.Cmd
-    var outputDur []byte
-    cmdDur = exec.Command(
+    // Calculate accurate duration from frame count
+    var actualDur float64
+    cmdFrames := exec.Command(
         "ffprobe",
         "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "json",
+        "-count_frames",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=nb_read_frames",
+        "-of", "default=noprint_wrappers=1:nokey=1",
         fullSegPath,
     )
-    outputDur, err = cmdDur.Output()
-    var actualDur float64
+    outputFrames, err := cmdFrames.Output()
+    var numFrames int64
     if err == nil {
-        var result struct {
-            Format struct {
-                Duration string `json:"duration"`
-            } `json:"format"`
+        framesStr := strings.TrimSpace(string(outputFrames))
+        numFrames, err = strconv.ParseInt(framesStr, 10, 64)
+        if err == nil && numFrames > 0 {
+            actualDur = float64(numFrames) * float64(fpsDen) / float64(fpsNum)
+            log.Printf("Station %s: Actual duration from frame count: %.3fs (%d frames at %d/%d fps)", st.name, actualDur, numFrames, fpsNum, fpsDen)
         }
-        if err := json.Unmarshal(outputDur, &result); err != nil {
-            errorLogger.Printf("Station %s: Failed to parse ffprobe JSON for %s: %v", st.name, fullSegPath, err)
-        } else if result.Format.Duration != "" {
-            actualDur, err = strconv.ParseFloat(result.Format.Duration, 64)
-            if err != nil {
-                errorLogger.Printf("Station %s: Failed to parse duration for %s: %v", st.name, fullSegPath, err)
-            } else {
-                log.Printf("Station %s: Video segment %s duration: %.3fs", st.name, fullSegPath, actualDur)
+    }
+    if actualDur == 0 {
+        cmdDur := exec.Command(
+            "ffprobe",
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "json",
+            fullSegPath,
+        )
+        outputDur, err := cmdDur.Output()
+        if err == nil {
+            var result struct {
+                Format struct {
+                    Duration string `json:"duration"`
+                } `json:"format"`
+            }
+            if err := json.Unmarshal(outputDur, &result); err != nil {
+                errorLogger.Printf("Station %s: Failed to parse ffprobe JSON for %s: %v", st.name, fullSegPath, err)
+            } else if result.Format.Duration != "" {
+                actualDur, err = strconv.ParseFloat(result.Format.Duration, 64)
+                if err != nil {
+                    errorLogger.Printf("Station %s: Failed to parse duration for %s: %v", st.name, fullSegPath, err)
+                } else {
+                    log.Printf("Station %s: Actual duration from ffprobe format: %.3fs", st.name, actualDur)
+                }
             }
         }
     }
     if actualDur == 0 {
-        cmdDur = exec.Command(
+        cmdDur := exec.Command(
             "ffprobe",
             "-v", "error",
             "-show_entries", "format=duration",
             "-of", "json",
             fullEpisodePath,
         )
-        outputDur, err = cmdDur.Output()
+        outputDur, err := cmdDur.Output()
         if err == nil {
             var result struct {
                 Format struct {
@@ -766,7 +720,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         errorLogger.Printf("Station %s: ffprobe audio duration failed for %s: %v, assuming video duration %.3fs", st.name, opusPath, err, actualDur)
         audioDur = actualDur
     }
-    if math.Abs(audioDur-actualDur) > 0.1 {
+    if math.Abs(audioDur-actualDur) > 0.01 {
         log.Printf("Station %s: Audio duration %.3fs differs from video duration %.3fs, re-encoding audio", st.name, audioDur, actualDur)
         argsAudio := []string{
             "-y",
@@ -785,7 +739,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-avoid_negative_ts", "make_zero",
             "-fflags", "+genpts",
             "-async", "1",
-            "-max_delay", "0", // Added to minimize sync issues
+            "-max_delay", "0",
             "-threads", "0",
             "-f", "opus",
             opusPath,
@@ -818,7 +772,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
                 "-vbr", "on",
                 "-avoid_negative_ts", "make_zero",
                 "-fflags", "+genpts",
-                "-max_delay", "0", // Added to minimize sync issues
+                "-max_delay", "0",
                 "-threads", "0",
                 "-f", "opus",
                 opusPath,
@@ -829,40 +783,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         log.Printf("Station %s: FFmpeg audio re-encode output for %s: %s", st.name, opusPath, string(outputAudio))
         if err != nil {
             errorLogger.Printf("Station %s: ffmpeg audio re-encode failed for %s: %v", st.name, opusPath, err)
-            if hasAudio {
-                argsAudio = []string{
-                    "-y",
-                    "-ss", fmt.Sprintf("%.3f", startTime),
-                    "-i", fullEpisodePath,
-                    "-t", fmt.Sprintf("%.3f", actualDur),
-                    "-map", "0:a:0",
-                    "-c:a", "libopus",
-                    "-b:a", "128k",
-                    "-ar", "48000",
-                    "-ac", "2",
-                    "-frame_duration", "20",
-                    "-page_duration", "20000",
-                    "-application", "audio",
-                    "-vbr", "on",
-                    "-avoid_negative_ts", "make_zero",
-                    "-fflags", "+genpts",
-                    "-async", "1",
-                    "-max_delay", "0", // Added to minimize sync issues
-                    "-threads", "0",
-                    "-f", "opus",
-                    opusPath,
-                }
-                cmdAudio = exec.Command("ffmpeg", argsAudio...)
-                outputAudio, err = cmdAudio.CombinedOutput()
-                log.Printf("Station %s: FFmpeg audio re-encode retry output for %s: %s", st.name, opusPath, string(outputAudio))
-                if err != nil {
-                    errorLogger.Printf("Station %s: ffmpeg audio re-encode retry failed for %s: %v", st.name, opusPath, err)
-                    return nil, nil, "", 0, fpsPair{}, fmt.Errorf("ffmpeg audio re-encode failed for video %d at %fs: %v", videoID, startTime, err)
-                }
-            } else {
-                errorLogger.Printf("Station %s: ffmpeg audio re-encode failed for %s: %v", st.name, opusPath, err)
-                return nil, nil, "", 0, fpsPair{}, fmt.Errorf("ffmpeg audio re-encode failed for video %d at %fs: %v", videoID, startTime, err)
-            }
+            return nil, nil, "", 0, fpsPair{}, fmt.Errorf("ffmpeg audio re-encode failed for video %d at %fs: %v", videoID, startTime, err)
         }
         log.Printf("Station %s: Re-encoded audio for %s to match video duration %.3fs", st.name, opusPath, actualDur)
     }
@@ -905,7 +826,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-y",
             "-i", fullSegPath,
             "-c:v", "libx264",
-            "-preset", "ultrafast", // Changed to ultrafast
+            "-preset", "ultrafast",
             "-crf", "23",
             "-bf", "0",
             "-maxrate", "20M",
@@ -994,7 +915,6 @@ func getBreakPoints(videoID int64, db *sql.DB) ([]float64, error) {
     sort.Float64s(bps)
     return bps, nil
 }
-
 func getVideoDur(videoID int64, db *sql.DB) float64 {
     var dur sql.NullFloat64
     err := db.QueryRow("SELECT duration FROM videos WHERE id = $1", videoID).Scan(&dur)
@@ -1004,7 +924,6 @@ func getVideoDur(videoID int64, db *sql.DB) float64 {
     }
     return dur.Float64
 }
-
 func loadStation(stationName string, db *sql.DB, adsEnabled bool, originalSt *Station) *Station {
     st := &Station{
         name:        stationName,
@@ -1018,13 +937,11 @@ func loadStation(stationName string, db *sql.DB, adsEnabled bool, originalSt *St
     var currentVideoID int64
     var currentVideoIndex int
     var currentOffset float64
-
     err := db.QueryRow("SELECT unix_start FROM stations WHERE name = $1", stationName).Scan(&unixStart)
     if err != nil {
         log.Printf("Failed to get unix_start for station %s: %v", stationName, err)
         return nil
     }
-
     rows, err := db.Query(
         "SELECT sv.video_id FROM station_videos sv JOIN stations s ON sv.station_id = s.id WHERE s.name = $1 ORDER BY sv.id ASC",
         stationName)
@@ -1033,7 +950,6 @@ func loadStation(stationName string, db *sql.DB, adsEnabled bool, originalSt *St
         return nil
     }
     defer rows.Close()
-
     if originalSt != nil {
         videoIds = make([]int64, len(originalSt.videoQueue))
         copy(videoIds, originalSt.videoQueue)
@@ -1058,7 +974,6 @@ func loadStation(stationName string, db *sql.DB, adsEnabled bool, originalSt *St
             log.Printf("No videos found for station %s", stationName)
             return nil
         }
-
         currentTime := time.Now().Unix()
         elapsedSeconds := float64(currentTime - unixStart)
         totalQueueDuration, err := getQueueDuration(videoIds, db)
@@ -1072,7 +987,6 @@ func loadStation(stationName string, db *sql.DB, adsEnabled bool, originalSt *St
             remainingSeconds := math.Mod(elapsedSeconds, totalQueueDuration)
             currentOffset = remainingSeconds
             log.Printf("Station %s: Elapsed %f seconds, %d loops, remaining %f seconds", stationName, elapsedSeconds, loops, remainingSeconds)
-
             for i, vid := range videoIds {
                 var hasCommercialTag bool
                 err = db.QueryRow("SELECT EXISTS (SELECT 1 FROM video_tags vt WHERE vt.video_id = $1 AND vt.tag_id = 4)", vid).Scan(&hasCommercialTag)
@@ -1107,7 +1021,6 @@ func loadStation(stationName string, db *sql.DB, adsEnabled bool, originalSt *St
             }
         }
     }
-
     st.videoQueue = videoIds
     st.currentVideo = currentVideoID
     st.currentIndex = currentVideoIndex
@@ -1133,7 +1046,6 @@ func loadStation(stationName string, db *sql.DB, adsEnabled bool, originalSt *St
     log.Printf("Station %s: Initialized at video %d (index %d) with offset %f seconds, adsEnabled: %v", stationName, currentVideoID, currentVideoIndex, currentOffset, adsEnabled)
     return st
 }
-
 func getQueueDuration(videoIDs []int64, db *sql.DB) (float64, error) {
     totalDuration := 0.0
     for _, vid := range videoIDs {
@@ -1162,7 +1074,6 @@ func getQueueDuration(videoIDs []int64, db *sql.DB) (float64, error) {
     }
     return totalDuration, nil
 }
-
 func manageProcessing(st *Station, db *sql.DB) {
     const maxRetries = 3
     const maxFinalChunkRetries = 5
@@ -1605,8 +1516,10 @@ func sender(st *Station, db *sql.DB) {
             audioData, err := os.ReadFile(audioPath)
             if err != nil {
                 errorLogger.Printf("Station %s (adsEnabled: %v): Failed to read audio %s: %v", st.name, st.adsEnabled, audioPath, err)
+                audioData = []byte{}
             }
             var audioPackets [][]byte
+            var granules []uint64
             if len(audioData) > 0 {
                 reader := bytes.NewReader(audioData)
                 ogg, _, err := oggreader.NewWith(reader)
@@ -1614,7 +1527,7 @@ func sender(st *Station, db *sql.DB) {
                     errorLogger.Printf("Station %s (adsEnabled: %v): Failed to create ogg reader for %s: %v", st.name, st.adsEnabled, audioPath, err)
                 } else {
                     for {
-                        payload, _, err := ogg.ParseNextPage()
+                        payload, header, err := ogg.ParseNextPage()
                         if err == io.EOF {
                             break
                         }
@@ -1627,8 +1540,9 @@ func sender(st *Station, db *sql.DB) {
                             continue
                         }
                         audioPackets = append(audioPackets, payload)
+                        granules = append(granules, header.GranulePosition)
                     }
-                    log.Printf("Station %s (adsEnabled: %v): Parsed %d audio packets for %s", st.name, st.adsEnabled, len(audioPackets), audioPath)
+                    log.Printf("Station %s (adsEnabled: %v): Parsed %d audio packets for %s with granules", st.name, st.adsEnabled, len(audioPackets), audioPath)
                 }
             }
             if len(nalus) == 0 || len(audioData) == 0 {
@@ -1644,7 +1558,6 @@ func sender(st *Station, db *sql.DB) {
                         st.currentOffset = 0.0
                         st.spsPPS = nil
                         st.fmtpLine = ""
-                        // Maintain RTP timestamps
                         log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s, maintaining videoTS=%d, audioTS=%d", st.name, st.adsEnabled, st.currentVideo, currentVideoTS, currentAudioTS)
                     }
                 }
@@ -1736,14 +1649,9 @@ func sender(st *Station, db *sql.DB) {
                 videoTimestamp := startTS
                 const videoClockRate = 90000
                 boundChecked := false
-                ticker := time.NewTicker(frameInterval)
-                defer ticker.Stop()
                 frameIdx := 0
                 expectedSamples := uint32(chunk.dur * float64(videoClockRate))
-                for range ticker.C {
-                    if frameIdx >= actualFrames {
-                        break
-                    }
+                if actualFrames > 0 {
                     if !boundChecked {
                         if err := st.trackVideo.WriteSample(testSample); err != nil {
                             errorLogger.Printf("Station %s (adsEnabled: %v): Video track not bound for frame %d in %s: %v", st.name, st.adsEnabled, frameIdx, segPath, err)
@@ -1795,8 +1703,36 @@ func sender(st *Station, db *sql.DB) {
                     }
                     videoTimestamp += uint32(frameIntervalSeconds * float64(videoClockRate))
                     frameIdx++
-                    if isFinalChunk && videoTimestamp >= expectedSamples {
-                        break
+                    log.Printf("Station %s (adsEnabled: %v): Sent first video frame immediately for %s", st.name, st.adsEnabled, segPath)
+                }
+                if frameIdx < actualFrames {
+                    ticker := time.NewTicker(frameInterval)
+                    defer ticker.Stop()
+                    for range ticker.C {
+                        if frameIdx >= actualFrames {
+                            break
+                        }
+                        sample := media.Sample{
+                            Data: frames[frameIdx],
+                            Duration: frameInterval,
+                            PacketTimestamp: videoTimestamp,
+                        }
+                        if err := st.trackVideo.WriteSample(sample); err != nil {
+                            errorLogger.Printf("Station %s (adsEnabled: %v): Video sample %d write error for %s: %v", st.name, st.adsEnabled, frameIdx, segPath, err)
+                            st.mu.Lock()
+                            st.currentVideoRTPTS = currentVideoTS
+                            st.mu.Unlock()
+                            select {
+                            case done <- struct{}{}:
+                            default:
+                            }
+                            return
+                        }
+                        videoTimestamp += uint32(frameIntervalSeconds * float64(videoClockRate))
+                        frameIdx++
+                        if isFinalChunk && videoTimestamp >= expectedSamples {
+                            break
+                        }
                     }
                 }
                 st.mu.Lock()
@@ -1808,43 +1744,57 @@ func sender(st *Station, db *sql.DB) {
                 default:
                 }
             }(nalus, currentVideoTS)
-            go func(packets [][]byte, startTS uint32) {
+            go func(audioData []byte, startTS uint32) {
                 defer wg.Done()
                 const sampleRate = 48000
-                log.Printf("Station %s (adsEnabled: %v): Starting audio transmission for %s, %d packets, startTS=%d", st.name, st.adsEnabled, audioPath, len(packets), startTS)
                 audioTimestamp := startTS
+                if len(audioData) == 0 {
+                    log.Printf("Station %s (adsEnabled: %v): No audio data for %s, skipping audio transmission", st.name, st.adsEnabled, segPath)
+                    select {
+                    case done <- struct{}{}:
+                    default:
+                    }
+                    return
+                }
+                reader := bytes.NewReader(audioData)
+                ogg, _, err := oggreader.NewWith(reader)
+                if err != nil {
+                    errorLogger.Printf("Station %s (adsEnabled: %v): Failed to create ogg reader for %s: %v", st.name, st.adsEnabled, segPath, err)
+                    select {
+                    case done <- struct{}{}:
+                    default:
+                    }
+                    return
+                }
+                var prevGranule uint64 = 0
                 boundChecked := false
-                ticker := time.NewTicker(time.Millisecond * 20)
-                defer ticker.Stop()
+                testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
                 packetIdx := 0
                 expectedSamples := uint32(chunk.dur * float64(sampleRate))
-                for range ticker.C {
-                    if packetIdx >= len(packets) {
+                ticker := time.NewTicker(time.Millisecond * 20) // Default to 20ms ticker for audio pacing
+                defer ticker.Stop()
+                for {
+                    payload, header, err := ogg.ParseNextPage()
+                    if err == io.EOF {
                         break
                     }
-                    pkt := packets[packetIdx]
-                    if len(pkt) < 1 {
-                        errorLogger.Printf("Station %s (adsEnabled: %v): Empty audio packet %d for %s, skipping", st.name, st.adsEnabled, packetIdx, audioPath)
+                    if err != nil {
+                        errorLogger.Printf("Station %s (adsEnabled: %v): Failed to parse ogg page for %s: %v", st.name, st.adsEnabled, segPath, err)
+                        continue
+                    }
+                    if len(payload) < 1 || (len(payload) >= 8 && (string(payload[:8]) == "OpusHead" || string(payload[:8]) == "OpusTags")) {
+                        log.Printf("Station %s (adsEnabled: %v): Skipping header packet: %s", st.name, st.adsEnabled, string(payload[:8]))
+                        continue
+                    }
+                    durSamples := header.GranulePosition - prevGranule
+                    if durSamples == 0 {
+                        log.Printf("Station %s (adsEnabled: %v): Zero-duration audio packet %d for %s, skipping", st.name, st.adsEnabled, packetIdx, segPath)
                         packetIdx++
                         continue
                     }
-                    toc := pkt[0]
-                    config := (toc >> 3) & 0x1F
-                    baseFrameDurationMs := 20
-                    switch config {
-                    case 0, 1, 2, 3, 16, 17, 18, 19:
-                        baseFrameDurationMs = 10
-                    case 4, 5, 6, 7, 20, 21, 22, 23:
-                        baseFrameDurationMs = 20
-                    case 8, 9, 10, 11:
-                        baseFrameDurationMs = 40
-                    case 12, 13, 14, 15:
-                        baseFrameDurationMs = 60
-                    }
-                    samples := uint32((baseFrameDurationMs * sampleRate) / 1000)
                     if !boundChecked {
                         if err := st.trackAudio.WriteSample(testSample); err != nil {
-                            errorLogger.Printf("Station %s (adsEnabled: %v): Audio track not bound for sample %d in %s: %v", st.name, st.adsEnabled, packetIdx, audioPath, err)
+                            errorLogger.Printf("Station %s (adsEnabled: %v): Audio track not bound for sample %d in %s: %v", st.name, st.adsEnabled, packetIdx, segPath, err)
                             st.mu.Lock()
                             newTrackAudio, err := webrtc.NewTrackLocalStaticSample(
                                 webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
@@ -1875,12 +1825,12 @@ func sender(st *Station, db *sql.DB) {
                         boundChecked = true
                     }
                     sample := media.Sample{
-                        Data: pkt,
-                        Duration: time.Duration(baseFrameDurationMs) * time.Millisecond,
+                        Data: payload,
+                        Duration: time.Duration(durSamples * 1000000000 / uint64(sampleRate)) * time.Nanosecond,
                         PacketTimestamp: audioTimestamp,
                     }
                     if err := st.trackAudio.WriteSample(sample); err != nil {
-                        errorLogger.Printf("Station %s (adsEnabled: %v): Audio sample %d write error for %s: %v", st.name, st.adsEnabled, packetIdx, audioPath, err)
+                        errorLogger.Printf("Station %s (adsEnabled: %v): Audio sample %d write error for %s: %v", st.name, st.adsEnabled, packetIdx, segPath, err)
                         st.mu.Lock()
                         st.currentAudioSamples = audioTimestamp
                         st.mu.Unlock()
@@ -1890,21 +1840,24 @@ func sender(st *Station, db *sql.DB) {
                         }
                         return
                     }
-                    audioTimestamp += samples
+                    audioTimestamp += uint32(durSamples)
+                    prevGranule = header.GranulePosition
                     packetIdx++
+                    if packetIdx == 1 {
+                        log.Printf("Station %s (adsEnabled: %v): Sent first audio packet immediately for %s", st.name, st.adsEnabled, segPath)
+                    } else {
+                        <-ticker.C // Wait for the next tick to pace the sending
+                    }
                     if isFinalChunk && audioTimestamp >= expectedSamples {
                         break
                     }
                 }
-                st.mu.Lock()
-                st.currentAudioSamples = audioTimestamp
-                st.mu.Unlock()
-                log.Printf("Station %s (adsEnabled: %v): Completed audio transmission for %s, final audioTS=%d", st.name, st.adsEnabled, audioPath, audioTimestamp)
+                log.Printf("Station %s (adsEnabled: %v): Completed audio transmission for %s, final audioTS=%d", st.name, st.adsEnabled, segPath, audioTimestamp)
                 select {
                 case done <- struct{}{}:
                 default:
                 }
-            }(audioPackets, currentAudioTS)
+            }(audioData, currentAudioTS)
             go func() {
                 for i := 0; i < 2; i++ {
                     select {
@@ -1933,7 +1886,6 @@ func sender(st *Station, db *sql.DB) {
                     st.currentOffset = 0.0
                     st.spsPPS = nil
                     st.fmtpLine = ""
-                    // Maintain RTP timestamps
                     log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s, maintaining videoTS=%d, audioTS=%d", st.name, st.adsEnabled, st.currentVideo, currentVideoTS, currentAudioTS)
                 }
             }
@@ -1943,7 +1895,7 @@ func sender(st *Station, db *sql.DB) {
             currentAudioTS = st.currentAudioSamples
             st.mu.Unlock()
             wg.Wait()
-            time.Sleep(time.Millisecond * 20) // Reduced delay for smoother transitions
+            // Removed time.Sleep(20ms) to minimize gaps
         }
     }
 }
@@ -1954,7 +1906,6 @@ func min(a, b int) int {
     }
     return b
 }
-
 func splitNALUs(data []byte) [][]byte {
     if len(data) == 0 {
         return nil
@@ -1986,7 +1937,6 @@ func splitNALUs(data []byte) [][]byte {
     }
     return nalus
 }
-
 func signalingHandler(db *sql.DB, c *gin.Context) {
     stationName := c.Query("station")
     if stationName == "" {
@@ -2034,7 +1984,7 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
     log.Printf("Signaling for station %s, adsEnabled: %v", stationName, adsEnabled)
     var msg struct {
         Type string `json:"type"`
-        SDP  string `json:"sdp,omitempty"`
+        SDP string `json:"sdp,omitempty"`
     }
     if err := c.BindJSON(&msg); err != nil {
         log.Printf("JSON bind error: %v", err)
@@ -2044,9 +1994,9 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
     m := &webrtc.MediaEngine{}
     if err := m.RegisterCodec(webrtc.RTPCodecParameters{
         RTPCodecCapability: webrtc.RTPCodecCapability{
-            MimeType:     webrtc.MimeTypeH264,
-            ClockRate:    90000,
-            SDPFmtpLine:  "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640034",
+            MimeType: webrtc.MimeTypeH264,
+            ClockRate: 90000,
+            SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640034",
             RTCPFeedback: []webrtc.RTCPFeedback{{"goog-remb", ""}, {"ccm", "fir"}, {"nack", ""}, {"nack", "pli"}},
         },
         PayloadType: 96,
@@ -2057,10 +2007,10 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
     }
     if err := m.RegisterCodec(webrtc.RTPCodecParameters{
         RTPCodecCapability: webrtc.RTPCodecCapability{
-            MimeType:     webrtc.MimeTypeOpus,
-            ClockRate:    48000,
-            Channels:     2,
-            SDPFmtpLine:  "minptime=10;useinbandfec=1;stereo=1",
+            MimeType: webrtc.MimeTypeOpus,
+            ClockRate: 48000,
+            Channels: 2,
+            SDPFmtpLine: "minptime=10;useinbandfec=1;stereo=1",
         },
         PayloadType: 111,
     }, webrtc.RTPCodecTypeAudio); err != nil {
@@ -2174,10 +2124,10 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
                 }
                 st.segmentList = append(st.segmentList, bufferedChunk{
                     segPath: segments[0],
-                    dur:     actualDur,
-                    isAd:    false,
+                    dur: actualDur,
+                    isAd: false,
                     videoID: st.currentVideo,
-                    fps:     fps,
+                    fps: fps,
                 })
                 log.Printf("Station %s: Queued initial chunk for video %d at %.3fs, duration %.3fs", st.name, st.currentVideo, nextStart, actualDur)
                 totalDur += actualDur
@@ -2398,13 +2348,11 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
         }
     })
 }
-
 func indexHandler(c *gin.Context) {
     var html string = ""
     c.Header("Content-Type", "text/html")
     c.String(200, html)
 }
-
 func updateVideoDurations(db *sql.DB) error {
     if videoBaseDir == "" {
         return fmt.Errorf("videoBaseDir is not set, cannot process video files")
@@ -2573,7 +2521,6 @@ func updateVideoDurations(db *sql.DB) error {
     log.Printf("Successfully updated metadata for %d videos", len(videoIDs))
     return nil
 }
-
 func main() {
     errorLogFile, err := os.OpenFile("error.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
     if err != nil {

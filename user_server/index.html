@@ -85,7 +85,7 @@ let source = null;
 let lastVideoTime = 0;
 let lastCheckTime = 0;
 let freezeCount = 0;
-const maxFreezeRestarts = 3;
+const maxFreezeRestarts = 5; // Increased from 3
 const videoElement = document.getElementById('video');
 const logElement = document.getElementById('log');
 
@@ -277,7 +277,7 @@ async function startConnection() {
                 setTimeout(() => {
                     if (track.muted && freezeCount < maxFreezeRestarts) {
                         log('Video track still muted, scheduling ICE restart');
-                        setTimeout(restartICE, 10000);
+                        setTimeout(restartICE, 5000); // Reduced from 10000
                     }
                 }, 2000);
             };
@@ -296,11 +296,11 @@ async function startConnection() {
             source = audioContext.createMediaStreamSource(new MediaStream([track]));
             analyser = audioContext.createAnalyser();
             analyser.fftSize = 2048;
-            const delayNode = audioContext.createDelay(0.2); // 200ms jitter buffer
+            const delayNode = audioContext.createDelay(0.5); // Increased to 500ms
             source.connect(delayNode);
             delayNode.connect(analyser);
             analyser.connect(audioContext.destination);
-            log(`Connected audio track to AnalyserNode with 200ms jitter buffer, sampleRate=${audioContext.sampleRate}, channels=${source.channelCount}`);
+            log(`Connected audio track to AnalyserNode with 500ms jitter buffer, sampleRate=${audioContext.sampleRate}, channels=${source.channelCount}`);
             track.onunmute = () => {
                 log(`Audio track unmuted: id=${track.id} - media flowing`);
                 const data = new Float32Array(analyser.fftSize);
@@ -333,12 +333,12 @@ async function startConnection() {
         }
         if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
             if (freezeCount < maxFreezeRestarts) {
-                log(`ICE ${pc.iceConnectionState} - scheduling restart in 10 seconds...`);
+                log(`ICE ${pc.iceConnectionState} - scheduling restart in 5 seconds...`);
                 setTimeout(() => {
                     if (pc && (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed')) {
                         restartICE();
                     }
-                }, 10000);
+                }, 5000); // Reduced from 10000
             } else {
                 log('Max ICE restarts reached, reconnecting fully');
                 startConnection();
@@ -349,58 +349,76 @@ async function startConnection() {
         log(`Peer connection state: ${pc.connectionState}`);
         if (pc.connectionState === 'failed') {
             log('Peer connection failed - scheduling ICE restart');
-            setTimeout(restartICE, 10000);
+            setTimeout(restartICE, 5000); // Reduced from 10000
         }
     };
     videoElement.addEventListener('error', () => {
         log(`Video element error: ${videoElement.error ? videoElement.error.message : 'Unknown error'}`);
     });
     videoElement.addEventListener('stalled', () => {
-        log('Video stalled - scheduling ICE restart in 10 seconds');
+        log('Video stalled - scheduling ICE restart in 5 seconds');
         setTimeout(() => {
             if (pc && (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed')) {
                 restartICE();
             }
-        }, 10000);
+        }, 5000); // Reduced from 10000
     });
     videoElement.addEventListener('waiting', () => {
         log('Video waiting for data - checking connection state');
         if (pc && (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed')) {
-            setTimeout(restartICE, 10000);
+            setTimeout(restartICE, 5000); // Reduced from 10000
         }
     });
-    function checkForDesync() {
-        if (!videoElement.srcObject || videoElement.paused || videoElement.ended) return;
-        const now = performance.now() / 1000;
-        const videoTime = videoElement.currentTime;
-        const elapsed = now - lastCheckTime;
-        if (elapsed > 5) {
-            if (Math.abs(videoTime - lastVideoTime) < 1.5 && !videoElement.paused) {
-                log(`Video freeze detected: currentTime=${videoTime}, lastTime=${lastVideoTime}`);
+function checkForDesync() {
+    if (!videoElement.srcObject || videoElement.paused || videoElement.ended) return;
+    const now = performance.now() / 1000;
+    const videoTime = videoElement.currentTime;
+    const elapsed = now - lastCheckTime;
+    if (elapsed > 5) {
+        const timeDiff = Math.abs(videoTime - lastVideoTime - elapsed);
+        if (Math.abs(videoTime - lastVideoTime) < 1.5 && !videoElement.paused) {
+            log(`Video freeze detected: currentTime=${videoTime}, lastTime=${lastVideoTime}, elapsed=${elapsed.toFixed(3)}s`);
+            freezeCount++;
+            if (freezeCount >= maxFreezeRestarts) {
+                log('Max freeze restarts reached, reconnecting fully');
+                startConnection();
+                freezeCount = 0;
+            } else {
+                log('Scheduling ICE restart due to freeze');
+                setTimeout(restartICE, 5000);
+            }
+        } else if (analyser && timeDiff > 3.0) { // Increased threshold to 3s
+            const data = new Float32Array(analyser.fftSize);
+            analyser.getFloatTimeDomainData(data);
+            const level = data.reduce((sum, val) => sum + Math.abs(val), 0) / data.length;
+            log(`Audio-video desync check: videoTime=${videoTime}, expected=${(lastVideoTime + elapsed).toFixed(3)}, diff=${timeDiff.toFixed(3)}s, audioLevel=${level.toFixed(4)}`);
+            if (level < 0.001) {
+                log('Warning: Audio level very low, possible silence or decoding issue');
+            } else if (timeDiff > 5.0) { // Only restart for significant desync
+                log(`Significant audio-video desync detected: diff=${timeDiff.toFixed(3)}s`);
                 freezeCount++;
                 if (freezeCount >= maxFreezeRestarts) {
-                    log('Max freeze restarts reached, reconnecting fully');
+                    log('Max desync restarts reached, reconnecting fully');
                     startConnection();
                     freezeCount = 0;
                 } else {
-                    setTimeout(restartICE, 10000);
-                }
-            } else if (analyser) {
-                const data = new Float32Array(analyser.fftSize);
-                analyser.getFloatTimeDomainData(data);
-                const level = data.reduce((sum, val) => sum + Math.abs(val), 0) / data.length;
-                if (level < 0.001) {
-                    log('Warning: Audio level very low, possible silence or decoding issue');
-                }
-                if (level > 0.01 && Math.abs(videoTime - lastVideoTime - elapsed) > 1.5) {
-                    log(`Audio-video desync detected: videoTime=${videoTime}, expected=${lastVideoTime + elapsed}, audioLevel=${level.toFixed(4)}`);
-                    setTimeout(restartICE, 10000);
+                    log('Scheduling ICE restart due to desync');
+                    setTimeout(restartICE, 5000);
                 }
             }
-            lastVideoTime = videoTime;
-            lastCheckTime = now;
         }
+        // Log decoding performance
+        pc.getStats().then(stats => {
+            stats.forEach(report => {
+                if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                    log(`Decoding performance: framesDecoded=${report.framesDecoded || 0}, fps=${report.framesPerSecond || 0}, jitter=${report.jitter || 0}`);
+                }
+            });
+        });
+        lastVideoTime = videoTime;
+        lastCheckTime = now;
     }
+}
     setInterval(checkForDesync, 5000);
     const audioTransceiver = pc.addTransceiver('audio', { direction: 'recvonly' });
     const videoTransceiver = pc.addTransceiver('video', {
