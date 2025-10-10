@@ -296,10 +296,10 @@ async function startConnection() {
             source = audioContext.createMediaStreamSource(new MediaStream([track]));
             analyser = audioContext.createAnalyser();
             analyser.fftSize = 2048;
-            const delayNode = audioContext.createDelay(0.5); // Increased to 500ms
+            const delayNode = audioContext.createDelay(0.5); // 500ms jitter buffer
             source.connect(delayNode);
             delayNode.connect(analyser);
-            analyser.connect(audioContext.destination);
+            // Do NOT connect analyser to audioContext.destination to avoid duplicate audio
             log(`Connected audio track to AnalyserNode with 500ms jitter buffer, sampleRate=${audioContext.sampleRate}, channels=${source.channelCount}`);
             track.onunmute = () => {
                 log(`Audio track unmuted: id=${track.id} - media flowing`);
