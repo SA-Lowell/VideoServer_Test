@@ -2360,7 +2360,7 @@ func updateVideoDurations(db *sql.DB) error {
     }
     rows, err := db.Query("SELECT id, uri FROM videos WHERE duration IS NULL OR duration = 0 OR loudnorm_input_i IS NULL OR loudnorm_input_i = 0")
     if err != nil {
-        return fmt.Errorf("failed to query videos with NULL duration or loudnorm: %v", err)
+        return fmt.Errorf("failed to query videos with NULL or 0 duration or loudnorm: %v", err)
     }
     defer rows.Close()
     var videoIDs []int64
@@ -2403,13 +2403,13 @@ func updateVideoDurations(db *sql.DB) error {
             }
             var duration sql.NullFloat64
             err := db.QueryRow("SELECT duration FROM videos WHERE id = $1", id).Scan(&duration)
-            if err != nil || !duration.Valid {
+            if err != nil || !duration.Valid || duration.Float64 == 0 {
                 cmd := exec.Command(
                     "ffprobe",
                     "-v", "error",
                     "-show_entries", "format=duration",
                     "-of", "default=noprint_wrappers=1:nokey=1",
-                    fmt.Sprintf("%q", fullPath),
+                    fullPath,
                 )
                 output, err := cmd.Output()
                 if err != nil {
@@ -2494,7 +2494,26 @@ func updateVideoDurations(db *sql.DB) error {
                     mu.Unlock()
                     return
                 }
-                jsonStr := outputStr[jsonStart:]
+                jsonEnd := jsonStart
+                braceCount := 1
+                for i := jsonStart + 1; i < len(outputStr); i++ {
+                    if outputStr[i] == '{' {
+                        braceCount++
+                    } else if outputStr[i] == '}' {
+                        braceCount--
+                        if braceCount == 0 {
+                            jsonEnd = i + 1
+                            break
+                        }
+                    }
+                }
+                if braceCount != 0 {
+                    mu.Lock()
+                    errors = append(errors, fmt.Errorf("unmatched braces in loudnorm JSON for video %d (%s)", id, fullPath))
+                    mu.Unlock()
+                    return
+                }
+                jsonStr := outputStr[jsonStart:jsonEnd]
                 log.Printf("Extracted JSON for video %d (%s):\n%s", id, fullPath, jsonStr)
                 var loudnorm LoudnormOutput
                 if err := json.Unmarshal([]byte(jsonStr), &loudnorm); err != nil {
@@ -2531,6 +2550,7 @@ func updateVideoDurations(db *sql.DB) error {
                     mu.Unlock()
                     return
                 }
+                log.Printf("Attempting to update loudnorm for video %d (%s): I=%.2f, LRA=%.2f, TP=%.2f, Thresh=%.2f", id, fullPath, inputI, inputLRA, inputTP, inputThresh)
                 _, err = db.Exec(
                     "UPDATE videos SET loudnorm_input_i = $1, loudnorm_input_lra = $2, loudnorm_input_tp = $3, loudnorm_input_thresh = $4 WHERE id = $5",
                     inputI, inputLRA, inputTP, inputThresh, id,
@@ -2549,6 +2569,7 @@ func updateVideoDurations(db *sql.DB) error {
     }
     wg.Wait()
     if len(errors) > 0 {
+        errorLogger.Printf("Encountered %d errors during duration and loudnorm updates: %v", len(errors), errors)
         return fmt.Errorf("encountered %d errors during duration and loudnorm updates: %v", len(errors), errors)
     }
     log.Printf("Successfully updated metadata for %d videos", len(videoIDs))
