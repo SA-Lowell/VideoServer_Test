@@ -2,12 +2,12 @@
 -- PostgreSQL database dump
 --
 
-\restrict fJ3LYnu3uQPJlsWMx24MG7S3PbIs52gzna5vyhyvFPzt0dpg700xGTFIBvKCzJF
+\restrict qfaghO4cP96FBT87PU6WbwfBjCD1tfq7V9IflT8JDlPspEJr5OlMvATpzUaz8p7
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.6
 
--- Started on 2025-10-07 16:28:23
+-- Started on 2025-10-11 00:10:18
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -2447,6 +2447,65 @@ COPY public.video_tags (id, video_id, tag_id) FROM stdin;
 51	64	4
 52	65	4
 53	66	4
+54	541	4
+55	542	4
+56	543	4
+57	544	4
+58	545	4
+59	546	4
+60	552	4
+61	551	4
+62	550	4
+63	549	4
+64	548	4
+65	547	4
+66	553	4
+67	554	4
+68	555	4
+69	569	4
+70	568	4
+71	567	4
+72	566	4
+73	565	4
+74	564	4
+75	563	4
+76	562	4
+77	561	4
+78	560	4
+79	559	4
+80	558	4
+81	557	4
+82	556	4
+83	575	4
+84	574	4
+85	573	4
+86	572	4
+87	571	4
+88	570	4
+89	577	4
+90	576	4
+91	580	4
+92	579	4
+93	578	4
+94	582	4
+95	581	4
+96	583	4
+97	584	4
+98	585	4
+99	589	4
+100	588	4
+101	587	4
+102	586	4
+103	591	4
+104	590	4
+105	593	4
+106	592	4
+107	594	4
+108	595	4
+109	597	4
+110	596	4
+111	599	4
+112	598	4
 \.
 
 
@@ -2971,6 +3030,91 @@ COPY public.videos (id, title_id, uri, duration, loudnorm_input_i, loudnorm_inpu
 503	0	Beyond Belief Fact or Fiction/2/Beyond Belief Fact or Fiction 202 Firestation 32, The Computer, The Girl Next Door, The Wallet, The Woods.avi	2581.779200000000	-22.67	8.4	-5.19	-33.15
 509	0	Beyond Belief Fact or Fiction/2/Beyond Belief Fact or Fiction 208 Kirby, Dust, Malibu Cop, A Joyful Noise, The Hooded Chair.avi	2581.979400000000	-20.3	6	-2.63	-30.67
 512	0	Beyond Belief Fact or Fiction/2/Beyond Belief Fact or Fiction 211 Bon Voyage, The Man in the Model T, The Scoop, Angel on Board, Buenos Dias.avi	2563.994767000000	-21.65	5.2	-2.73	-31.9
+522	0	Beyond Belief Fact or Fiction/3/Beyond Belief Fact or Fiction 308 Creepy Comics, Louie the Dip, The Wailing, The Landlady, Curse.avi	2586.984400000000	0	0	0	0
+517	0	Beyond Belief Fact or Fiction/3/Beyond Belief Fact or Fiction 303 The Find, The Golden Cue, The FBI Story, The Gravedigger's Nemesis, Last Rites.avi	2587.985400000000	0	0	0	0
+523	0	Beyond Belief Fact or Fiction/3/Beyond Belief Fact or Fiction 309 For the Record, Halloween, Precious, Get Your Kicks at Motel 66, Phantom Drifter.avi	2584.682100000000	0	0	0	0
+519	0	Beyond Belief Fact or Fiction/3/Beyond Belief Fact or Fiction 305 The Nightmare, The Stalker, The Impossible Car Dream, The Dresser, The Burial.avi	2580.978400000000	0	0	0	0
+524	0	Beyond Belief Fact or Fiction/3/Beyond Belief Fact or Fiction 310 Devil's Tattoo, Static Man, The Bloody Hand, Where Have All the Heroes Gone, War Surplus.avi	2587.985400000000	0	0	0	0
+525	0	Beyond Belief Fact or Fiction/3/Beyond Belief Fact or Fiction 311 Dead Beat Daddy, Ghost Town, The Sewing Machine, The Sleepwalker, Money Laundry.avi	2586.984400000000	0	0	0	0
+526	0	Beyond Belief Fact or Fiction/3/Beyond Belief Fact or Fiction 312 The Handyman, Anatole, Makeup Magic, Screwdriver, Charlie.avi	2586.984400000000	0	0	0	0
+529	0	Beyond Belief Fact or Fiction/4/Beyond Belief Fact or Fiction 402 Writer's Agent, Crypt Ghost, The Doll, Hubert's Curse, Shared Vision.avi	2580.978400000000	0	0	0	0
+528	0	Beyond Belief Fact or Fiction/4/Beyond Belief Fact or Fiction 401 The Devil's Autograph, Mail Order Degree, The News Stand, The Murder of Roy Hennessey, Mysterious Strangers.avi	2586.984400000000	0	0	0	0
+527	0	Beyond Belief Fact or Fiction/3/Beyond Belief Fact or Fiction 313 The Dealer, Gratuity, The Cake, 1st Time Offender, The Mirror of Truth.avi	2587.985400000000	0	0	0	0
+530	0	Beyond Belief Fact or Fiction/4/Beyond Belief Fact or Fiction 403 Out of Service, When I Was Big, The Greedy Investor, Seven Hours of Bad Luck, The Secret of the Coins.avi	2581.979400000000	0	0	0	0
+532	0	Beyond Belief Fact or Fiction/4/Beyond Belief Fact or Fiction 405 House of Shadows, One Hand in the Till, Teasdale's Motor Car, The Vision, The Grave.avi	2579.977400000000	0	0	0	0
+533	0	Beyond Belief Fact or Fiction/4/Beyond Belief Fact or Fiction 406 The Dorm, The Child Artist, The Weatherman, Sit-Down Comedian, Room 245.avi	2581.979400000000	0	0	0	0
+531	0	Beyond Belief Fact or Fiction/4/Beyond Belief Fact or Fiction 404 Second Sight, The Fine Line, The Wrong Turn, Who Was I, You Are Next.avi	2571.969400000000	0	0	0	0
+534	0	Beyond Belief Fact or Fiction/4/Beyond Belief Fact or Fiction 407 The Wreath, Terror Night, Tants, The Candidate, The Ring.avi	2581.979400000000	0	0	0	0
+536	0	Beyond Belief Fact or Fiction/4/Beyond Belief Fact or Fiction 409 The Wealthy Widow, The Witness, The Accident, Bad Dreams, Mental.avi	2581.979400000000	0	0	0	0
+538	0	Beyond Belief Fact or Fiction/4/Beyond Belief Fact or Fiction 411 The Mystery of Douglas Hibbard, Wheelchair Man, The Vigil, The Mandarin's Bowl, Ghost Writer.avi	2581.946033000000	0	0	0	0
+535	0	Beyond Belief Fact or Fiction/4/Beyond Belief Fact or Fiction 408 Caitlin's Candle, The Flower Jury, The Mentor, The Old Bike, The Music Teacher.avi	2072.970900000000	0	0	0	0
+539	0	Beyond Belief Fact or Fiction/4/Beyond Belief Fact or Fiction 412 Witness to Murder, Roulette Wheel, The Phrenologist's Head, The Bridge, The Cigar Box.avi	2580.978400000000	0	0	0	0
+537	0	Beyond Belief Fact or Fiction/4/Beyond Belief Fact or Fiction 410 Moonstruck Beach, Healing Hands, Aspen Sunny Side, Night Walker, Hot Car.avi	2581.979400000000	0	0	0	0
+540	0	Beyond Belief Fact or Fiction/4/Beyond Belief Fact or Fiction 413 The Hand, The Battered Doll, Poker Justice, Above the Clouds, Screen Saver.avi	2581.979400000000	0	0	0	0
+518	0	Beyond Belief Fact or Fiction/3/Beyond Belief Fact or Fiction 304 E-Mail, Blood Donor, Epitaph, Stitches in Time, Soldier.avi	2585.983400000000	0	0	0	0
+516	0	Beyond Belief Fact or Fiction/3/Beyond Belief Fact or Fiction 302 One for the Road, The Music Box, Two to One, Damsel, The Horn.avi	2585.983400000000	0	0	0	0
+515	0	Beyond Belief Fact or Fiction/3/Beyond Belief Fact or Fiction 301 Morning Sickness, The Curse of Hampton Manor, Wax Executioner, Blood Bank, Ring Toss.avi	2587.985400000000	0	0	0	0
+521	0	Beyond Belief Fact or Fiction/3/Beyond Belief Fact or Fiction 307 Connie, Positive I.D., Trucker, Cook Out, The New House.avi	2580.978400000000	0	0	0	0
+520	0	Beyond Belief Fact or Fiction/3/Beyond Belief Fact or Fiction 306 Red Line, Two Sisters, Eclipse, The Ice Box, The Gathering.avi	2581.979400000000	0	0	0	0
+549	0	Commercials/Xbox/DOOM 3/DOOM 3 Trailer 2.mp4	136.221000000000	0	0	0	0
+545	0	Commercials/PC/DOOM II/DOOM II Commercial.mp4	30.221000000000	0	0	0	0
+543	0	Commercials/PC/DOOM 3/DOOM 3 Trailer.mp4	68.941000000000	0	0	0	0
+550	0	Commercials/Xbox/DOOM 3/DOOM 3 Trailer.mp4	83.777596000000	0	0	0	0
+552	0	Commercials/Xbox/DOOM 3/Doom 3 Pre Release Unrated Trailer.mp4	138.101000000000	0	0	0	0
+551	0	Commercials/Xbox/DOOM 3/DOOM 3 UK TV Ad.mp4	20.021000000000	0	0	0	0
+547	0	Commercials/Xbox/DOOM 3/DOOM 3 Commercial.mp4	14.841000000000	0	0	0	0
+554	0	Commercials/SNES/DOOM/DOOM TV Commercial.mp4	15.001000000000	0	0	0	0
+553	0	Commercials/Sega 32X/DOOM Commercial.mp4	31.501000000000	0	0	0	0
+557	0	Commercials/N64/The Legend of Zelda Majora's Mask/The Legend of Zelda Majora's Mask Commercial Ad.mp4	37.781000000000	0	0	0	0
+555	0	Commercials/PC + Xbox/DOOM 3/DOOM 3 PC Xbox Commercial 1.mp4	30.541000000000	0	0	0	0
+563	0	Commercials/N64/The Legend of Zelda Majora's Mask/The Legend of Zelda Majora's Mask Japanese Commercial 1.mp4	29.651882000000	0	0	0	0
+560	0	Commercials/N64/The Legend of Zelda Majora's Mask/The Legend of Zelda Majora's Mask French Commercial 2.mp4	31.031000000000	0	0	0	0
+559	0	Commercials/N64/The Legend of Zelda Majora's Mask/The Legend of Zelda Majora's Mask French Commercial 1.mp4	11.121000000000	0	0	0	0
+565	0	Commercials/N64/The Legend of Zelda Majora's Mask/The Legend of Zelda Majora's Mask Radio Zelda Commercial 1.mp4	70.787000000000	0	0	0	0
+567	0	Commercials/N64/The Legend of Zelda Majora's Mask/The Legend of Zelda Majora's Mask Radio Zelda Short 1.mp4	30.066667000000	0	0	0	0
+566	0	Commercials/N64/The Legend of Zelda Majora's Mask/The Legend of Zelda Majora's Mask Radio Zelda Commercial 2.mp4	67.467000000000	0	0	0	0
+569	0	Commercials/N64/The Legend of Zelda Majora's Mask/The Legend of Zelda Majora's Mask Radio Zelda Short 3.mp4	15.001000000000	0	0	0	0
+568	0	Commercials/N64/The Legend of Zelda Majora's Mask/The Legend of Zelda Majora's Mask Radio Zelda Short 2.mp4	15.301000000000	0	0	0	0
+571	0	Commercials/PS2/Kingdom Hearts/Kingdom Hearts New From Disney Interactive VHS Promo.mp4	37.021000000000	0	0	0	0
+570	0	Commercials/PS2/Kingdom Hearts/Kingdom Hearts Disney Channel Commercial.mp4	90.161000000000	0	0	0	0
+573	0	Commercials/PS2/Kingdom Hearts/Kingdom Hearts TV Spot 2.mp4	30.341000000000	0	0	0	0
+572	0	Commercials/PS2/Kingdom Hearts/Kingdom Hearts TV Spot 1.mp4	30.881000000000	0	0	0	0
+574	0	Commercials/PS2/Kingdom Hearts/Kingdom Hearts TV Spot Japanese.mp4	14.814800000000	0	0	0	0
+575	0	Commercials/PS2/Kingdom Hearts/Kingdom Hearts TV Spot Simple and Clean.mp4	30.241000000000	0	0	0	0
+577	0	Commercials/GBA/Kingdom Hearts Chain of Memories/Kingdom Hearts Chain of Memories Japanese Commercial.mp4	30.841000000000	0	0	0	0
+582	0	Commercials/3DS/Kingdom Hearts 3D Dream Drop Distance/Kingdom Hearts 3D Dream Drop Distance Sanctuary Commercial.mp4	15.241000000000	0	0	0	0
+581	0	Commercials/3DS/Kingdom Hearts 3D Dream Drop Distance/Kingdom Hearts 3D Dream Drop Distance Commercial.mp4	32.241000000000	0	0	0	0
+578	0	Commercials/DS/Kingdom Hearts Re coded/Kingdom Hearts Re coded English Commercial 1 v1.mp4	30.161000000000	0	0	0	0
+580	0	Commercials/DS/Kingdom Hearts Re coded/Kingdom Hearts Re coded English Commercial 2.mp4	30.161000000000	0	0	0	0
+584	0	Commercials/PS3/KINGDOM HEARTS -HD 1.5+2.5 ReMIX-/KINGDOM HEARTS -HD 1.5+2.5 ReMIX- Spanish Commercial.mp4	29.094603000000	0	0	0	0
+585	0	Commercials/PS2/Kingdom Hearts Final Mix/Kingdom Hearts Final Mix Commercial.mp4	14.121000000000	0	0	0	0
+586	0	Commercials/PS2/Kingdom Hearts II/Kingdom Hearts II Commercial.mp4	213.741000000000	0	0	0	0
+587	0	Commercials/PS2/Kingdom Hearts II/Kingdom Hearts II Disney 411 Commercial.mp4	120.321000000000	0	0	0	0
+590	0	Commercials/DS/Kingdom Hearts 358 2 Days/Kingdom Hearts 358 2 Days Commercial Long.mp4	65.281000000000	0	0	0	0
+591	0	Commercials/DS/Kingdom Hearts 358 2 Days/Kingdom Hearts 358 2 Days Commercial Short.mp4	30.141000000000	0	0	0	0
+593	0	Commercials/PSP/Kingdom Hearts Birth by Sleep/Kingdom Hearts Birth by Sleep Japanese Ad Spot.mp4	35.361000000000	0	0	0	0
+589	0	Commercials/PS2/Kingdom Hearts II/Kingdom Hearts II Sanctuary Japanese Commercial.mp4	15.015000000000	0	0	0	0
+596	0	Commercials/XB1/Kingdom Hearts III/Kingdom Hearts III Commercial 1.mp4	64.364300000000	0	0	0	0
+595	0	Commercials/PS4 + XB1/Kingdom Hearts III/Kingdom Hearts III Commercial.mp4	73.001000000000	0	0	0	0
+597	0	Commercials/XB1/Kingdom Hearts III/Kingdom Hearts III Commercial 2.mp4	33.041995000000	0	0	0	0
+598	0	Commercials/PS4/Kingdom Hearts III/Kingdom Hearts III Commercial 1.mp4	73.001000000000	0	0	0	0
+542	0	Commercials/PC/DOOM 3/DOOM 3 Official Trailer.mp4	148.956009000000	0	0	0	0
+544	0	Commercials/PC/DOOM 3/Resurrection of Evil/DOOM 3 Resurrection of Evil Trailer.mp4	115.741000000000	0	0	0	0
+541	0	Commercials/PC/DOOM 3/DOOM 3 E3 Trailer.mp4	178.461000000000	0	0	0	0
+548	0	Commercials/Xbox/DOOM 3/DOOM 3 TV Spot.mp4	30.541000000000	0	0	0	0
+546	0	Commercials/PC/DOOM (2016)/DOOM (2016) Fight Like Hell Cinematic Trailer.mp4	93.121000000000	0	0	0	0
+558	0	Commercials/N64/The Legend of Zelda Majora's Mask/The Legend of Zelda Majora's Mask Español Latino Commercial.mp4	29.621000000000	0	0	0	0
+564	0	Commercials/N64/The Legend of Zelda Majora's Mask/The Legend of Zelda Majora's Mask Japanese Commercial 2.mp4	14.247567000000	0	0	0	0
+561	0	Commercials/N64/The Legend of Zelda Majora's Mask/The Legend of Zelda Majora's Mask French Commercial 3.mp4	15.278730000000	0	0	0	0
+576	0	Commercials/GBA/Kingdom Hearts Chain of Memories/Kingdom Hearts Chain of Memories English Commercial.mp4	30.101564000000	0	0	0	0
+583	0	Commercials/Android + iOS/Kingdom Hearts Unchained χ/Kingdom Hearts Unchained χ Japanese Commercial.mp4	15.101000000000	0	0	0	0
+588	0	Commercials/PS2/Kingdom Hearts II/Kingdom Hearts II Sanctuary English Commercial.mp4	30.201000000000	0	0	0	0
+594	0	Commercials/PSP/Kingdom Hearts Birth by Sleep Final Mix/Kingdom Hearts Birth by Sleep Final Mix Commercial.mp4	15.069751000000	0	0	0	0
+556	0	Commercials/N64/The Legend of Zelda Majora's Mask/The Legend of Zelda Majora's Mask Andromeda Giveaway.mp4	30.861000000000	0	0	0	0
+562	0	Commercials/N64/The Legend of Zelda Majora's Mask/The Legend of Zelda Majora's Mask French Commercial 4.mp4	11.761000000000	0	0	0	0
+579	0	Commercials/DS/Kingdom Hearts Re coded/Kingdom Hearts Re coded English Commercial 1 v2.mp4	30.161000000000	0	0	0	0
+592	0	Commercials/PSP/Kingdom Hearts Birth by Sleep/Kingdom Hearts Birth by Sleep English Simple and Clean.mp4	27.041000000000	0	0	0	0
+599	0	Commercials/PS4/Kingdom Hearts III/Kingdom Hearts III Commercial 2.mp4	32.761000000000	0	0	0	0
 \.
 
 
@@ -3052,7 +3196,7 @@ SELECT pg_catalog.setval('public.video_metadata_id_seq', 1377, true);
 -- Name: video_tags_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.video_tags_id_seq', 53, true);
+SELECT pg_catalog.setval('public.video_tags_id_seq', 112, true);
 
 
 --
@@ -3061,7 +3205,7 @@ SELECT pg_catalog.setval('public.video_tags_id_seq', 53, true);
 -- Name: videos_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.videos_id_seq', 514, true);
+SELECT pg_catalog.setval('public.videos_id_seq', 599, true);
 
 
 --
@@ -3327,11 +3471,11 @@ ALTER TABLE ONLY public.videos
     ADD CONSTRAINT videos_title_id_fkey FOREIGN KEY (title_id) REFERENCES public.titles(id) ON DELETE CASCADE;
 
 
--- Completed on 2025-10-07 16:28:23
+-- Completed on 2025-10-11 00:10:18
 
 --
 -- PostgreSQL database dump complete
 --
 
-\unrestrict fJ3LYnu3uQPJlsWMx24MG7S3PbIs52gzna5vyhyvFPzt0dpg700xGTFIBvKCzJF
+\unrestrict qfaghO4cP96FBT87PU6WbwfBjCD1tfq7V9IflT8JDlPspEJr5OlMvATpzUaz8p7
 

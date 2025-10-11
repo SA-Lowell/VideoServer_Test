@@ -80,6 +80,11 @@ type DeleteBreakReq struct {
 	ID int64 `json:"id"`
 }
 
+type AddVideoReq struct {
+	URI     string `json:"uri"`
+	TitleID int64  `json:"title_id"`
+}
+
 var db *sql.DB
 
 func main() {
@@ -108,23 +113,112 @@ func main() {
 	r.StaticFS("/videos", http.Dir(videoBaseDir))
 	r.StaticFS("/temp_videos", http.Dir("./temp_videos"))
 
-	r.POST("/files/:id/tags", func(c *gin.Context) {
-		id := c.Param("id")
+	r.POST("/videos/:id/tags", func(c *gin.Context) {
+		idStr := c.Param("id")
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid video ID"})
+			return
+		}
 		var tags []string
 		if err := c.BindJSON(&tags); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		_, err := db.Exec("UPDATE files SET tags = tags || $1 WHERE id = $2", tags, id)
+
+		tx, err := db.Begin()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Printf("Failed to start transaction: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start transaction"})
 			return
 		}
+
+		for _, tagName := range tags {
+			var tagID int64
+			err := db.QueryRow("SELECT id FROM tags WHERE name = $1", tagName).Scan(&tagID)
+			if err == sql.ErrNoRows {
+				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Tag '%s' does not exist", tagName)})
+				tx.Rollback()
+				return
+			} else if err != nil {
+				log.Printf("Tag query error for %s: %v", tagName, err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+				tx.Rollback()
+				return
+			}
+
+			_, err = tx.Exec("INSERT INTO video_tags (video_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", id, tagID)
+			if err != nil {
+				log.Printf("Failed to insert tag %s for video %d: %v", tagName, id, err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to assign tag"})
+				tx.Rollback()
+				return
+			}
+		}
+
+		if err := tx.Commit(); err != nil {
+			log.Printf("Failed to commit transaction: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit transaction"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"success": true})
+	})
+
+	r.DELETE("/videos/:id/tags", func(c *gin.Context) {
+		idStr := c.Param("id")
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid video ID"})
+			return
+		}
+		var tags []string
+		if err := c.BindJSON(&tags); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		tx, err := db.Begin()
+		if err != nil {
+			log.Printf("Failed to start transaction: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start transaction"})
+			return
+		}
+
+		for _, tagName := range tags {
+			var tagID int64
+			err := db.QueryRow("SELECT id FROM tags WHERE name = $1", tagName).Scan(&tagID)
+			if err == sql.ErrNoRows {
+				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Tag '%s' does not exist", tagName)})
+				tx.Rollback()
+				return
+			} else if err != nil {
+				log.Printf("Tag query error for %s: %v", tagName, err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+				tx.Rollback()
+				return
+			}
+
+			_, err = tx.Exec("DELETE FROM video_tags WHERE video_id = $1 AND tag_id = $2", id, tagID)
+			if err != nil {
+				log.Printf("Failed to delete tag %s for video %d: %v", tagName, id, err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete tag"})
+				tx.Rollback()
+				return
+			}
+		}
+
+		if err := tx.Commit(); err != nil {
+			log.Printf("Failed to commit transaction: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit transaction"})
+			return
+		}
+
 		c.JSON(http.StatusOK, gin.H{"success": true})
 	})
 
 	r.GET("/", func(c *gin.Context) {
-		c.HTML(http.StatusOK, "admin.html", gin.H{
+		c.HTML(http.StatusOK, "index.html", gin.H{
 			"Title": "Admin Panel",
 		})
 	})
@@ -136,7 +230,7 @@ func main() {
 	r.POST("/detect-breaks", detectBreaksHandler)
 	r.POST("/add-break", addBreakHandler)
 	r.POST("/add-breaks", addBreaksHandler)
-	r.POST("/fix-video", fixVideoHandler) // Consolidated endpoint
+	r.POST("/fix-video", fixVideoHandler)
 	r.POST("/update-break", updateBreakHandler)
 	r.POST("/delete-break", deleteBreakHandler)
 
@@ -144,6 +238,7 @@ func main() {
 	r.GET("/manage-channels", manageChannelsHandler)
 	r.GET("/manage-title-videos", manageTitleVideosHandler)
 	r.GET("/manage-channel-videos", manageChannelVideosHandler)
+	r.GET("/tag-commercials", tagCommercialsHandler)
 
 	r.GET("/api/titles", apiTitlesHandler)
 	r.POST("/api/titles", apiCreateTitleHandler)
@@ -220,6 +315,10 @@ func loadTemplatesSafely(r *gin.Engine, pattern string) {
 		return
 	}
 	r.LoadHTMLFiles(files...)
+}
+
+func tagCommercialsHandler(c *gin.Context) {
+	c.HTML(http.StatusOK, "tag_commercials.html", gin.H{})
 }
 
 func getVideoMetadataHandler(c *gin.Context) {
@@ -330,11 +429,6 @@ func listContentsHandler(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"contents": contents})
-}
-
-type AddVideoReq struct {
-	URI     string `json:"uri"`
-	TitleID int64  `json:"title_id"`
 }
 
 func addVideoHandler(c *gin.Context) {

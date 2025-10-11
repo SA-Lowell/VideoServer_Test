@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Admin - Tag Commercials</title>
+    <style>
+        .video-section { margin-bottom: 20px; border: 1px solid #ccc; padding: 10px; display: none; }
+        .video-section.active { display: block; }
+        #folder-browser, #file-browser { 
+            border: 1px solid #ccc; 
+            padding: 10px; 
+            max-height: 300px; 
+            overflow-y: auto; 
+            margin-top: 10px;
+        }
+        .dir-item, .file-item { cursor: pointer; margin-bottom: 5px; }
+        .dir-item { color: blue; }
+        .file-item { color: green; }
+        #breadcrumb-nav { margin-top: 10px; }
+        .breadcrumb-item { 
+            cursor: pointer; 
+            color: blue; 
+            text-decoration: underline; 
+            margin-right: 5px; 
+        }
+        .breadcrumb-item:hover { color: darkblue; }
+        .breadcrumb-item::after { content: '/'; margin-left: 5px; }
+        .breadcrumb-item:last-child::after { content: ''; }
+        .pagination-controls { margin-bottom: 10px; }
+        .pagination-controls button { margin-right: 10px; }
+        .pagination-controls span { margin-right: 10px; }
+        #selected-videos-container:empty + .pagination-controls { display: none; }
+        .tags-list { margin-top: 10px; }
+        .tag-item { margin-bottom: 5px; }
+        .tag-item button { margin-left: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Admin Panel - Tag Commercials</h1>
+
+    <h2>Files from Video Folder</h2>
+    <div id="current-path">Current Path: /</div>
+    <div id="breadcrumb-nav"></div>
+    <h3>Folders</h3>
+    <div id="folder-browser"></div>
+    <h3>Files in Current Folder</h3>
+    <div id="file-browser"></div>
+    <button onclick="navigateTo('')">Back to Root</button>
+
+    <h2>Selected Videos</h2>
+    <button id="clear-all-button">Clear All Selected Videos</button>
+    <div class="pagination-controls">
+        <button id="prev-button" disabled>Previous</button>
+        <span id="pagination-info"></span>
+        <button id="next-button" disabled>Next</button>
+    </div>
+    <div id="selected-videos-container"></div>
+
+    <script>
+        let videosData = {};
+        let currentPath = '';
+        let currentVideoIndex = -1;
+        let videoIds = [];
+
+        function selectVideo(id, uri, tags = []) {
+            if (videosData[id]) {
+                alert('Video already selected');
+                return;
+            }
+            videosData[id] = {
+                uri: uri,
+                tags: tags
+            };
+            videoIds.push(id);
+            currentVideoIndex = videoIds.length - 1;
+            createSection(id, uri, tags);
+            updatePagination();
+        }
+
+        function createSection(id, uri, tags) {
+            const container = document.getElementById('selected-videos-container');
+            const sectionHtml = `
+                <div class="video-section" id="video-section-${id}">
+                    <div>
+                        Video ID: ${id}, URI: ${uri}
+                        <button id="remove-button-${id}">Remove</button>
+                    </div>
+                    <video class="video-player" id="video-player-${id}" controls src="/videos/${uri}"></video>
+                    <h3>Tags</h3>
+                    <div class="tags-list" id="tags-list-${id}"></div>
+                    <button id="add-commercial-tag-${id}">Add Commercial Tag</button>
+                    <button id="remove-commercial-tag-${id}" disabled>Remove Commercial Tag</button>
+                </div>
+            `;
+            container.insertAdjacentHTML('beforeend', sectionHtml);
+            updateTagsList(id, tags);
+            attachListeners(id);
+        }
+
+        function updateTagsList(id, tags) {
+            const list = document.getElementById(`tags-list-${id}`);
+            list.innerHTML = '';
+            tags.forEach(tag => {
+                const div = document.createElement('div');
+                div.className = 'tag-item';
+                div.innerHTML = `Tag: ${tag}`;
+                list.appendChild(div);
+            });
+            const hasCommercialTag = tags.includes('commercial');
+            document.getElementById(`add-commercial-tag-${id}`).disabled = hasCommercialTag;
+            document.getElementById(`remove-commercial-tag-${id}`).disabled = !hasCommercialTag;
+        }
+
+        function attachListeners(id) {
+            document.getElementById(`remove-button-${id}`).addEventListener('click', () => removeSection(id));
+            document.getElementById(`add-commercial-tag-${id}`).addEventListener('click', () => addCommercialTag(id));
+            document.getElementById(`remove-commercial-tag-${id}`).addEventListener('click', () => removeCommercialTag(id));
+        }
+
+        function addCommercialTag(id) {
+            fetch(`/videos/${id}/tags`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(['commercial'])
+            }).then(res => {
+                if (!res.ok) {
+                    throw new Error(`HTTP error! Status: ${res.status}`);
+                }
+                return res.json();
+            }).then(data => {
+                if (data.success) {
+                    videosData[id].tags.push('commercial');
+                    updateTagsList(id, videosData[id].tags);
+                    alert('Commercial tag added successfully');
+                }
+            }).catch(err => {
+                console.error('Error adding commercial tag:', err);
+                alert('Error adding commercial tag: ' + err.message);
+            });
+        }
+
+        function removeCommercialTag(id) {
+            fetch(`/videos/${id}/tags`, {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(['commercial'])
+            }).then(res => {
+                if (!res.ok) {
+                    throw new Error(`HTTP error! Status: ${res.status}`);
+                }
+                return res.json();
+            }).then(data => {
+                if (data.success) {
+                    videosData[id].tags = videosData[id].tags.filter(tag => tag !== 'commercial');
+                    updateTagsList(id, videosData[id].tags);
+                    alert('Commercial tag removed successfully');
+                }
+            }).catch(err => {
+                console.error('Error removing commercial tag:', err);
+                alert('Error removing commercial tag: ' + err.message);
+            });
+        }
+
+        function updatePagination() {
+            const prevButton = document.getElementById('prev-button');
+            const nextButton = document.getElementById('next-button');
+            const paginationInfo = document.getElementById('pagination-info');
+            if (videoIds.length === 0) {
+                prevButton.disabled = true;
+                nextButton.disabled = true;
+                paginationInfo.textContent = '';
+                currentVideoIndex = -1;
+            } else {
+                currentVideoIndex = Math.max(0, Math.min(currentVideoIndex, videoIds.length - 1));
+                prevButton.disabled = currentVideoIndex <= 0;
+                nextButton.disabled = currentVideoIndex >= videoIds.length - 1;
+                paginationInfo.textContent = `Video ${currentVideoIndex + 1} of ${videoIds.length}`;
+                showVideoSection(videoIds[currentVideoIndex]);
+            }
+        }
+
+        function showVideoSection(id) {
+            document.querySelectorAll('.video-section').forEach(section => {
+                section.classList.remove('active');
+            });
+            const section = document.getElementById(`video-section-${id}`);
+            if (section) {
+                section.classList.add('active');
+            }
+        }
+
+        function loadContents(path) {
+            currentPath = path;
+            document.getElementById('current-path').innerHTML = `Current Path: /${path}`;
+            updateBreadcrumbNav();
+            fetch(`/list-contents?path=${encodeURIComponent(path)}`)
+                .then(res => {
+                    if (!res.ok) {
+                        throw new Error(`HTTP error! Status: ${res.status}`);
+                    }
+                    return res.json();
+                })
+                .then(data => {
+                    if (!data.contents || !Array.isArray(data.contents)) {
+                        throw new Error('Invalid response format: contents is missing or not an array');
+                    }
+                    const folderBrowser = document.getElementById('folder-browser');
+                    const fileBrowser = document.getElementById('file-browser');
+                    folderBrowser.innerHTML = '';
+                    fileBrowser.innerHTML = '';
+                    data.contents.forEach(item => {
+                        const div = document.createElement('div');
+                        if (item.type === 'dir') {
+                            div.className = 'dir-item';
+                            div.innerHTML = `/${item.name}/`;
+                            div.onclick = () => navigateTo(item.path);
+                            folderBrowser.appendChild(div);
+                        } else {
+                            div.className = 'file-item';
+                            div.innerHTML = `${item.name}`;
+                            div.onclick = () => {
+                                fetch('/add-video', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ uri: item.path })
+                                }).then(res => res.json()).then(addData => {
+                                    fetchMetadata(addData.id, item.path);
+                                }).catch(err => console.error(err));
+                            };
+                            fileBrowser.appendChild(div);
+                        }
+                    });
+                })
+                .catch(err => {
+                    console.error('Error loading contents:', err);
+                    document.getElementById('folder-browser').innerHTML = `<div style="color: red;">Error: ${err.message}</div>`;
+                    document.getElementById('file-browser').innerHTML = `<div style="color: red;">Error: ${err.message}</div>`;
+                });
+        }
+
+        function updateBreadcrumbNav() {
+            const breadcrumbNav = document.getElementById('breadcrumb-nav');
+            breadcrumbNav.innerHTML = '';
+            const parts = currentPath.split('/').filter(part => part.length > 0);
+            let cumulativePath = '';
+            const rootSpan = document.createElement('span');
+            rootSpan.className = 'breadcrumb-item';
+            rootSpan.innerHTML = 'Root';
+            rootSpan.onclick = () => navigateTo('');
+            breadcrumbNav.appendChild(rootSpan);
+            parts.forEach((part, index) => {
+                cumulativePath += (index > 0 ? '/' : '') + part;
+                const span = document.createElement('span');
+                span.className = 'breadcrumb-item';
+                span.innerHTML = part;
+                const pathToNavigate = cumulativePath;
+                span.onclick = () => navigateTo(pathToNavigate);
+                breadcrumbNav.appendChild(span);
+            });
+        }
+
+        function navigateTo(path) {
+            loadContents(path);
+        }
+
+        function fetchMetadata(id, path) {
+            fetch(`/get-video-metadata/${id}`)
+                .then(res => {
+                    if (!res.ok) {
+                        throw new Error(`HTTP error! Status: ${res.status}`);
+                    }
+                    return res.json();
+                })
+                .then(data => {
+                    const tags = data.Tags.map(tag => tag.Name);
+                    selectVideo(id, path, tags);
+                })
+                .catch(err => {
+                    console.error('Error fetching metadata:', err);
+                    selectVideo(id, path, []);
+                });
+        }
+
+        function removeSection(id) {
+            document.getElementById(`video-section-${id}`).remove();
+            delete videosData[id];
+            const removedIndex = videoIds.indexOf(id);
+            videoIds = videoIds.filter(vid => vid !== id);
+            if (videoIds.length === 0) {
+                currentVideoIndex = -1;
+            } else {
+                if (removedIndex === currentVideoIndex) {
+                    if (currentVideoIndex >= videoIds.length) {
+                        currentVideoIndex = videoIds.length - 1;
+                    }
+                } else if (removedIndex < currentVideoIndex) {
+                    currentVideoIndex = Math.max(0, currentVideoIndex - 1);
+                }
+            }
+            updatePagination();
+        }
+
+        document.getElementById('clear-all-button').addEventListener('click', () => {
+            document.getElementById('selected-videos-container').innerHTML = '';
+            videosData = {};
+            videoIds = [];
+            currentVideoIndex = -1;
+            updatePagination();
+        });
+
+        document.getElementById('prev-button').addEventListener('click', () => {
+            if (currentVideoIndex > 0) {
+                currentVideoIndex--;
+                updatePagination();
+            }
+        });
+
+        document.getElementById('next-button').addEventListener('click', () => {
+            if (currentVideoIndex < videoIds.length - 1) {
+                currentVideoIndex++;
+                updatePagination();
+            }
+        });
+
+        loadContents('');
+    </script>
+</body>
+</html>

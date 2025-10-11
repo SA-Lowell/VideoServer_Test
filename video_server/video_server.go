@@ -2353,11 +2353,12 @@ func indexHandler(c *gin.Context) {
     c.Header("Content-Type", "text/html")
     c.String(200, html)
 }
+
 func updateVideoDurations(db *sql.DB) error {
     if videoBaseDir == "" {
         return fmt.Errorf("videoBaseDir is not set, cannot process video files")
     }
-    rows, err := db.Query("SELECT id, uri FROM videos WHERE duration IS NULL OR loudnorm_input_i IS NULL")
+    rows, err := db.Query("SELECT id, uri FROM videos WHERE duration IS NULL OR duration = 0 OR loudnorm_input_i IS NULL OR loudnorm_input_i = 0")
     if err != nil {
         return fmt.Errorf("failed to query videos with NULL duration or loudnorm: %v", err)
     }
@@ -2378,10 +2379,10 @@ func updateVideoDurations(db *sql.DB) error {
         return fmt.Errorf("error iterating videos: %v", err)
     }
     if len(videoIDs) == 0 {
-        log.Println("No videos with NULL duration or loudnorm found")
+        log.Println("No videos with NULL/0 duration or loudnorm found")
         return nil
     }
-    log.Printf("Found %d videos with NULL duration or loudnorm, calculating metadata", len(videoIDs))
+    log.Printf("Found %d videos with NULL/0 duration or loudnorm, calculating metadata", len(videoIDs))
     const maxConcurrent = 5
     semaphore := make(chan struct{}, maxConcurrent)
     var wg sync.WaitGroup
@@ -2408,7 +2409,7 @@ func updateVideoDurations(db *sql.DB) error {
                     "-v", "error",
                     "-show_entries", "format=duration",
                     "-of", "default=noprint_wrappers=1:nokey=1",
-                    fullPath,
+                    fmt.Sprintf("%q", fullPath),
                 )
                 output, err := cmd.Output()
                 if err != nil {
@@ -2435,7 +2436,7 @@ func updateVideoDurations(db *sql.DB) error {
                 log.Printf("Updated duration for video %d (%s) to %.2f seconds", id, fullPath, durationFloat)
             }
             var needsLoudnorm bool
-            err = db.QueryRow("SELECT loudnorm_input_i IS NULL FROM videos WHERE id = $1", id).Scan(&needsLoudnorm)
+            err = db.QueryRow("SELECT loudnorm_input_i IS NULL OR loudnorm_input_i = 0 FROM videos WHERE id = $1", id).Scan(&needsLoudnorm)
             if err != nil {
                 mu.Lock()
                 errors = append(errors, fmt.Errorf("failed to check loudnorm for video %d (%s): %v", id, fullPath, err))
@@ -2443,6 +2444,34 @@ func updateVideoDurations(db *sql.DB) error {
                 return
             }
             if needsLoudnorm {
+                // Check for audio stream
+                cmdProbe := exec.Command(
+                    "ffprobe",
+                    "-v", "error",
+                    "-select_streams", "a:0",
+                    "-show_entries", "stream=index",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    fullPath,
+                )
+                outputProbe, err := cmdProbe.CombinedOutput()
+                outputStrProbe := strings.TrimSpace(string(outputProbe))
+                log.Printf("ffprobe output for video %d (%s): %q, error: %v", id, fullPath, outputStrProbe, err)
+                if err != nil || outputStrProbe == "" {
+                    log.Printf("No audio stream in video %d (%s), setting sentinel loudnorm values", id, fullPath)
+                    _, err = db.Exec(
+                        "UPDATE videos SET loudnorm_input_i = 0, loudnorm_input_lra = 0, loudnorm_input_tp = 0, loudnorm_input_thresh = 0 WHERE id = $1",
+                        id,
+                    )
+                    if err != nil {
+                        mu.Lock()
+                        errors = append(errors, fmt.Errorf("failed to update sentinel loudnorm for video %d (%s): %v", id, fullPath, err))
+                        mu.Unlock()
+                    } else {
+                        log.Printf("Set sentinel loudnorm values (0) for video %d (%s)", id, fullPath)
+                    }
+                    return
+                }
+                log.Printf("Audio stream detected in video %d (%s), calculating loudnorm", id, fullPath)
                 cmdLoudnorm := exec.Command(
                     "ffmpeg",
                     "-i", fullPath,
@@ -2457,6 +2486,7 @@ func updateVideoDurations(db *sql.DB) error {
                     return
                 }
                 outputStr := string(outputLoudnorm)
+                log.Printf("Raw loudnorm output for video %d (%s):\n%s", id, fullPath, outputStr)
                 jsonStart := strings.LastIndex(outputStr, "{")
                 if jsonStart == -1 {
                     mu.Lock()
@@ -2465,6 +2495,7 @@ func updateVideoDurations(db *sql.DB) error {
                     return
                 }
                 jsonStr := outputStr[jsonStart:]
+                log.Printf("Extracted JSON for video %d (%s):\n%s", id, fullPath, jsonStr)
                 var loudnorm LoudnormOutput
                 if err := json.Unmarshal([]byte(jsonStr), &loudnorm); err != nil {
                     mu.Lock()
@@ -2511,6 +2542,8 @@ func updateVideoDurations(db *sql.DB) error {
                     return
                 }
                 log.Printf("Updated loudnorm measurements for video %d (%s): I=%.2f, LRA=%.2f, TP=%.2f, Thresh=%.2f", id, fullPath, inputI, inputLRA, inputTP, inputThresh)
+            } else {
+                log.Printf("Loudnorm already set for video %d (%s), skipping", id, fullPath)
             }
         }(videoID, uris[i])
     }
@@ -2521,6 +2554,7 @@ func updateVideoDurations(db *sql.DB) error {
     log.Printf("Successfully updated metadata for %d videos", len(videoIDs))
     return nil
 }
+
 func main() {
     errorLogFile, err := os.OpenFile("error.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
     if err != nil {
