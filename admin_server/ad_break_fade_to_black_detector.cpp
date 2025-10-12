@@ -9,6 +9,7 @@
 #include <cctype>
 #include <fstream>
 #include <regex>
+#include <cmath>
 
 struct Period
 {
@@ -69,11 +70,9 @@ std::vector<Period> parseSilence(const std::string& output, double start_time)
                 try {
                     current_start = start_time + std::stod(match[1].str());
                 } catch (...) {
-                    //std::cerr << "Warning: Failed to parse silence_start time in line: " << line << std::endl;
                     continue;
                 }
             } else {
-                //std::cerr << "Warning: No time match for silence_start in line: " << line << std::endl;
             }
         }
         else if(pos_silence_end != std::string::npos && current_start >= start_time)
@@ -88,11 +87,9 @@ std::vector<Period> parseSilence(const std::string& output, double start_time)
                     }
                     current_start = -1.0;
                 } catch (...) {
-                    //std::cerr << "Warning: Failed to parse silence_end time in line: " << line << std::endl;
                     continue;
                 }
             } else {
-                //std::cerr << "Warning: No time match for silence_end in line: " << line << std::endl;
             }
         }
     }
@@ -146,7 +143,24 @@ std::vector<FrameData> parseFrameData(const std::string& output, double start_ti
                 current_scene_score = 0.0;
             }
         }
-        size_t pos_blackframe = line.find("[blackframe @");
+        size_t pos_metadata_key = line.find("lavfi.");
+        if (pos_metadata_key != std::string::npos) {
+            std::string meta_str = line.substr(pos_metadata_key);
+            size_t eq_pos = meta_str.find('=');
+            if (eq_pos != std::string::npos) {
+                std::string key = meta_str.substr(0, eq_pos);
+                std::string value_str = meta_str.substr(eq_pos + 1);
+                try {
+                    double value = std::stod(value_str);
+                    if (key == "lavfi.blackframe.pblack") {
+                        current_frame.black_percentage = static_cast<int>(std::round(value));
+                    }
+                } catch (...) {
+                    // Ignore non-numeric metadata
+                }
+            }
+        }
+        size_t pos_blackframe = line.find("[Parsed_blackframe");
         if(pos_blackframe != std::string::npos)
         {
             size_t pos_pblack = line.find(" pblack:");
@@ -159,7 +173,7 @@ std::vector<FrameData> parseFrameData(const std::string& output, double start_ti
                 }
             }
         }
-        size_t pos_showinfo = line.find("[showinfo @");
+        size_t pos_showinfo = line.find("[Parsed_showinfo");
         if(pos_showinfo != std::string::npos)
         {
             size_t pos_pts_time = line.find("pts_time:");
@@ -183,7 +197,7 @@ std::vector<FrameData> parseFrameData(const std::string& output, double start_ti
                 }
             }
         }
-        size_t pos_astats = line.find("[astats @");
+        size_t pos_astats = line.find("[Parsed_astats");
         if(pos_astats != std::string::npos)
         {
             size_t pos_rms = line.find("RMS level dB:");
@@ -230,8 +244,8 @@ bool close_overlaps(const Period& a, const Period& b, double& combined_start, do
         combined_end = min_end;
         return true;
     } else if (gap <= tolerance) {
-        combined_start = b.start;
-        combined_end = b.end; // Return black period if close but not overlapping
+        combined_start = std::min(a.start, b.start);
+        combined_end = std::max(a.end, b.end);
         return true;
     }
     return false;
@@ -240,23 +254,30 @@ bool close_overlaps(const Period& a, const Period& b, double& combined_start, do
 std::vector<Period> buildBlackPeriodsFromFrames(const std::vector<FrameData>& frame_data, double min_duration = 0.01, int min_black_pct = 95) {
     std::vector<Period> black_periods;
     if (frame_data.empty()) return black_periods;
+    double frame_dur = 1.0 / 29.97; // Approximate frame duration from video metadata
     double start = -1.0;
     double prev_ts = frame_data[0].timestamp;
     for (const auto& f : frame_data) {
-        if (f.black_percentage >= min_black_pct) {  // No RMS requirement
+        if (f.black_percentage >= min_black_pct) {
             if (start < 0.0) {
                 start = f.timestamp;
             }
             prev_ts = f.timestamp;
         } else {
-            if (start >= 0.0 && (prev_ts - start >= min_duration)) {
-                black_periods.push_back({start, prev_ts});
+            if (start >= 0.0) {
+                double end = prev_ts + frame_dur;
+                if (end - start >= min_duration) {
+                    black_periods.push_back({start, end});
+                }
             }
             start = -1.0;
         }
     }
-    if (start >= 0.0 && (prev_ts - start >= min_duration)) {
-        black_periods.push_back({start, prev_ts});
+    if (start >= 0.0) {
+        double end = prev_ts + frame_dur;
+        if (end - start >= min_duration) {
+            black_periods.push_back({start, end});
+        }
     }
     return black_periods;
 }
@@ -383,10 +404,10 @@ int main(int argc, char* argv[])
     std::string silence_cmd = "ffmpeg " + ss_t + "-i \"" + video + "\" -af silencedetect=noise=-30dB:d=0.05 -f null - 2>&1";
     std::string silence_output = exec(silence_cmd);
     std::vector<Period> silences = parseSilence(silence_output, start_time);
-    std::string black_cmd = "ffmpeg " + ss_t + "-i \"" + video + "\" -vf blackdetect=d=0.05:pic_th=0.95:pix_th=0.1 -f null - 2>&1";
+    std::string black_cmd = "ffmpeg " + ss_t + "-i \"" + video + "\" -vf blackdetect=d=0.03:pic_th=0.9:pix_th=0.1 -f null - 2>&1";
     std::string black_output = exec(black_cmd);
     std::vector<Period> blacks = parseBlack(black_output, start_time);
-    std::string frame_cmd = "ffmpeg " + ss_t + "-i \"" + video + "\" -vf \"setpts=PTS-STARTPTS,select='gt(scene\\,0.3)',metadata=print,blackframe=amount=0:threshold=32,showinfo\" -af astats=metadata=1:reset=1 -f null - 2>&1";
+    std::string frame_cmd = "ffmpeg " + ss_t + "-i \"" + video + "\" -vf \"metadata=print,blackframe=amount=0:threshold=32,showinfo\" -af astats=metadata=1:reset=1 -f null - 2>&1";
     std::string frame_output = exec(frame_cmd);
     std::vector<FrameData> frame_data = parseFrameData(frame_output, start_time);
     std::vector<Period> ad_points = findOverlaps(silences, frame_data, blacks, 0.01);
