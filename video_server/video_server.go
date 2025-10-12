@@ -196,6 +196,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
     opusName := baseName + ".opus"
     opusPath := filepath.Join(HlsDir, opusName)
     tempMP4Path := filepath.Join(tempDir, baseName+".mp4")
+    tempDurMP4 := filepath.Join(tempDir, baseName+"_dur.mp4")
     var sampleRate, channels int
     var hasAudio bool
     cmdProbe := exec.Command(
@@ -607,85 +608,81 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
     } else {
         segments = append(segments, fullSegPath)
     }
-    // Calculate accurate duration from frame count
+    // Get actualDur using ffprobe on muxed mp4
     var actualDur float64
-    cmdFrames := exec.Command(
-        "ffprobe",
-        "-v", "error",
-        "-count_frames",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=nb_read_frames",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        fullSegPath,
-    )
-    outputFrames, err := cmdFrames.Output()
-    var numFrames int64
-    if err == nil {
-        framesStr := strings.TrimSpace(string(outputFrames))
-        numFrames, err = strconv.ParseInt(framesStr, 10, 64)
-        if err == nil && numFrames > 0 {
-            actualDur = float64(numFrames) * float64(fpsDen) / float64(fpsNum)
-            log.Printf("Station %s: Actual duration from frame count: %.3fs (%d frames at %d/%d fps)", st.name, actualDur, numFrames, fpsNum, fpsDen)
-        }
-    }
-    if actualDur == 0 {
+    cmdMux := exec.Command("ffmpeg", "-y", "-i", fullSegPath, "-c", "copy", tempDurMP4)
+    outputMux, err := cmdMux.CombinedOutput()
+    log.Printf("Station %s: FFmpeg mux output for duration check %s: %s", st.name, tempDurMP4, string(outputMux))
+    if err != nil {
+        errorLogger.Printf("Station %s: Mux to mp4 for duration failed for %s: %v", st.name, fullSegPath, err)
+    } else {
         cmdDur := exec.Command(
             "ffprobe",
             "-v", "error",
             "-show_entries", "format=duration",
             "-of", "json",
+            tempDurMP4,
+        )
+        outputDur, err := cmdDur.Output()
+        if err == nil {
+            var result struct {
+                Format struct {
+                    Duration string `json:"duration"`
+                } `json:"format"`
+            }
+            if err := json.Unmarshal(outputDur, &result); err == nil && result.Format.Duration != "" {
+                actualDur, err = strconv.ParseFloat(result.Format.Duration, 64)
+                if err == nil {
+                    log.Printf("Station %s: Actual duration from ffprobe on muxed mp4: %.3fs", st.name, actualDur)
+                }
+            }
+        } else {
+            errorLogger.Printf("Station %s: ffprobe failed on muxed mp4 %s: %v", st.name, tempDurMP4, err)
+        }
+        os.Remove(tempDurMP4)
+    }
+    if actualDur == 0 {
+        // Fallback to parsing from FFmpeg output
+        outputStr := string(outputVideo)
+        timeIndex := strings.LastIndex(outputStr, "time=")
+        if timeIndex != -1 {
+            timeStr := outputStr[timeIndex+5:]
+            timeStr = timeStr[:strings.Index(timeStr, " ")]
+            parts := strings.Split(timeStr, ":")
+            if len(parts) == 3 {
+                hh, _ := strconv.ParseFloat(parts[0], 64)
+                mm, _ := strconv.ParseFloat(parts[1], 64)
+                ss, _ := strconv.ParseFloat(parts[2], 64)
+                actualDur = hh*3600 + mm*60 + ss
+                log.Printf("Station %s: Parsed actualDur %.3fs from FFmpeg output for %s", st.name, actualDur, fullSegPath)
+            }
+        }
+    }
+    if actualDur == 0 {
+        // Additional fallback to frame count
+        cmdFrames := exec.Command(
+            "ffprobe",
+            "-v", "error",
+            "-count_frames",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=nb_read_frames",
+            "-of", "default=noprint_wrappers=1:nokey=1",
             fullSegPath,
         )
-        outputDur, err := cmdDur.Output()
+        outputFrames, err := cmdFrames.Output()
+        var numFrames int64
         if err == nil {
-            var result struct {
-                Format struct {
-                    Duration string `json:"duration"`
-                } `json:"format"`
-            }
-            if err := json.Unmarshal(outputDur, &result); err != nil {
-                errorLogger.Printf("Station %s: Failed to parse ffprobe JSON for %s: %v", st.name, fullSegPath, err)
-            } else if result.Format.Duration != "" {
-                actualDur, err = strconv.ParseFloat(result.Format.Duration, 64)
-                if err != nil {
-                    errorLogger.Printf("Station %s: Failed to parse duration for %s: %v", st.name, fullSegPath, err)
-                } else {
-                    log.Printf("Station %s: Actual duration from ffprobe format: %.3fs", st.name, actualDur)
-                }
+            framesStr := strings.TrimSpace(string(outputFrames))
+            numFrames, err = strconv.ParseInt(framesStr, 10, 64)
+            if err == nil && numFrames > 0 {
+                actualDur = float64(numFrames) * float64(fpsDen) / float64(fpsNum)
+                log.Printf("Station %s: Actual duration from frame count: %.3fs (%d frames at %d/%d fps)", st.name, actualDur, numFrames, fpsNum, fpsDen)
             }
         }
     }
     if actualDur == 0 {
-        cmdDur := exec.Command(
-            "ffprobe",
-            "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "json",
-            fullEpisodePath,
-        )
-        outputDur, err := cmdDur.Output()
-        if err == nil {
-            var result struct {
-                Format struct {
-                    Duration string `json:"duration"`
-                } `json:"format"`
-            }
-            if err := json.Unmarshal(outputDur, &result); err != nil {
-                errorLogger.Printf("Station %s: Failed to parse source ffprobe JSON for %s: %v", st.name, fullEpisodePath, err)
-            } else if result.Format.Duration != "" {
-                actualDur, err = strconv.ParseFloat(result.Format.Duration, 64)
-                if err != nil {
-                    errorLogger.Printf("Station %s: Failed to parse source duration for %s: %v", st.name, fullEpisodePath, err)
-                } else {
-                    actualDur = math.Min(actualDur, adjustedChunkDur)
-                    log.Printf("Station %s: Video segment %s duration from source: %.3fs", st.name, fullSegPath, actualDur)
-                }
-            }
-        }
-        if actualDur == 0 {
-            errorLogger.Printf("Station %s: All duration probes failed for %s, using adjustedChunkDur %.3f", st.name, fullSegPath, adjustedChunkDur)
-            actualDur = adjustedChunkDur
-        }
+        errorLogger.Printf("Station %s: All duration probes failed for %s, using adjustedChunkDur %.3f", st.name, fullSegPath, adjustedChunkDur)
+        actualDur = adjustedChunkDur
     }
     var cmdAudioDur *exec.Cmd
     var outputAudioDur []byte
@@ -1508,8 +1505,7 @@ func sender(st *Station, db *sql.DB) {
                     st.trackVideo = newTrackVideo
                     log.Printf("Station %s (adsEnabled: %v): Reinitialized video track", st.name, st.adsEnabled)
                     st.mu.Unlock()
-                    time.Sleep(time.Second)
-                    continue
+                    return
                 }
             }
             audioPath := strings.Replace(segPath, ".h264", ".opus", 1)
@@ -1518,58 +1514,10 @@ func sender(st *Station, db *sql.DB) {
                 errorLogger.Printf("Station %s (adsEnabled: %v): Failed to read audio %s: %v", st.name, st.adsEnabled, audioPath, err)
                 audioData = []byte{}
             }
-            var audioPackets [][]byte
-            var granules []uint64
-            if len(audioData) > 0 {
-                reader := bytes.NewReader(audioData)
-                ogg, _, err := oggreader.NewWith(reader)
-                if err != nil {
-                    errorLogger.Printf("Station %s (adsEnabled: %v): Failed to create ogg reader for %s: %v", st.name, st.adsEnabled, audioPath, err)
-                } else {
-                    for {
-                        payload, header, err := ogg.ParseNextPage()
-                        if err == io.EOF {
-                            break
-                        }
-                        if err != nil {
-                            errorLogger.Printf("Station %s (adsEnabled: %v): Failed to parse ogg page for %s: %v", st.name, st.adsEnabled, audioPath, err)
-                            continue
-                        }
-                        if len(payload) < 1 || (len(payload) >= 8 && (string(payload[:8]) == "OpusHead" || string(payload[:8]) == "OpusTags")) {
-                            log.Printf("Station %s (adsEnabled: %v): Skipping header packet: %s", st.name, st.adsEnabled, string(payload[:8]))
-                            continue
-                        }
-                        audioPackets = append(audioPackets, payload)
-                        granules = append(granules, header.GranulePosition)
-                    }
-                    log.Printf("Station %s (adsEnabled: %v): Parsed %d audio packets for %s with granules", st.name, st.adsEnabled, len(audioPackets), audioPath)
-                }
-            }
-            if len(nalus) == 0 || len(audioData) == 0 {
-                errorLogger.Printf("Station %s (adsEnabled: %v): %s chunk %s is empty or has no NALUs/audio, advancing", st.name, st.adsEnabled, map[bool]string{true: "Final", false: "Segment"}[isFinalChunk], segPath)
-                st.mu.Lock()
-                os.Remove(segPath)
-                os.Remove(audioPath)
-                if !chunk.isAd {
-                    st.currentOffset += chunk.dur
-                    if videoDur > 0 && (st.currentOffset >= videoDur || math.Abs(st.currentOffset-videoDur) < 0.001) {
-                        st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
-                        st.currentVideo = st.videoQueue[st.currentIndex]
-                        st.currentOffset = 0.0
-                        st.spsPPS = nil
-                        st.fmtpLine = ""
-                        log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s, maintaining videoTS=%d, audioTS=%d", st.name, st.adsEnabled, st.currentVideo, currentVideoTS, currentAudioTS)
-                    }
-                }
-                st.segmentList = st.segmentList[1:]
-                st.mu.Unlock()
-                continue
-            }
-            var wg sync.WaitGroup
-            done := make(chan struct{})
-            wg.Add(2)
+            var transmissionWG sync.WaitGroup
+            transmissionWG.Add(2)
             go func(nalus [][]byte, startTS uint32) {
-                defer wg.Done()
+                defer transmissionWG.Done()
                 var allNALUs [][]byte
                 if len(chunkSpsPPS) > 0 {
                     allNALUs = append(chunkSpsPPS, nalus...)
@@ -1632,10 +1580,6 @@ func sender(st *Station, db *sql.DB) {
                     st.mu.Lock()
                     st.currentVideoRTPTS = currentVideoTS // Maintain continuity
                     st.mu.Unlock()
-                    select {
-                    case done <- struct{}{}:
-                    default:
-                    }
                     return
                 }
                 expectedFrames := int(math.Round(chunk.dur * fps))
@@ -1668,19 +1612,11 @@ func sender(st *Station, db *sql.DB) {
                                 close(st.stopCh)
                                 st.stopCh = make(chan struct{})
                                 st.mu.Unlock()
-                                select {
-                                case done <- struct{}{}:
-                                default:
-                                }
                                 return
                             }
                             st.trackVideo = newTrackVideo
                             log.Printf("Station %s (adsEnabled: %v): Reinitialized video track", st.name, st.adsEnabled)
                             st.mu.Unlock()
-                            select {
-                            case done <- struct{}{}:
-                            default:
-                            }
                             return
                         }
                         boundChecked = true
@@ -1695,10 +1631,6 @@ func sender(st *Station, db *sql.DB) {
                         st.mu.Lock()
                         st.currentVideoRTPTS = currentVideoTS
                         st.mu.Unlock()
-                        select {
-                        case done <- struct{}{}:
-                        default:
-                        }
                         return
                     }
                     videoTimestamp += uint32(frameIntervalSeconds * float64(videoClockRate))
@@ -1722,10 +1654,6 @@ func sender(st *Station, db *sql.DB) {
                             st.mu.Lock()
                             st.currentVideoRTPTS = currentVideoTS
                             st.mu.Unlock()
-                            select {
-                            case done <- struct{}{}:
-                            default:
-                            }
                             return
                         }
                         videoTimestamp += uint32(frameIntervalSeconds * float64(videoClockRate))
@@ -1739,31 +1667,19 @@ func sender(st *Station, db *sql.DB) {
                 st.currentVideoRTPTS = videoTimestamp
                 st.mu.Unlock()
                 log.Printf("Station %s (adsEnabled: %v): Completed video transmission for %s, final videoTS=%d", st.name, st.adsEnabled, segPath, videoTimestamp)
-                select {
-                case done <- struct{}{}:
-                default:
-                }
             }(nalus, currentVideoTS)
             go func(audioData []byte, startTS uint32) {
-                defer wg.Done()
+                defer transmissionWG.Done()
                 const sampleRate = 48000
                 audioTimestamp := startTS
                 if len(audioData) == 0 {
                     log.Printf("Station %s (adsEnabled: %v): No audio data for %s, skipping audio transmission", st.name, st.adsEnabled, segPath)
-                    select {
-                    case done <- struct{}{}:
-                    default:
-                    }
                     return
                 }
                 reader := bytes.NewReader(audioData)
                 ogg, _, err := oggreader.NewWith(reader)
                 if err != nil {
                     errorLogger.Printf("Station %s (adsEnabled: %v): Failed to create ogg reader for %s: %v", st.name, st.adsEnabled, segPath, err)
-                    select {
-                    case done <- struct{}{}:
-                    default:
-                    }
                     return
                 }
                 var prevGranule uint64 = 0
@@ -1807,19 +1723,11 @@ func sender(st *Station, db *sql.DB) {
                                 close(st.stopCh)
                                 st.stopCh = make(chan struct{})
                                 st.mu.Unlock()
-                                select {
-                                case done <- struct{}{}:
-                                default:
-                                }
                                 return
                             }
                             st.trackAudio = newTrackAudio
                             log.Printf("Station %s (adsEnabled: %v): Reinitialized audio track", st.name, st.adsEnabled)
                             st.mu.Unlock()
-                            select {
-                            case done <- struct{}{}:
-                            default:
-                            }
                             return
                         }
                         boundChecked = true
@@ -1834,10 +1742,6 @@ func sender(st *Station, db *sql.DB) {
                         st.mu.Lock()
                         st.currentAudioSamples = audioTimestamp
                         st.mu.Unlock()
-                        select {
-                        case done <- struct{}{}:
-                        default:
-                        }
                         return
                     }
                     audioTimestamp += uint32(durSamples)
@@ -1853,30 +1757,23 @@ func sender(st *Station, db *sql.DB) {
                     }
                 }
                 log.Printf("Station %s (adsEnabled: %v): Completed audio transmission for %s, final audioTS=%d", st.name, st.adsEnabled, segPath, audioTimestamp)
-                select {
-                case done <- struct{}{}:
-                default:
-                }
             }(audioData, currentAudioTS)
+            // Monitor with timeout
+            doneCh := make(chan struct{})
             go func() {
-                for i := 0; i < 2; i++ {
-                    select {
-                    case <-done:
-                    case <-time.After(time.Duration(chunk.dur*float64(time.Second)) + 5*time.Second):
-                        errorLogger.Printf("Station %s (adsEnabled: %v): Timeout waiting for audio/video transmission for %s", st.name, st.adsEnabled, segPath)
-                    }
-                }
-                close(done)
+                transmissionWG.Wait()
+                close(doneCh)
             }()
             select {
-            case <-done:
+            case <-doneCh:
+                log.Printf("Station %s (adsEnabled: %v): Transmission completed normally for %s", st.name, st.adsEnabled, segPath)
             case <-time.After(time.Duration(chunk.dur*float64(time.Second)) + 5*time.Second):
-                errorLogger.Printf("Station %s (adsEnabled: %v): Timeout waiting for audio/video transmission completion for %s", st.name, st.adsEnabled, segPath)
+                errorLogger.Printf("Station %s (adsEnabled: %v): Timeout waiting for audio/video transmission for %s", st.name, st.adsEnabled, segPath)
             }
             st.mu.Lock()
             os.Remove(segPath)
             os.Remove(audioPath)
-            if !chunk.isAd {
+            if !chunk.isAd && chunk.videoID == st.currentVideo {
                 st.currentOffset += chunk.dur
                 log.Printf("Station %s (adsEnabled: %v): Updated offset to %.3fs for video %d after successful transmission", st.name, st.adsEnabled, st.currentOffset, st.currentVideo)
                 if videoDur > 0 && (st.currentOffset >= videoDur || math.Abs(st.currentOffset-videoDur) < 0.001) {
@@ -1886,7 +1783,7 @@ func sender(st *Station, db *sql.DB) {
                     st.currentOffset = 0.0
                     st.spsPPS = nil
                     st.fmtpLine = ""
-                    log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s, maintaining videoTS=%d, audioTS=%d", st.name, st.adsEnabled, st.currentVideo, currentVideoTS, currentAudioTS)
+                    log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s", st.name, st.adsEnabled, st.currentVideo)
                 }
             }
             st.segmentList = st.segmentList[1:]
@@ -1894,8 +1791,6 @@ func sender(st *Station, db *sql.DB) {
             currentVideoTS = st.currentVideoRTPTS
             currentAudioTS = st.currentAudioSamples
             st.mu.Unlock()
-            wg.Wait()
-            // Removed time.Sleep(20ms) to minimize gaps
         }
     }
 }
