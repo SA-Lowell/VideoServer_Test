@@ -160,7 +160,7 @@ std::vector<FrameData> parseFrameData(const std::string& output, double start_ti
                 }
             }
         }
-        size_t pos_blackframe = line.find("[Parsed_blackframe");
+        size_t pos_blackframe = line.find("[blackframe @");
         if(pos_blackframe != std::string::npos)
         {
             size_t pos_pblack = line.find(" pblack:");
@@ -173,7 +173,7 @@ std::vector<FrameData> parseFrameData(const std::string& output, double start_ti
                 }
             }
         }
-        size_t pos_showinfo = line.find("[Parsed_showinfo");
+        size_t pos_showinfo = line.find("[showinfo @");
         if(pos_showinfo != std::string::npos)
         {
             size_t pos_pts_time = line.find("pts_time:");
@@ -197,7 +197,7 @@ std::vector<FrameData> parseFrameData(const std::string& output, double start_ti
                 }
             }
         }
-        size_t pos_astats = line.find("[Parsed_astats");
+        size_t pos_astats = line.find("[astats @");
         if(pos_astats != std::string::npos)
         {
             size_t pos_rms = line.find("RMS level dB:");
@@ -346,35 +346,64 @@ std::vector<Period> findOverlaps(const std::vector<Period>& silences, const std:
     return periods;
 }
 
+std::vector<Period> mergePeriods(const std::vector<Period>& periods, double merge_threshold)
+{
+    if (merge_threshold <= 0.0 || periods.empty()) {
+        return periods;
+    }
+    std::vector<Period> merged;
+    Period current = periods[0];
+    for (size_t i = 1; i < periods.size(); ++i) {
+        if (periods[i].start - current.end <= merge_threshold) {
+            current.end = std::max(current.end, periods[i].end);
+        } else {
+            merged.push_back(current);
+            current = periods[i];
+        }
+    }
+    merged.push_back(current);
+    return merged;
+}
+
 int main(int argc, char* argv[])
 {
     if(argc < 2)
     {
-        std::cerr << "Usage: " << argv[0] << " <video_file> [start] [end] [--no-format] [--hide-decimal] [--hide-mmss] [--hide-start] [--hide-midpoint] [--hide-end]" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <video_file> [start] [end] [--merge-threshold <seconds>] [--no-format] [--hide-decimal] [--hide-mmss] [--hide-start] [--hide-midpoint] [--hide-end]" << std::endl;
         return 1;
     }
     std::string video = argv[1];
     double start_time = 0.0;
     double duration = 0.0;  // 0 means whole video
-    if (argc >= 4) {
-        try {
-            start_time = std::stod(argv[2]);
-            duration = std::stod(argv[3]) - start_time;
-        } catch (...) {
-            std::cerr << "Invalid start or end time." << std::endl;
-            return 1;
-        }
-    }
+    double merge_threshold = 0.0;  // Default no merging
     bool show_decimal = true;
     bool no_format = false;
     bool show_mmss = true;
     bool show_start = true;
     bool show_midpoint = true;
     bool show_end = true;
-    for(int i = (argc >= 4 ? 4 : 2); i < argc; ++i)
+    int arg_index = 2;
+    if (argc >= 4) {
+        try {
+            start_time = std::stod(argv[arg_index]);
+            duration = std::stod(argv[arg_index + 1]) - start_time;
+            arg_index += 2;
+        } catch (...) {
+            std::cerr << "Invalid start or end time." << std::endl;
+            return 1;
+        }
+    }
+    for(int i = arg_index; i < argc; ++i)
     {
         std::string arg = argv[i];
-        if(arg == "--hide-decimal") show_decimal = false;
+        if(arg == "--merge-threshold" && i + 1 < argc) {
+            try {
+                merge_threshold = std::stod(argv[++i]);
+            } catch (...) {
+                std::cerr << "Invalid merge-threshold value." << std::endl;
+                return 1;
+            }
+        } else if(arg == "--hide-decimal") show_decimal = false;
         else if(arg == "--hide-mmss") show_mmss = false;
         else if(arg == "--hide-start") show_start = false;
         else if(arg == "--hide-midpoint") show_midpoint = false;
@@ -404,7 +433,7 @@ int main(int argc, char* argv[])
     std::string silence_cmd = "ffmpeg " + ss_t + "-i \"" + video + "\" -af silencedetect=noise=-30dB:d=0.05 -f null - 2>&1";
     std::string silence_output = exec(silence_cmd);
     std::vector<Period> silences = parseSilence(silence_output, start_time);
-    std::string black_cmd = "ffmpeg " + ss_t + "-i \"" + video + "\" -vf blackdetect=d=0.03:pic_th=0.9:pix_th=0.1 -f null - 2>&1";
+    std::string black_cmd = "ffmpeg " + ss_t + "-i \"" + video + "\" -vf blackdetect=d=0.05:pic_th=0.95:pix_th=0.1 -f null - 2>&1";
     std::string black_output = exec(black_cmd);
     std::vector<Period> blacks = parseBlack(black_output, start_time);
     std::string frame_cmd = "ffmpeg " + ss_t + "-i \"" + video + "\" -vf \"metadata=print,blackframe=amount=0:threshold=32,showinfo\" -af astats=metadata=1:reset=1 -f null - 2>&1";
@@ -421,6 +450,7 @@ int main(int argc, char* argv[])
             filtered_points.push_back({adjusted_start, adjusted_end});
         }
     }
+    filtered_points = mergePeriods(filtered_points, merge_threshold);
     if(filtered_points.empty())
     {
         std::cout << "No suitable ad insertion points detected." << std::endl;

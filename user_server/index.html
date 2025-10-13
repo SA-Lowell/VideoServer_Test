@@ -88,6 +88,7 @@ let analyser = null;
 let source = null;
 let lastVideoTime = 0;
 let lastCheckTime = 0;
+let restartInProgress = false; // New flag to prevent concurrent restarts
 const videoElement = document.getElementById('video');
 const logElement = document.getElementById('log');
 
@@ -249,7 +250,7 @@ function togglePlayPause() {
 }
 
 let freezeCount = 0;
-const maxFreezeRestarts = 3; // Define max restarts, adjustable as needed
+const maxFreezeRestarts = 5;
 
 async function startConnection() {
     if (pc) {
@@ -268,6 +269,7 @@ async function startConnection() {
     freezeCount = 0;
     lastVideoTime = 0;
     lastCheckTime = 0;
+    restartInProgress = false;
     const stopStaticEffect = createTVStaticEffect();
     startStaticAudio();
     pc = new RTCPeerConnection({
@@ -380,9 +382,15 @@ async function startConnection() {
     };
     videoElement.addEventListener('error', () => {
         log(`Video element error: ${videoElement.error ? videoElement.error.message : 'Unknown error'}`);
+        if (videoElement.error && videoElement.error.code === MediaError.MEDIA_ERR_ABORTED) {
+            videoElement.load();
+            videoElement.play().catch(err => log(`Replay after AbortError failed: ${err}`));
+        }
     });
     videoElement.addEventListener('stalled', () => {
-        log('Video stalled - scheduling ICE restart in 5 seconds');
+        log('Video stalled - attempting reload');
+        videoElement.load();
+        videoElement.play().catch(err => log(`Replay after stall failed: ${err}`));
         setTimeout(() => {
             if (pc && (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed')) {
                 restartICE();
@@ -403,8 +411,9 @@ async function startConnection() {
 function checkForDesync() {
     if (!videoElement.srcObject || videoElement.paused || videoElement.ended || lastCheckTime === 0) return;
     const now = performance.now() / 1000;
+    if (now - lastCheckTime < 5) return; // Delay initial checks for 5s to avoid false positives during setup
     const elapsed = now - lastCheckTime;
-    if (elapsed < 1) return; // Check every ~1s min
+    if (elapsed < 1) return;
     const videoTime = videoElement.currentTime;
     const expected = lastVideoTime + elapsed;
     const timeDiff = Math.abs(videoTime - expected);
@@ -415,7 +424,7 @@ function checkForDesync() {
         level = data.reduce((sum, val) => sum + Math.abs(val), 0) / data.length;
     }
     log(`Audio-video desync check: videoTime=${videoTime}, expected=${expected.toFixed(3)}, diff=${timeDiff.toFixed(3)}s, audioLevel=${level.toFixed(4)}`);
-    if (elapsed > 1 && Math.abs(videoTime - lastVideoTime) < 0.1) {
+    if (elapsed > 3 && Math.abs(videoTime - lastVideoTime) < 0.1) {
         log(`Video freeze detected: currentTime=${videoTime}, lastTime=${lastVideoTime}, elapsed=${elapsed.toFixed(3)}s`);
         freezeCount++;
         if (freezeCount >= maxFreezeRestarts) {
@@ -426,7 +435,7 @@ function checkForDesync() {
             log('Scheduling ICE restart due to freeze');
             setTimeout(restartICE, 5000);
         }
-    } else if (timeDiff > 5.0) {
+    } else if (timeDiff > 1.0) {
         log(`Significant audio-video desync detected: diff=${timeDiff.toFixed(3)}s`);
         freezeCount++;
         if (freezeCount >= maxFreezeRestarts) {
@@ -451,7 +460,7 @@ function checkForDesync() {
     lastVideoTime = videoTime;
     lastCheckTime = now;
 }
-    setInterval(checkForDesync, 1000); // Increased frequency to 1s for faster detection
+    setInterval(checkForDesync, 2000); // Reduced frequency to 2s
     const audioTransceiver = pc.addTransceiver('audio', { direction: 'recvonly' });
     const videoTransceiver = pc.addTransceiver('video', {
         direction: 'recvonly',
@@ -492,6 +501,10 @@ async function restartICE() {
         startConnection();
         return;
     }
+    if (restartInProgress) {
+        log('ICE restart already in progress, skipping duplicate');
+        return;
+    }
     if (pc.signalingState !== 'stable') {
         log('Cannot restart ICE: signalingState is ' + pc.signalingState + ', waiting for stable state');
         setTimeout(restartICE, 1000);
@@ -502,6 +515,7 @@ async function restartICE() {
         startConnection();
         return;
     }
+    restartInProgress = true;
     log('Restarting ICE to fix desync or freeze...');
     try {
         const offer = await pc.createOffer({ iceRestart: true });
@@ -531,6 +545,8 @@ async function restartICE() {
     } catch (error) {
         log(`ICE restart failed: ${error}`);
         startConnection();
+    } finally {
+        restartInProgress = false;
     }
 }
 </script>

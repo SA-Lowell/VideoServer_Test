@@ -1954,12 +1954,21 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
     }
     st.mu.Lock()
     st.viewers++
-    if !st.processing {
+    startGoroutines := false
+    if st.viewers == 1 {
+        startGoroutines = true
+        st.stopCh = make(chan struct{}) // New stopCh
         st.processing = true
+
+        // Initial buffer filling block
         if err := os.MkdirAll(HlsDir, 0755); err != nil {
             log.Printf("Station %s: Failed to create webrtc_segments directory: %v", st.name, err)
             st.viewers--
             st.mu.Unlock()
+            if startGoroutines {
+                go manageProcessing(st, db)
+                go sender(st, db)
+            }
             c.JSON(500, gin.H{"error": "Failed to create webrtc_segments directory"})
             pc.Close()
             return
@@ -2161,10 +2170,12 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
             }
         }
         log.Printf("Station %s: Initial segmentList: %v", st.name, st.segmentList)
+    }
+    st.mu.Unlock()
+    if startGoroutines {
         go manageProcessing(st, db)
         go sender(st, db)
     }
-    st.mu.Unlock()
     pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
         log.Printf("Station %s: ICE state: %s", stationName, state.String())
     })
