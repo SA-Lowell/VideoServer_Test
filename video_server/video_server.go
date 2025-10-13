@@ -289,6 +289,9 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
     if hasAudio {
         argsAudio := []string{
             "-y",
+            "-err_detect", "ignore_err",
+            "-analyzeduration", "100M",
+            "-probesize", "100M",
             "-ss", fmt.Sprintf("%.3f", startTime),
             "-i", fullEpisodePath,
             "-t", fmt.Sprintf("%.3f", adjustedChunkDur),
@@ -324,7 +327,8 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         }
         cmdAudio = exec.Command("ffmpeg", argsAudio...)
         outputAudio, err = cmdAudio.CombinedOutput()
-        log.Printf("Station %s: FFmpeg audio output for %s: %s", st.name, opusPath, string(outputAudio))
+        outputAudioStr := string(outputAudio)
+        log.Printf("Station %s: FFmpeg audio output for %s: %s", st.name, opusPath, outputAudioStr)
         if err != nil {
             errorLogger.Printf("Station %s: ffmpeg audio command failed for %s: %v", st.name, opusPath, err)
             return nil, nil, "", 0, fpsPair{}, fmt.Errorf("ffmpeg audio with loudnorm failed for video %d at %fs: %v", videoID, startTime, err)
@@ -335,6 +339,8 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         if err != nil || len(audioData) == 0 {
             errorLogger.Printf("Station %s: Audio file %s is empty or unreadable after encoding: %v, size=%d", st.name, opusPath, err, len(audioData))
             hasAudio = false
+        } else if strings.Contains(outputAudioStr, "Header missing") || strings.Contains(outputAudioStr, "Invalid data found") {
+            log.Printf("Station %s: Detected MP3 decode errors in %s, verifying output", st.name, opusPath)
         }
     }
     if !hasAudio || len(audioData) == 0 {
@@ -399,6 +405,9 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
     var outputVideo []byte
     argsVideo := []string{
         "-y",
+        "-err_detect", "ignore_err",
+        "-analyzeduration", "100M",
+        "-probesize", "100M",
         "-ss", fmt.Sprintf("%.3f", startTime),
         "-i", fullEpisodePath,
         "-t", fmt.Sprintf("%.3f", adjustedChunkDur),
@@ -449,6 +458,9 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         keyFrameParamsReencode := fmt.Sprintf("keyint=%d:min-keyint=1:scenecut=0", gopSizeReencode)
         tempMP4Args := []string{
             "-y",
+            "-err_detect", "ignore_err",
+            "-analyzeduration", "100M",
+            "-probesize", "100M",
             "-ss", fmt.Sprintf("%.3f", startTime),
             "-i", fullEpisodePath,
             "-t", fmt.Sprintf("%.3f", adjustedChunkDur),
@@ -499,6 +511,9 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         var outputReencodeVideo []byte
         argsReencodeVideo := []string{
             "-y",
+            "-err_detect", "ignore_err",
+            "-analyzeduration", "100M",
+            "-probesize", "100M",
             "-i", tempMP4Path,
             "-c:v", "libx264",
             "-preset", "ultrafast",
@@ -540,6 +555,9 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             var outputReencodeAudio []byte
             argsReencodeAudio := []string{
                 "-y",
+                "-err_detect", "ignore_err",
+                "-analyzeduration", "100M",
+                "-probesize", "100M",
                 "-i", tempMP4Path,
                 "-c:a", "libopus",
                 "-b:a", "128k",
@@ -717,10 +735,13 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         errorLogger.Printf("Station %s: ffprobe audio duration failed for %s: %v, assuming video duration %.3fs", st.name, opusPath, err, actualDur)
         audioDur = actualDur
     }
-    if math.Abs(audioDur-actualDur) > 0.01 {
+    if math.Abs(audioDur-actualDur) > 0.02 { // Increased threshold
         log.Printf("Station %s: Audio duration %.3fs differs from video duration %.3fs, re-encoding audio", st.name, audioDur, actualDur)
         argsAudio := []string{
             "-y",
+            "-err_detect", "ignore_err",
+            "-analyzeduration", "100M",
+            "-probesize", "100M",
             "-ss", fmt.Sprintf("%.3f", startTime),
             "-i", fullEpisodePath,
             "-t", fmt.Sprintf("%.3f", actualDur),
@@ -821,6 +842,9 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         keyFrameParamsRepair := fmt.Sprintf("keyint=%d:min-keyint=1:scenecut=0", gopSize)
         args := []string{
             "-y",
+            "-err_detect", "ignore_err",
+            "-analyzeduration", "100M",
+            "-probesize", "100M",
             "-i", fullSegPath,
             "-c:v", "libx264",
             "-preset", "ultrafast",
@@ -2369,6 +2393,9 @@ func updateVideoDurations(db *sql.DB) error {
                 log.Printf("Audio stream detected in video %d (%s), calculating loudnorm", id, fullPath)
                 cmdLoudnorm := exec.Command(
                     "ffmpeg",
+                    "-err_detect", "ignore_err",
+                    "-analyzeduration", "100M",
+                    "-probesize", "100M",
                     "-i", fullPath,
                     "-af", "loudnorm=print_format=json",
                     "-vn", "-f", "null", "-",
