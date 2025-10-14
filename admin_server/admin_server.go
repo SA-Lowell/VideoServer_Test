@@ -1,3 +1,4 @@
+// admin_server.go
 package main
 
 import (
@@ -51,6 +52,7 @@ type DirEntry struct {
 	Type string `json:"type"`
 	Name string `json:"name"`
 	Path string `json:"path"`
+	IsCommercial bool `json:"is_commercial,omitempty"`
 }
 
 type AddBreakReq struct {
@@ -422,7 +424,21 @@ func listContentsHandler(c *gin.Context) {
 
 			for _, supportedExt := range supportedExtensions {
 				if ext == supportedExt {
-					contents = append(contents, DirEntry{Type: "file", Name: entry.Name(), Path: entryPath})
+
+uri := entryPath
+var exists bool
+err = db.QueryRow(`SELECT EXISTS(
+	SELECT 1 FROM videos v 
+	JOIN video_tags vt ON v.id = vt.video_id 
+	JOIN tags t ON vt.tag_id = t.id 
+	WHERE v.uri = $1 AND t.name = 'commercial'
+)`, uri).Scan(&exists)
+if err != nil {
+	log.Printf("Error checking commercial tag for %s: %v", uri, err)
+	exists = false
+}
+contents = append(contents, DirEntry{Type: "file", Name: entry.Name(), Path: entryPath, IsCommercial: exists})
+
 					break
 				}
 			}
