@@ -7,7 +7,7 @@
     <style>
         .video-section { margin-bottom: 20px; border: 1px solid #ccc; padding: 10px; display: none; }
         .video-section.active { display: block; }
-        #folder-browser, #file-browser { 
+        #folder-browser, #file-browser, #scan-results { 
             border: 1px solid #ccc; 
             padding: 10px; 
             max-height: 300px; 
@@ -48,6 +48,10 @@
     <h3>Files in Current Folder</h3>
     <div id="file-browser"></div>
     <button onclick="navigateTo('')">Back to Root</button>
+
+    <h2>Scan Non-Commercial Videos in Current Directory and Subdirectories</h2>
+    <button id="scan-button">Scan</button>
+    <div id="scan-results"></div>
 
     <h2>Selected Videos</h2>
     <button id="clear-all-button">Clear All Selected Videos</button>
@@ -322,6 +326,42 @@
                 currentVideoIndex++;
                 updatePagination();
             }
+        });
+
+        document.getElementById('scan-button').addEventListener('click', () => {
+            fetch(`/scan-non-commercials?path=${encodeURIComponent(currentPath)}`)
+                .then(res => {
+                    if (!res.ok) {
+                        throw new Error(`HTTP error! Status: ${res.status}`);
+                    }
+                    return res.json();
+                })
+                .then(data => {
+                    if (!data.contents || !Array.isArray(data.contents)) {
+                        throw new Error('Invalid response format: contents is missing or not an array');
+                    }
+                    const scanResults = document.getElementById('scan-results');
+                    scanResults.innerHTML = '';
+                    data.contents.forEach(item => {
+                        const div = document.createElement('div');
+                        div.className = 'file-item not-commercial';
+                        div.innerHTML = `${item.path}`;
+                        div.onclick = () => {
+                            fetch('/add-video', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ uri: item.path })
+                            }).then(res => res.json()).then(addData => {
+                                fetchMetadata(addData.id, item.path);
+                            }).catch(err => console.error(err));
+                        };
+                        scanResults.appendChild(div);
+                    });
+                })
+                .catch(err => {
+                    console.error('Error scanning non-commercials:', err);
+                    document.getElementById('scan-results').innerHTML = `<div style="color: red;">Error: ${err.message}</div>`;
+                });
         });
 
         loadContents('');

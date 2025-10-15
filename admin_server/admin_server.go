@@ -23,6 +23,8 @@ const (
 	adBreakHardCutDetectorPath     = "./ad_break_hard_cut_detector.exe"
 )
 
+var supportedExtensions = []string{".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".mpeg", ".mpg", ".m4v", ".3gp", ".3g2", ".ogv", ".rm", ".rmvb", ".vob", ".ts", ".m2ts", ".mts", ".divx", ".asf"}
+
 type Title struct {
 	ID            int64
 	Name          string
@@ -49,10 +51,10 @@ type Tag struct {
 }
 
 type DirEntry struct {
-	Type string `json:"type"`
-	Name string `json:"name"`
-	Path string `json:"path"`
-	IsCommercial bool `json:"is_commercial,omitempty"`
+	Type         string `json:"type"`
+	Name         string `json:"name"`
+	Path         string `json:"path"`
+	IsCommercial bool   `json:"is_commercial,omitempty"`
 }
 
 type AddBreakReq struct {
@@ -228,6 +230,7 @@ func main() {
 	r.GET("/update-ad-breaks", updateAdBreaksHandler)
 	r.GET("/get-video-metadata/:id", getVideoMetadataHandler)
 	r.GET("/list-contents", listContentsHandler)
+	r.GET("/scan-non-commercials", scanNonCommercialsHandler)
 	r.POST("/add-video", addVideoHandler)
 	r.POST("/detect-breaks", detectBreaksHandler)
 	r.POST("/add-break", addBreakHandler)
@@ -404,6 +407,15 @@ func getVideoMetadataHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, video)
 }
 
+func contains(s []string, e string) bool {
+	for _, a := range s {
+		if a == e {
+			return true
+		}
+	}
+	return false
+}
+
 func listContentsHandler(c *gin.Context) {
 	relPath := c.Query("path")
 	fullPath := filepath.Join(videoBaseDir, relPath)
@@ -420,31 +432,67 @@ func listContentsHandler(c *gin.Context) {
 			contents = append(contents, DirEntry{Type: "dir", Name: entry.Name(), Path: entryPath})
 		} else {
 			ext := strings.ToLower(filepath.Ext(entry.Name()))
-			supportedExtensions := []string{".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".mpeg", ".mpg", ".m4v", ".3gp", ".3g2", ".ogv", ".rm", ".rmvb", ".vob", ".ts", ".m2ts", ".mts", ".divx", ".asf"}
-
-			for _, supportedExt := range supportedExtensions {
-				if ext == supportedExt {
-
-uri := entryPath
-var exists bool
-err = db.QueryRow(`SELECT EXISTS(
+			if contains(supportedExtensions, ext) {
+				uri := entryPath
+				var exists bool
+				err = db.QueryRow(`SELECT EXISTS(
 	SELECT 1 FROM videos v 
 	JOIN video_tags vt ON v.id = vt.video_id 
 	JOIN tags t ON vt.tag_id = t.id 
 	WHERE v.uri = $1 AND t.name = 'commercial'
 )`, uri).Scan(&exists)
-if err != nil {
-	log.Printf("Error checking commercial tag for %s: %v", uri, err)
-	exists = false
-}
-contents = append(contents, DirEntry{Type: "file", Name: entry.Name(), Path: entryPath, IsCommercial: exists})
-
-					break
+				if err != nil {
+					log.Printf("Error checking commercial tag for %s: %v", uri, err)
+					exists = false
 				}
+				contents = append(contents, DirEntry{Type: "file", Name: entry.Name(), Path: entryPath, IsCommercial: exists})
 			}
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"contents": contents})
+}
+
+func scanNonCommercialsHandler(c *gin.Context) {
+	relPath := c.Query("path")
+	fullPath := filepath.Join(videoBaseDir, relPath)
+	var nonCommercials []DirEntry
+	err := filepath.Walk(fullPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(info.Name()))
+		if !contains(supportedExtensions, ext) {
+			return nil
+		}
+		relURI, err := filepath.Rel(videoBaseDir, path)
+		if err != nil {
+			return err
+		}
+		relURI = strings.ReplaceAll(relURI, "\\", "/")
+		var exists bool
+		err = db.QueryRow(`SELECT EXISTS(
+	SELECT 1 FROM videos v 
+	JOIN video_tags vt ON v.id = vt.video_id 
+	JOIN tags t ON vt.tag_id = t.id 
+	WHERE v.uri = $1 AND t.name = 'commercial'
+)`, relURI).Scan(&exists)
+		if err != nil {
+			log.Printf("Error checking commercial tag for %s: %v", relURI, err)
+			exists = false
+		}
+		if !exists {
+			nonCommercials = append(nonCommercials, DirEntry{Type: "file", Name: info.Name(), Path: relURI, IsCommercial: false})
+		}
+		return nil
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"contents": nonCommercials})
 }
 
 func addVideoHandler(c *gin.Context) {
