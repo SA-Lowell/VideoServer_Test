@@ -41,22 +41,22 @@
         .selected-breaks-list { margin-top: 20px; }
         .existing-breaks-list { margin-top: 20px; }
         .break-item { margin-bottom: 10px; }
-        #folder-browser, #file-browser { 
-            border: 1px solid #ccc; 
-            padding: 10px; 
-            max-height: 300px; 
-            overflow-y: auto; 
+        #folder-browser, #file-browser {
+            border: 1px solid #ccc;
+            padding: 10px;
+            max-height: 300px;
+            overflow-y: auto;
             margin-top: 10px;
         }
         .dir-item, .file-item { cursor: pointer; margin-bottom: 5px; }
         .dir-item { color: blue; }
         .file-item { color: green; }
         #breadcrumb-nav { margin-top: 10px; }
-        .breadcrumb-item { 
-            cursor: pointer; 
-            color: blue; 
-            text-decoration: underline; 
-            margin-right: 5px; 
+        .breadcrumb-item {
+            cursor: pointer;
+            color: blue;
+            text-decoration: underline;
+            margin-right: 5px;
         }
         .breadcrumb-item:hover { color: darkblue; }
         .breadcrumb-item::after { content: '/'; margin-left: 5px; }
@@ -81,11 +81,12 @@
         .break-item input[type="text"] { width: 120px; margin-right: 10px; }
         .fix-options { margin-left: 10px; }
         .fix-options label { margin-right: 10px; }
+        .fade-params { margin-top: 10px; }
+        .fade-params label { display: block; margin-bottom: 5px; }
     </style>
 </head>
 <body>
     <h1>Admin Panel - Update Ad Break Points</h1>
-
     <h2>Files from Video Folder</h2>
     <div id="current-path">Current Path: /</div>
     <div id="breadcrumb-nav"></div>
@@ -94,7 +95,6 @@
     <h3>Files in Current Folder</h3>
     <div id="file-browser"></div>
     <button onclick="navigateTo('')">Back to Root</button>
-
     <h2>Selected Videos</h2>
     <button id="clear-all-button">Clear All Selected Videos</button>
     <div class="pagination-controls">
@@ -103,13 +103,11 @@
         <button id="next-button" disabled>Next</button>
     </div>
     <div id="selected-videos-container"></div>
-
     <script>
         let videosData = {};
         let currentPath = '';
         let currentVideoIndex = -1;
         let videoIds = [];
-
         // Convert seconds to HH:MM:SS.dddd format
         function formatTime(seconds) {
             const hours = Math.floor(seconds / 3600);
@@ -118,7 +116,6 @@
             const formatted = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs.toFixed(4)).padStart(7, '0')}`;
             return formatted;
         }
-
         // Parse HH:MM:SS.dddd back to seconds
         function parseTime(timeStr) {
             const parts = timeStr.split(':');
@@ -129,7 +126,6 @@
             if (isNaN(hours) || isNaN(minutes) || isNaN(secs)) return NaN;
             return hours * 3600 + minutes * 60 + secs;
         }
-
         function selectVideo(id, uri, metadataBreaks = []) {
             if (videosData[id]) {
                 alert('Video already selected');
@@ -146,7 +142,6 @@
             createSection(id, uri);
             updatePagination();
         }
-
         function createSection(id, uri) {
             const container = document.getElementById('selected-videos-container');
             const sectionHtml = `
@@ -172,6 +167,8 @@
                         <button id="detect-hard-cut-button-${id}">Detect Hard-Cut Ad Breaks</button>
                     </div>
                     <div class="detection-status" id="detection-status-${id}">Detecting ad breaks, please wait...</div>
+                    <label>Preview left (secs): <input type="number" id="preview-left-${id}" value="10" min="0"></label>
+                    <label> right: <input type="number" id="preview-right-${id}" value="10" min="0"></label>
                     <h3>Existing Break Points</h3>
                     <div class="existing-breaks-list" id="existing-breaks-list-${id}"></div>
                     <h3>Detected Breaks</h3>
@@ -183,6 +180,11 @@
                     <h3>Selected Breaks to Save</h3>
                     <div class="selected-breaks-list" id="selected-breaks-list-${id}"></div>
                     <button class="save-breaks-button" id="save-breaks-button-${id}" disabled>Save Breakpoints</button>
+                    <div id="preview-container-${id}" style="display:none;">
+                        <h3>Fade Preview</h3>
+                        <video class="video-player" controls id="preview-video-${id}"></video>
+                        <button id="close-preview-${id}">Close</button>
+                    </div>
                 </div>
             `;
             container.insertAdjacentHTML('beforeend', sectionHtml);
@@ -194,7 +196,6 @@
             video.src = `/videos/${uri}`;
             video.load();
         }
-
         function attachListeners(id) {
             document.getElementById(`detect-fade-button-${id}`).addEventListener('click', () => detectBreaks(id, 'fade'));
             document.getElementById(`detect-hard-cut-button-${id}`).addEventListener('click', () => detectBreaks(id, 'hard-cut'));
@@ -205,35 +206,30 @@
             document.getElementById(`seek-forward-button-${id}`).addEventListener('click', () => seekForward(id));
             document.getElementById(`remove-button-${id}`).addEventListener('click', () => removeSection(id));
             document.getElementById(`fix-video-button-${id}`).addEventListener('click', () => fixVideo(id));
+            document.getElementById(`close-preview-${id}`).addEventListener('click', () => document.getElementById(`preview-container-${id}`).style.display = 'none');
         }
-
         function fixVideo(id) {
             const video = document.getElementById(`video-player-${id}`);
             const fixButton = document.getElementById(`fix-video-button-${id}`);
             const remuxCheckbox = document.getElementById(`remux-checkbox-${id}`);
             const audioCheckbox = document.getElementById(`audio-checkbox-${id}`);
             const videoCheckbox = document.getElementById(`video-checkbox-${id}`);
-
             if (!remuxCheckbox.checked && !audioCheckbox.checked && !videoCheckbox.checked) {
                 alert('Please select at least one fix option (Remux, Audio, Video).');
                 return;
             }
-
             fixButton.disabled = true;
-
             // Pause the video to release any file locks
             const wasPlaying = !video.paused;
             if (wasPlaying) {
                 video.pause();
             }
-
             const body = {
                 id: id,
                 remux: remuxCheckbox.checked,
                 audio: audioCheckbox.checked,
                 video: videoCheckbox.checked
             };
-
             fetch('/fix-video', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -265,7 +261,6 @@
                 alert('Error fixing video: ' + err.message);
             });
         }
-
         function updatePagination() {
             const prevButton = document.getElementById('prev-button');
             const nextButton = document.getElementById('next-button');
@@ -283,7 +278,6 @@
                 showVideoSection(videoIds[currentVideoIndex]);
             }
         }
-
         function showVideoSection(id) {
             document.querySelectorAll('.video-section').forEach(section => {
                 section.classList.remove('active');
@@ -293,7 +287,6 @@
                 section.classList.add('active');
             }
         }
-
         function loadContents(path) {
             currentPath = path;
             document.getElementById('current-path').innerHTML = `Current Path: /${path}`;
@@ -343,7 +336,6 @@
                     document.getElementById('file-browser').innerHTML = `<div style="color: red;">Error: ${err.message}</div>`;
                 });
         }
-
         function updateBreadcrumbNav() {
             const breadcrumbNav = document.getElementById('breadcrumb-nav');
             breadcrumbNav.innerHTML = '';
@@ -364,11 +356,9 @@
                 breadcrumbNav.appendChild(span);
             });
         }
-
         function navigateTo(path) {
             loadContents(path);
         }
-
         function fetchMetadata(id, path) {
             fetch(`/get-video-metadata/${id}`)
                 .then(res => {
@@ -380,20 +370,25 @@
                 .then(data => {
                     const metadataBreaks = data.Metadata.filter(m => m.TypeName === 'break_point')
                         .map(m => {
-                            const time = parseFloat(m.Value);
-                            if (isNaN(time)) return null;
-                            const start = Math.max(0, time - 1);
+                            let val = JSON.parse(m.Value);
+                            let tim = typeof val === 'number' ? val : val.time;
+                            if (isNaN(tim)) return null;
+                            const start = Math.max(0, tim - 1);
                             const end = start + 2;
                             return {
+                                value: val,
                                 start,
-                                mid: time,
                                 end,
-                                originalMid: time,
+                                originalValue: JSON.parse(JSON.stringify(val)),
                                 metaId: m.ID
                             };
                         })
                         .filter(b => b !== null)
-                        .sort((a, b) => a.mid - b.mid);
+                        .sort((a, b) => {
+                            let at = typeof a.value === 'number' ? a.value : a.value.time;
+                            let bt = typeof b.value === 'number' ? b.value : b.value.time;
+                            return at - bt;
+                        });
                     selectVideo(id, path, metadataBreaks);
                 })
                 .catch(err => {
@@ -401,16 +396,14 @@
                     selectVideo(id, path, []);
                 });
         }
-
         function detectBreaks(id, detectorType) {
             const statusDiv = document.getElementById(`detection-status-${id}`);
             const fadeButton = document.getElementById(`detect-fade-button-${id}`);
             const hardCutButton = document.getElementById(`detect-hard-cut-button-${id}`);
-            
+           
             statusDiv.classList.add('active');
             fadeButton.disabled = true;
             hardCutButton.disabled = true;
-
             const body = { id: id, detector: detectorType };
             fetch('/detect-breaks', {
                 method: 'POST',
@@ -438,7 +431,6 @@
                 alert('Error detecting ad breaks: ' + err.message);
             });
         }
-
         function updateBreaksSelect(id) {
             const select = document.getElementById(`breaks-select-${id}`);
             select.innerHTML = '';
@@ -449,7 +441,6 @@
                 select.appendChild(option);
             });
         }
-
         function updateSelectedBreaksList(id) {
             const list = document.getElementById(`selected-breaks-list-${id}`);
             list.innerHTML = '';
@@ -458,83 +449,148 @@
                 div.className = 'break-item';
                 const displaySpan = document.createElement('span');
                 displaySpan.className = 'display-span';
-                displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(b.mid)}, End: ${formatTime(b.end)}`;
+                const isHard = typeof b.value === 'number';
+                if (isHard) {
+                    displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(b.value)}, End: ${formatTime(b.end)}`;
+                } else {
+                    displaySpan.innerHTML = `Breakpoint: ${formatTime(b.value.time)}`;
+                }
                 div.appendChild(displaySpan);
                 const slider = document.createElement('input');
                 slider.type = 'range';
                 slider.min = b.start;
                 slider.max = b.end;
                 slider.step = 0.0001;
-                slider.value = b.mid;
+                slider.value = isHard ? b.value : b.value.time;
                 slider.oninput = () => {
                     const newMid = parseFloat(slider.value);
-                    videosData[id].selectedBreaks[idx].mid = newMid;
+                    const oldT = isHard ? b.value : b.value.time;
+                    const delta = newMid - oldT;
+                    if (isHard) {
+                        b.value = newMid;
+                    } else {
+                        b.value.time = newMid;
+                    }
+                    b.start += delta;
+                    b.end += delta;
                     timeInput.value = formatTime(newMid);
-                    displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(newMid)}, End: ${formatTime(b.end)}`;
+                    if (isHard) {
+                        displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(newMid)}, End: ${formatTime(b.end)}`;
+                    } else {
+                        displaySpan.innerHTML = `Breakpoint: ${formatTime(newMid)}`;
+                    }
                 };
                 div.appendChild(slider);
                 const timeInput = document.createElement('input');
                 timeInput.type = 'text';
-                timeInput.value = formatTime(b.mid);
+                timeInput.value = formatTime(isHard ? b.value : b.value.time);
                 timeInput.size = 12;
                 timeInput.onchange = () => {
                     const newTime = parseTime(timeInput.value);
                     if (!isNaN(newTime) && newTime >= b.start && newTime <= b.end) {
-                        videosData[id].selectedBreaks[idx].mid = newTime;
+                        const oldT = isHard ? b.value : b.value.time;
+                        const delta = newTime - oldT;
+                        if (isHard) {
+                            b.value = newTime;
+                        } else {
+                            b.value.time = newTime;
+                        }
+                        b.start += delta;
+                        b.end += delta;
                         slider.value = newTime;
-                        displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(newTime)}, End: ${formatTime(b.end)}`;
+                        if (isHard) {
+                            displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(newTime)}, End: ${formatTime(b.end)}`;
+                        } else {
+                            displaySpan.innerHTML = `Breakpoint: ${formatTime(newTime)}`;
+                        }
                     } else {
                         alert('Invalid time or out of range');
-                        timeInput.value = formatTime(videosData[id].selectedBreaks[idx].mid);
+                        timeInput.value = formatTime(isHard ? b.value : b.value.time);
                     }
                 };
                 div.appendChild(timeInput);
-                const stepBackwardBtn = document.createElement('button');
-                stepBackwardBtn.textContent = 'Step Backward';
-                stepBackwardBtn.onclick = () => {
-                    const breakPoint = videosData[id].selectedBreaks[idx];
-                    const duration = breakPoint.end - breakPoint.start;
-                    let newEnd = breakPoint.start;
-                    let newStart = newEnd - duration;
-                    if (newStart < 0) {
-                        newStart = 0;
-                        newEnd = duration;
+                const typeLabel = document.createElement('label');
+                typeLabel.innerText = 'Type: ';
+                div.appendChild(typeLabel);
+                const typeSelect = document.createElement('select');
+                typeSelect.innerHTML = `<option value="hard">Hard</option><option value="fade">Fade</option>`;
+                typeSelect.value = isHard ? 'hard' : 'fade';
+                div.appendChild(typeSelect);
+                typeSelect.onchange = (e) => {
+                    const nt = e.target.value;
+                    if (nt === 'hard' && !isHard) {
+                        b.value = b.value.time;
+                    } else if (nt === 'fade' && isHard) {
+                        const oldTime = b.value;
+                        b.value = {
+                            type: 'fade',
+                            time: oldTime,
+                            color: '#000000',
+                            fade_out: {
+                                video: {start: -1, end: 0},
+                                audio: {start: -1, end: 0}
+                            },
+                            fade_in: {
+                                video: {start: 0, end: 1},
+                                audio: {start: 0, end: 1}
+                            }
+                        };
                     }
-                    breakPoint.start = newStart;
-                    breakPoint.end = newEnd;
-                    breakPoint.mid = Math.min(breakPoint.end, Math.max(breakPoint.start, breakPoint.mid));
-                    slider.min = breakPoint.start;
-                    slider.max = breakPoint.end;
-                    slider.value = breakPoint.mid;
-                    timeInput.value = formatTime(breakPoint.mid);
-                    displaySpan.innerHTML = `Start: ${formatTime(breakPoint.start)}, Mid: ${formatTime(breakPoint.mid)}, End: ${formatTime(breakPoint.end)}`;
+                    updateSelectedBreaksList(id);
                 };
-                div.appendChild(stepBackwardBtn);
-                const stepForwardBtn = document.createElement('button');
-                stepForwardBtn.textContent = 'Step Forward';
-                stepForwardBtn.onclick = () => {
-                    const breakPoint = videosData[id].selectedBreaks[idx];
-                    const duration = breakPoint.end - breakPoint.start;
-                    let newStart = breakPoint.end;
-                    let newEnd = newStart + duration;
-                    breakPoint.start = newStart;
-                    breakPoint.end = newEnd;
-                    breakPoint.mid = Math.min(breakPoint.end, Math.max(breakPoint.start, breakPoint.mid));
-                    slider.min = breakPoint.start;
-                    slider.max = breakPoint.end;
-                    slider.value = breakPoint.mid;
-                    timeInput.value = formatTime(breakPoint.mid);
-                    displaySpan.innerHTML = `Start: ${formatTime(breakPoint.start)}, Mid: ${formatTime(breakPoint.mid)}, End: ${formatTime(breakPoint.end)}`;
-                };
-                div.appendChild(stepForwardBtn);
+                if (isHard) {
+                    const stepBackwardBtn = document.createElement('button');
+                    stepBackwardBtn.textContent = 'Step Backward';
+                    stepBackwardBtn.onclick = () => {
+                        const breakPoint = videosData[id].selectedBreaks[idx];
+                        const duration = breakPoint.end - breakPoint.start;
+                        let newEnd = breakPoint.start;
+                        let newStart = newEnd - duration;
+                        if (newStart < 0) {
+                            newStart = 0;
+                            newEnd = duration;
+                        }
+                        breakPoint.start = newStart;
+                        breakPoint.end = newEnd;
+                        breakPoint.value = Math.min(breakPoint.end, Math.max(breakPoint.start, breakPoint.value));
+                        slider.min = breakPoint.start;
+                        slider.max = breakPoint.end;
+                        slider.value = breakPoint.value;
+                        timeInput.value = formatTime(breakPoint.value);
+                        displaySpan.innerHTML = `Start: ${formatTime(breakPoint.start)}, Mid: ${formatTime(breakPoint.value)}, End: ${formatTime(breakPoint.end)}`;
+                    };
+                    div.appendChild(stepBackwardBtn);
+                    const stepForwardBtn = document.createElement('button');
+                    stepForwardBtn.textContent = 'Step Forward';
+                    stepForwardBtn.onclick = () => {
+                        const breakPoint = videosData[id].selectedBreaks[idx];
+                        const duration = breakPoint.end - breakPoint.start;
+                        let newStart = breakPoint.end;
+                        let newEnd = newStart + duration;
+                        breakPoint.start = newStart;
+                        breakPoint.end = newEnd;
+                        breakPoint.value = Math.min(breakPoint.end, Math.max(breakPoint.start, breakPoint.value));
+                        slider.min = breakPoint.start;
+                        slider.max = breakPoint.end;
+                        slider.value = breakPoint.value;
+                        timeInput.value = formatTime(breakPoint.value);
+                        displaySpan.innerHTML = `Start: ${formatTime(breakPoint.start)}, Mid: ${formatTime(breakPoint.value)}, End: ${formatTime(breakPoint.end)}`;
+                    };
+                    div.appendChild(stepForwardBtn);
+                }
                 const resetBtn = document.createElement('button');
-                resetBtn.textContent = 'Reset Midpoint';
+                resetBtn.textContent = 'Reset Time';
                 resetBtn.onclick = () => {
-                    const originalMid = videosData[id].selectedBreaks[idx].originalMid;
-                    videosData[id].selectedBreaks[idx].mid = originalMid;
-                    slider.value = originalMid;
-                    timeInput.value = formatTime(originalMid);
-                    displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(originalMid)}, End: ${formatTime(b.end)}`;
+                    b.value = JSON.parse(JSON.stringify(b.originalValue));
+                    const midTime = typeof b.value === 'number' ? b.value : b.value.time;
+                    slider.value = midTime;
+                    timeInput.value = formatTime(midTime);
+                    if (typeof b.value === 'number') {
+                        displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(midTime)}, End: ${formatTime(b.end)}`;
+                    } else {
+                        displaySpan.innerHTML = `Breakpoint: ${formatTime(midTime)}`;
+                    }
+                    updateSelectedBreaksList(id);
                 };
                 div.appendChild(resetBtn);
                 const removeBtn = document.createElement('button');
@@ -546,13 +602,56 @@
                 };
                 div.appendChild(removeBtn);
                 const previewBtn = document.createElement('button');
-                previewBtn.textContent = 'Preview Break';
-                previewBtn.onclick = () => previewBreak(id, videosData[id].selectedBreaks[idx].mid);
+                previewBtn.textContent = 'Preview Jump';
+                previewBtn.onclick = () => previewBreak(id, typeof b.value === 'number' ? b.value : b.value.time);
                 div.appendChild(previewBtn);
+                if (!isHard) {
+                    const fadePreviewBtn = document.createElement('button');
+                    fadePreviewBtn.textContent = 'Preview Fade';
+                    fadePreviewBtn.onclick = () => previewFade(id, idx, false);
+                    div.appendChild(fadePreviewBtn);
+                    const fadeParamsDiv = document.createElement('div');
+                    fadeParamsDiv.className = 'fade-params';
+                    const addFadeInput = (parent, labelText, obj, key) => {
+                        const label = document.createElement('label');
+                        label.innerText = `${labelText} (rel): `;
+                        const input = document.createElement('input');
+                        input.type = 'number';
+                        input.step = '0.001';
+                        input.value = obj[key].toFixed(4);
+                        input.onchange = () => {
+                            const newRel = parseFloat(input.value);
+                            if (!isNaN(newRel)) {
+                                obj[key] = newRel;
+                                input.value = newRel.toFixed(4);
+                            } else {
+                                input.value = obj[key].toFixed(4);
+                            }
+                        };
+                        label.appendChild(input);
+                        parent.appendChild(label);
+                    };
+                    const colorLabel = document.createElement('label');
+                    colorLabel.innerText = 'Color: ';
+                    const colorInput = document.createElement('input');
+                    colorInput.type = 'color';
+                    colorInput.value = b.value.color;
+                    colorInput.onchange = () => { b.value.color = colorInput.value; };
+                    colorLabel.appendChild(colorInput);
+                    fadeParamsDiv.appendChild(colorLabel);
+                    addFadeInput(fadeParamsDiv, 'Fade Out Video Start', b.value.fade_out.video, 'start');
+                    addFadeInput(fadeParamsDiv, 'Fade Out Video End', b.value.fade_out.video, 'end');
+                    addFadeInput(fadeParamsDiv, 'Fade Out Audio Start', b.value.fade_out.audio, 'start');
+                    addFadeInput(fadeParamsDiv, 'Fade Out Audio End', b.value.fade_out.audio, 'end');
+                    addFadeInput(fadeParamsDiv, 'Fade In Video Start', b.value.fade_in.video, 'start');
+                    addFadeInput(fadeParamsDiv, 'Fade In Video End', b.value.fade_in.video, 'end');
+                    addFadeInput(fadeParamsDiv, 'Fade In Audio Start', b.value.fade_in.audio, 'start');
+                    addFadeInput(fadeParamsDiv, 'Fade In Audio End', b.value.fade_in.audio, 'end');
+                    div.appendChild(fadeParamsDiv);
+                }
                 list.appendChild(div);
             });
         }
-
         function updateExistingBreaksList(id) {
             const list = document.getElementById(`existing-breaks-list-${id}`);
             list.innerHTML = '';
@@ -561,75 +660,140 @@
                 div.className = 'break-item';
                 const displaySpan = document.createElement('span');
                 displaySpan.className = 'display-span';
-                displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(b.mid)}, End: ${formatTime(b.end)}`;
+                const isHard = typeof b.value === 'number';
+                if (isHard) {
+                    displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(b.value)}, End: ${formatTime(b.end)}`;
+                } else {
+                    displaySpan.innerHTML = `Breakpoint: ${formatTime(b.value.time)}`;
+                }
                 div.appendChild(displaySpan);
                 const slider = document.createElement('input');
                 slider.type = 'range';
                 slider.min = b.start;
                 slider.max = b.end;
                 slider.step = 0.0001;
-                slider.value = b.mid;
+                slider.value = isHard ? b.value : b.value.time;
                 slider.oninput = () => {
                     const newMid = parseFloat(slider.value);
-                    videosData[id].existingBreaks[idx].mid = newMid;
+                    const oldT = isHard ? b.value : b.value.time;
+                    const delta = newMid - oldT;
+                    if (isHard) {
+                        b.value = newMid;
+                    } else {
+                        b.value.time = newMid;
+                    }
+                    b.start += delta;
+                    b.end += delta;
                     timeInput.value = formatTime(newMid);
-                    displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(newMid)}, End: ${formatTime(b.end)}`;
+                    if (isHard) {
+                        displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(newMid)}, End: ${formatTime(b.end)}`;
+                    } else {
+                        displaySpan.innerHTML = `Breakpoint: ${formatTime(newMid)}`;
+                    }
                 };
                 div.appendChild(slider);
                 const timeInput = document.createElement('input');
                 timeInput.type = 'text';
-                timeInput.value = formatTime(b.mid);
+                timeInput.value = formatTime(isHard ? b.value : b.value.time);
                 timeInput.size = 12;
                 timeInput.onchange = () => {
                     const newTime = parseTime(timeInput.value);
                     if (!isNaN(newTime) && newTime >= b.start && newTime <= b.end) {
-                        videosData[id].existingBreaks[idx].mid = newTime;
+                        const oldT = isHard ? b.value : b.value.time;
+                        const delta = newTime - oldT;
+                        if (isHard) {
+                            b.value = newTime;
+                        } else {
+                            b.value.time = newTime;
+                        }
+                        b.start += delta;
+                        b.end += delta;
                         slider.value = newTime;
-                        displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(newTime)}, End: ${formatTime(b.end)}`;
+                        if (isHard) {
+                            displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(newTime)}, End: ${formatTime(b.end)}`;
+                        } else {
+                            displaySpan.innerHTML = `Breakpoint: ${formatTime(newTime)}`;
+                        }
                     } else {
                         alert('Invalid time or out of range');
-                        timeInput.value = formatTime(videosData[id].existingBreaks[idx].mid);
+                        timeInput.value = formatTime(isHard ? b.value : b.value.time);
                     }
                 };
                 div.appendChild(timeInput);
-                const shiftBackwardBtn = document.createElement('button');
-                shiftBackwardBtn.textContent = 'Shift -1s';
-                shiftBackwardBtn.onclick = () => {
-                    const breakPoint = videosData[id].existingBreaks[idx];
-                    const rangeDuration = breakPoint.end - breakPoint.start;
-                    breakPoint.start = Math.max(0, breakPoint.start - 1);
-                    breakPoint.end = breakPoint.start + rangeDuration;
-                    breakPoint.mid = Math.min(breakPoint.end, Math.max(breakPoint.start, breakPoint.mid));
-                    slider.min = breakPoint.start;
-                    slider.max = breakPoint.end;
-                    slider.value = breakPoint.mid;
-                    timeInput.value = formatTime(breakPoint.mid);
-                    displaySpan.innerHTML = `Start: ${formatTime(breakPoint.start)}, Mid: ${formatTime(breakPoint.mid)}, End: ${formatTime(breakPoint.end)}`;
+                const typeLabel = document.createElement('label');
+                typeLabel.innerText = 'Type: ';
+                div.appendChild(typeLabel);
+                const typeSelect = document.createElement('select');
+                typeSelect.innerHTML = `<option value="hard">Hard</option><option value="fade">Fade</option>`;
+                typeSelect.value = isHard ? 'hard' : 'fade';
+                div.appendChild(typeSelect);
+                typeSelect.onchange = (e) => {
+                    const nt = e.target.value;
+                    if (nt === 'hard' && !isHard) {
+                        b.value = b.value.time;
+                    } else if (nt === 'fade' && isHard) {
+                        const oldTime = b.value;
+                        b.value = {
+                            type: 'fade',
+                            time: oldTime,
+                            color: '#000000',
+                            fade_out: {
+                                video: {start: -1, end: 0},
+                                audio: {start: -1, end: 0}
+                            },
+                            fade_in: {
+                                video: {start: 0, end: 1},
+                                audio: {start: 0, end: 1}
+                            }
+                        };
+                    }
+                    updateExistingBreaksList(id);
                 };
-                div.appendChild(shiftBackwardBtn);
-                const shiftForwardBtn = document.createElement('button');
-                shiftForwardBtn.textContent = 'Shift +1s';
-                shiftForwardBtn.onclick = () => {
-                    const breakPoint = videosData[id].existingBreaks[idx];
-                    const rangeDuration = breakPoint.end - breakPoint.start;
-                    breakPoint.start += 1;
-                    breakPoint.end = breakPoint.start + rangeDuration;
-                    breakPoint.mid = Math.min(breakPoint.end, Math.max(breakPoint.start, breakPoint.mid));
-                    slider.min = breakPoint.start;
-                    slider.max = breakPoint.end;
-                    slider.value = breakPoint.mid;
-                    timeInput.value = formatTime(breakPoint.mid);
-                    displaySpan.innerHTML = `Start: ${formatTime(breakPoint.start)}, Mid: ${formatTime(breakPoint.mid)}, End: ${formatTime(breakPoint.end)}`;
-                };
-                div.appendChild(shiftForwardBtn);
+                if (isHard) {
+                    const shiftBackwardBtn = document.createElement('button');
+                    shiftBackwardBtn.textContent = 'Shift -1s';
+                    shiftBackwardBtn.onclick = () => {
+                        const breakPoint = videosData[id].existingBreaks[idx];
+                        const rangeDuration = breakPoint.end - breakPoint.start;
+                        breakPoint.start = Math.max(0, breakPoint.start - 1);
+                        breakPoint.end = breakPoint.start + rangeDuration;
+                        breakPoint.value = Math.min(breakPoint.end, Math.max(breakPoint.start, breakPoint.value));
+                        slider.min = breakPoint.start;
+                        slider.max = breakPoint.end;
+                        slider.value = breakPoint.value;
+                        timeInput.value = formatTime(breakPoint.value);
+                        displaySpan.innerHTML = `Start: ${formatTime(breakPoint.start)}, Mid: ${formatTime(breakPoint.value)}, End: ${formatTime(breakPoint.end)}`;
+                    };
+                    div.appendChild(shiftBackwardBtn);
+                    const shiftForwardBtn = document.createElement('button');
+                    shiftForwardBtn.textContent = 'Shift +1s';
+                    shiftForwardBtn.onclick = () => {
+                        const breakPoint = videosData[id].existingBreaks[idx];
+                        const rangeDuration = breakPoint.end - breakPoint.start;
+                        breakPoint.start += 1;
+                        breakPoint.end = breakPoint.start + rangeDuration;
+                        breakPoint.value = Math.min(breakPoint.end, Math.max(breakPoint.start, breakPoint.value));
+                        slider.min = breakPoint.start;
+                        slider.max = breakPoint.end;
+                        slider.value = breakPoint.value;
+                        timeInput.value = formatTime(breakPoint.value);
+                        displaySpan.innerHTML = `Start: ${formatTime(breakPoint.start)}, Mid: ${formatTime(breakPoint.value)}, End: ${formatTime(breakPoint.end)}`;
+                    };
+                    div.appendChild(shiftForwardBtn);
+                }
                 const resetBtn = document.createElement('button');
-                resetBtn.textContent = 'Reset Midpoint';
+                resetBtn.textContent = 'Reset Time';
                 resetBtn.onclick = () => {
-                    const originalMid = videosData[id].existingBreaks[idx].originalMid;
-                    videosData[id].existingBreaks[idx].mid = originalMid;
-                    slider.value = originalMid;
-                    timeInput.value = formatTime(originalMid);
-                    displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(originalMid)}, End: ${formatTime(b.end)}`;
+                    b.value = JSON.parse(JSON.stringify(b.originalValue));
+                    const midTime = typeof b.value === 'number' ? b.value : b.value.time;
+                    slider.value = midTime;
+                    timeInput.value = formatTime(midTime);
+                    if (typeof b.value === 'number') {
+                        displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(midTime)}, End: ${formatTime(b.end)}`;
+                    } else {
+                        displaySpan.innerHTML = `Breakpoint: ${formatTime(midTime)}`;
+                    }
+                    updateExistingBreaksList(id);
                 };
                 div.appendChild(resetBtn);
                 const updateBtn = document.createElement('button');
@@ -641,16 +805,59 @@
                 removeBtn.onclick = () => deleteExistingBreak(id, idx);
                 div.appendChild(removeBtn);
                 const previewBtn = document.createElement('button');
-                previewBtn.textContent = 'Preview Break';
-                previewBtn.onclick = () => previewBreak(id, videosData[id].existingBreaks[idx].mid);
+                previewBtn.textContent = 'Preview Jump';
+                previewBtn.onclick = () => previewBreak(id, typeof b.value === 'number' ? b.value : b.value.time);
                 div.appendChild(previewBtn);
+                if (!isHard) {
+                    const fadePreviewBtn = document.createElement('button');
+                    fadePreviewBtn.textContent = 'Preview Fade';
+                    fadePreviewBtn.onclick = () => previewFade(id, idx, true);
+                    div.appendChild(fadePreviewBtn);
+                    const fadeParamsDiv = document.createElement('div');
+                    fadeParamsDiv.className = 'fade-params';
+                    const addFadeInput = (parent, labelText, obj, key) => {
+                        const label = document.createElement('label');
+                        label.innerText = `${labelText} (rel): `;
+                        const input = document.createElement('input');
+                        input.type = 'number';
+                        input.step = '0.001';
+                        input.value = obj[key].toFixed(4);
+                        input.onchange = () => {
+                            const newRel = parseFloat(input.value);
+                            if (!isNaN(newRel)) {
+                                obj[key] = newRel;
+                                input.value = newRel.toFixed(4);
+                            } else {
+                                input.value = obj[key].toFixed(4);
+                            }
+                        };
+                        label.appendChild(input);
+                        parent.appendChild(label);
+                    };
+                    const colorLabel = document.createElement('label');
+                    colorLabel.innerText = 'Color: ';
+                    const colorInput = document.createElement('input');
+                    colorInput.type = 'color';
+                    colorInput.value = b.value.color;
+                    colorInput.onchange = () => { b.value.color = colorInput.value; };
+                    colorLabel.appendChild(colorInput);
+                    fadeParamsDiv.appendChild(colorLabel);
+                    addFadeInput(fadeParamsDiv, 'Fade Out Video Start', b.value.fade_out.video, 'start');
+                    addFadeInput(fadeParamsDiv, 'Fade Out Video End', b.value.fade_out.video, 'end');
+                    addFadeInput(fadeParamsDiv, 'Fade Out Audio Start', b.value.fade_out.audio, 'start');
+                    addFadeInput(fadeParamsDiv, 'Fade Out Audio End', b.value.fade_out.audio, 'end');
+                    addFadeInput(fadeParamsDiv, 'Fade In Video Start', b.value.fade_in.video, 'start');
+                    addFadeInput(fadeParamsDiv, 'Fade In Video End', b.value.fade_in.video, 'end');
+                    addFadeInput(fadeParamsDiv, 'Fade In Audio Start', b.value.fade_in.audio, 'start');
+                    addFadeInput(fadeParamsDiv, 'Fade In Audio End', b.value.fade_in.audio, 'end');
+                    div.appendChild(fadeParamsDiv);
+                }
                 list.appendChild(div);
             });
         }
-
         function updateExistingBreak(id, idx) {
             const breakPoint = videosData[id].existingBreaks[idx];
-            const data = { id: breakPoint.metaId, time: breakPoint.mid };
+            const data = { id: breakPoint.metaId, value: breakPoint.value };
             fetch('/update-break', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -658,13 +865,12 @@
             }).then(res => res.json()).then(resp => {
                 if (resp.success) {
                     alert('Breakpoint updated successfully');
-                    videosData[id].existingBreaks[idx].originalMid = breakPoint.mid;
+                    breakPoint.originalValue = JSON.parse(JSON.stringify(breakPoint.value));
                 }
             }).catch(err => {
                 alert('Error updating breakpoint: ' + err.message);
             });
         }
-
         function deleteExistingBreak(id, idx) {
             const metaId = videosData[id].existingBreaks[idx].metaId;
             fetch('/delete-break', {
@@ -680,20 +886,26 @@
                 alert('Error deleting breakpoint: ' + err.message);
             });
         }
-
         function addSelectedBreak(id) {
             const select = document.getElementById(`breaks-select-${id}`);
             const selectedIndex = select.selectedIndex;
             if (selectedIndex >= 0) {
                 const breakPoint = videosData[id].detectedBreaks[selectedIndex];
-                if (!videosData[id].selectedBreaks.some(b => b.mid === breakPoint.mid)) {
-                    videosData[id].selectedBreaks.push({ ...breakPoint, originalMid: breakPoint.mid });
+                if (!videosData[id].selectedBreaks.some(b => {
+                    let bt = typeof b.value === 'number' ? b.value : b.value.time;
+                    return bt === breakPoint.mid;
+                })) {
+                    videosData[id].selectedBreaks.push({
+                        value: breakPoint.mid,
+                        start: breakPoint.start,
+                        end: breakPoint.end,
+                        originalValue: breakPoint.mid
+                    });
                     updateSelectedBreaksList(id);
                     document.getElementById(`save-breaks-button-${id}`).disabled = false;
                 }
             }
         }
-
         function previewSelectedBreak(id) {
             const select = document.getElementById(`breaks-select-${id}`);
             const selectedIndex = select.selectedIndex;
@@ -702,10 +914,9 @@
                 previewBreak(id, breakPoint.mid);
             }
         }
-
         function saveBreaks(id) {
             if (videosData[id].selectedBreaks.length === 0) return;
-            const breaks = videosData[id].selectedBreaks.map(b => ({ id: id, time: b.mid }));
+            const breaks = videosData[id].selectedBreaks.map(b => ({ id: id, value: b.value }));
             fetch('/add-breaks', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -720,7 +931,6 @@
                 alert('Error saving breakpoints: ' + err.message);
             });
         }
-
         function fetchMetadataForUpdate(id) {
             fetch(`/get-video-metadata/${id}`)
                 .then(res => {
@@ -732,20 +942,25 @@
                 .then(data => {
                     const metadataBreaks = data.Metadata.filter(m => m.TypeName === 'break_point')
                         .map(m => {
-                            const time = parseFloat(m.Value);
-                            if (isNaN(time)) return null;
-                            const start = Math.max(0, time - 1);
+                            let val = JSON.parse(m.Value);
+                            let tim = typeof val === 'number' ? val : val.time;
+                            if (isNaN(tim)) return null;
+                            const start = Math.max(0, tim - 1);
                             const end = start + 2;
                             return {
+                                value: val,
                                 start,
-                                mid: time,
                                 end,
-                                originalMid: time,
+                                originalValue: JSON.parse(JSON.stringify(val)),
                                 metaId: m.ID
                             };
                         })
                         .filter(b => b !== null)
-                        .sort((a, b) => a.mid - b.mid);
+                        .sort((a, b) => {
+                            let at = typeof a.value === 'number' ? a.value : a.value.time;
+                            let bt = typeof b.value === 'number' ? b.value : b.value.time;
+                            return at - bt;
+                        });
                     videosData[id].existingBreaks = metadataBreaks;
                     videosData[id].selectedBreaks = [];
                     updateSelectedBreaksList(id);
@@ -756,7 +971,6 @@
                     console.error('Error refreshing metadata:', err);
                 });
         }
-
         function seekBackward(id) {
             const video = document.getElementById(`video-player-${id}`);
             if (isNaN(video.duration)) {
@@ -766,7 +980,6 @@
             const seconds = parseFloat(document.getElementById(`seek-seconds-${id}`).value) || 0;
             video.currentTime = Math.max(0, video.currentTime - seconds);
         }
-
         function seekForward(id) {
             const video = document.getElementById(`video-player-${id}`);
             if (isNaN(video.duration)) {
@@ -776,7 +989,6 @@
             const seconds = parseFloat(document.getElementById(`seek-seconds-${id}`).value) || 0;
             video.currentTime = Math.min(video.duration, video.currentTime + seconds);
         }
-
         function previewBreak(id, time) {
             const video = document.getElementById(`video-player-${id}`);
             if (isNaN(video.duration)) {
@@ -786,7 +998,35 @@
             video.currentTime = time;
             video.play();
         }
-
+        function previewFade(id, idx, isExisting) {
+            const list = isExisting ? videosData[id].existingBreaks : videosData[id].selectedBreaks;
+            const bp = list[idx];
+            const left = parseFloat(document.getElementById(`preview-left-${id}`).value) || 10;
+            const right = parseFloat(document.getElementById(`preview-right-${id}`).value) || 10;
+            const body = { id: id, value: bp.value, left: left, right: right };
+            fetch('/preview-fade', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            }).then(res => {
+                if (!res.ok) {
+                    throw new Error(`HTTP error! Status: ${res.status}`);
+                }
+                return res.json();
+            }).then(data => {
+                if (data.temp_uri) {
+                    const cont = document.getElementById(`preview-container-${id}`);
+                    cont.style.display = 'block';
+                    const vid = document.getElementById(`preview-video-${id}`);
+                    vid.src = `${data.temp_uri}?t=${new Date().getTime()}`;
+                    vid.load();
+                    vid.play();
+                }
+            }).catch(err => {
+                console.error(err);
+                alert('Error generating fade preview: ' + err.message);
+            });
+        }
         function removeSection(id) {
             document.getElementById(`video-section-${id}`).remove();
             delete videosData[id];
@@ -805,7 +1045,6 @@
             }
             updatePagination();
         }
-
         document.getElementById('clear-all-button').addEventListener('click', () => {
             document.getElementById('selected-videos-container').innerHTML = '';
             videosData = {};
@@ -813,21 +1052,18 @@
             currentVideoIndex = -1;
             updatePagination();
         });
-
         document.getElementById('prev-button').addEventListener('click', () => {
             if (currentVideoIndex > 0) {
                 currentVideoIndex--;
                 updatePagination();
             }
         });
-
         document.getElementById('next-button').addEventListener('click', () => {
             if (currentVideoIndex < videoIds.length - 1) {
                 currentVideoIndex++;
                 updatePagination();
             }
         });
-
         loadContents('');
     </script>
 </body>

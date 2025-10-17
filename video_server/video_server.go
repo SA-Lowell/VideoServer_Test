@@ -1,4 +1,5 @@
 package main
+
 import (
     "bytes"
     "database/sql"
@@ -24,7 +25,9 @@ import (
     "github.com/pion/webrtc/v3/pkg/media"
     "github.com/pion/webrtc/v3/pkg/media/oggreader"
 )
+
 var errorLogger *log.Logger
+
 const (
     HlsDir = "./webrtc_segments"
     Port = ":8081"
@@ -41,11 +44,14 @@ const (
     BufferThreshold = 120.0 // Start processing more chunks when buffer < 120s
     maxAdRetries = 5 // Higher retry limit for ads
 )
+
 const dbConnString = "user=postgres password=aaaaaaaaaa dbname=webrtc_tv sslmode=disable host=localhost port=5432"
+
 type fpsPair struct {
     num int
     den int
 }
+
 type bufferedChunk struct {
     segPath string
     dur float64
@@ -53,16 +59,19 @@ type bufferedChunk struct {
     videoID int64
     fps fpsPair
 }
+
 type bitReader struct {
     data []byte
     pos int
 }
+
 type LoudnormOutput struct {
     InputI string `json:"input_i"`
     InputLRA string `json:"input_lra"`
     InputTP string `json:"input_tp"`
     InputThresh string `json:"input_thresh"`
 }
+
 type Station struct {
     name string
     segmentList []bufferedChunk
@@ -82,15 +91,18 @@ type Station struct {
     currentVideoRTPTS uint32
     currentAudioSamples uint32
 }
+
 var adIDs []int64
 var videoBaseDir string
 var stations = make(map[string]*Station)
 var noAdsStations = make(map[string]*Station)
 var mu sync.Mutex
 var globalStart = time.Now()
+
 func newBitReader(data []byte) *bitReader {
     return &bitReader{data: data, pos: 0}
 }
+
 func (br *bitReader) readBit() (uint, error) {
     if br.pos/8 >= len(br.data) {
         return 0, fmt.Errorf("EOF")
@@ -101,6 +113,7 @@ func (br *bitReader) readBit() (uint, error) {
     br.pos++
     return bit, nil
 }
+
 func (br *bitReader) readUe() (uint, error) {
     leadingZeros := 0
     for {
@@ -123,6 +136,7 @@ func (br *bitReader) readUe() (uint, error) {
     }
     return val, nil
 }
+
 func getFirstMbInSlice(nalu []byte) (uint, error) {
     if len(nalu) < 2 {
         return 0, fmt.Errorf("NALU too short")
@@ -141,6 +155,7 @@ func getFirstMbInSlice(nalu []byte) (uint, error) {
     br := newBitReader(rbsp)
     return br.readUe()
 }
+
 func sanitizeTrackID(name string) string {
     return strings.ReplaceAll(strings.ReplaceAll(name, " ", "_"), "'", "")
 }
@@ -936,6 +951,7 @@ func getBreakPoints(videoID int64, db *sql.DB) ([]float64, error) {
     sort.Float64s(bps)
     return bps, nil
 }
+
 func getVideoDur(videoID int64, db *sql.DB) float64 {
     var dur sql.NullFloat64
     err := db.QueryRow("SELECT duration FROM videos WHERE id = $1", videoID).Scan(&dur)
@@ -945,6 +961,7 @@ func getVideoDur(videoID int64, db *sql.DB) float64 {
     }
     return dur.Float64
 }
+
 func loadStation(stationName string, db *sql.DB, adsEnabled bool, originalSt *Station) *Station {
     st := &Station{
         name:        stationName,
@@ -1067,6 +1084,7 @@ func loadStation(stationName string, db *sql.DB, adsEnabled bool, originalSt *St
     log.Printf("Station %s: Initialized at video %d (index %d) with offset %f seconds, adsEnabled: %v", stationName, currentVideoID, currentVideoIndex, currentOffset, adsEnabled)
     return st
 }
+
 func getQueueDuration(videoIDs []int64, db *sql.DB) (float64, error) {
     totalDuration := 0.0
     for _, vid := range videoIDs {
@@ -1095,6 +1113,7 @@ func getQueueDuration(videoIDs []int64, db *sql.DB) (float64, error) {
     }
     return totalDuration, nil
 }
+
 func manageProcessing(st *Station, db *sql.DB) {
     const maxRetries = 3
     const maxFinalChunkRetries = 5
@@ -1825,6 +1844,7 @@ func min(a, b int) int {
     }
     return b
 }
+
 func splitNALUs(data []byte) [][]byte {
     if len(data) == 0 {
         return nil
@@ -1856,6 +1876,7 @@ func splitNALUs(data []byte) [][]byte {
     }
     return nalus
 }
+
 func signalingHandler(db *sql.DB, c *gin.Context) {
     stationName := c.Query("station")
     if stationName == "" {
@@ -2255,6 +2276,7 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
         }
     })
 }
+
 func indexHandler(c *gin.Context) {
     var html string = ""
     c.Header("Content-Type", "text/html")

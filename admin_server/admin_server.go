@@ -3,15 +3,18 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	_ "github.com/lib/pq"
@@ -58,8 +61,8 @@ type DirEntry struct {
 }
 
 type AddBreakReq struct {
-	ID   int64   `json:"id"`
-	Time float64 `json:"time"`
+	ID    int64           `json:"id"`
+	Value json.RawMessage `json:"value"`
 }
 
 type FixVideoReq struct {
@@ -70,14 +73,14 @@ type FixVideoReq struct {
 }
 
 type Station struct {
-	ID        int64  `json:"id"`
+	ID        int64 `json:"id"`
 	Name      string `json:"name"`
-	UnixStart int64  `json:"unix_start"`
+	UnixStart int64 `json:"unix_start"`
 }
 
 type UpdateBreakReq struct {
-	ID   int64   `json:"id"`
-	Time float64 `json:"time"`
+	ID    int64           `json:"id"`
+	Value json.RawMessage `json:"value"`
 }
 
 type DeleteBreakReq struct {
@@ -89,11 +92,17 @@ type AddVideoReq struct {
 	TitleID int64  `json:"title_id"`
 }
 
+type PreviewFadeReq struct {
+	ID    int64                   `json:"id"`
+	Value map[string]interface{} `json:"value"`
+	Left  float64                 `json:"left"`
+	Right float64                 `json:"right"`
+}
+
 var db *sql.DB
 
 func main() {
 	r := gin.Default()
-
 	r.Use(customRecovery())
 	r.Use(customErrorHandler())
 	loadTemplatesSafely(r, "templates/*.html")
@@ -129,14 +138,12 @@ func main() {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-
 		tx, err := db.Begin()
 		if err != nil {
 			log.Printf("Failed to start transaction: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start transaction"})
 			return
 		}
-
 		for _, tagName := range tags {
 			var tagID int64
 			err := db.QueryRow("SELECT id FROM tags WHERE name = $1", tagName).Scan(&tagID)
@@ -150,7 +157,6 @@ func main() {
 				tx.Rollback()
 				return
 			}
-
 			_, err = tx.Exec("INSERT INTO video_tags (video_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", id, tagID)
 			if err != nil {
 				log.Printf("Failed to insert tag %s for video %d: %v", tagName, id, err)
@@ -159,13 +165,11 @@ func main() {
 				return
 			}
 		}
-
 		if err := tx.Commit(); err != nil {
 			log.Printf("Failed to commit transaction: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit transaction"})
 			return
 		}
-
 		c.JSON(http.StatusOK, gin.H{"success": true})
 	})
 
@@ -181,14 +185,12 @@ func main() {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-
 		tx, err := db.Begin()
 		if err != nil {
 			log.Printf("Failed to start transaction: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start transaction"})
 			return
 		}
-
 		for _, tagName := range tags {
 			var tagID int64
 			err := db.QueryRow("SELECT id FROM tags WHERE name = $1", tagName).Scan(&tagID)
@@ -202,7 +204,6 @@ func main() {
 				tx.Rollback()
 				return
 			}
-
 			_, err = tx.Exec("DELETE FROM video_tags WHERE video_id = $1 AND tag_id = $2", id, tagID)
 			if err != nil {
 				log.Printf("Failed to delete tag %s for video %d: %v", tagName, id, err)
@@ -211,13 +212,11 @@ func main() {
 				return
 			}
 		}
-
 		if err := tx.Commit(); err != nil {
 			log.Printf("Failed to commit transaction: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit transaction"})
 			return
 		}
-
 		c.JSON(http.StatusOK, gin.H{"success": true})
 	})
 
@@ -238,28 +237,25 @@ func main() {
 	r.POST("/fix-video", fixVideoHandler)
 	r.POST("/update-break", updateBreakHandler)
 	r.POST("/delete-break", deleteBreakHandler)
-
 	r.GET("/manage-titles", manageTitlesHandler)
 	r.GET("/manage-channels", manageChannelsHandler)
 	r.GET("/manage-title-videos", manageTitleVideosHandler)
 	r.GET("/manage-channel-videos", manageChannelVideosHandler)
 	r.GET("/tag-commercials", tagCommercialsHandler)
-
 	r.GET("/api/titles", apiTitlesHandler)
 	r.POST("/api/titles", apiCreateTitleHandler)
 	r.PUT("/api/titles/:id", apiUpdateTitleHandler)
 	r.DELETE("/api/titles/:id", apiDeleteTitleHandler)
-
 	r.GET("/api/stations", apiStationsHandler)
 	r.POST("/api/stations", apiCreateStationHandler)
 	r.PUT("/api/stations/:id", apiUpdateStationHandler)
 	r.DELETE("/api/stations/:id", apiDeleteStationHandler)
-
 	r.GET("/api/videos", apiVideosHandler)
 	r.POST("/api/assign-video-title/:vid/:tid", apiAssignVideoToTitleHandler)
 	r.DELETE("/api/assign-video-title/:vid", apiRemoveVideoFromTitleHandler)
 	r.POST("/api/assign-video-station", apiAssignVideoToStationHandler)
 	r.DELETE("/api/assign-video-station/:sid/:vid", apiRemoveVideoFromStationHandler)
+	r.POST("/preview-fade", previewFadeHandler)
 
 	r.NoRoute(func(c *gin.Context) {
 		c.HTML(http.StatusNotFound, "404.html", gin.H{"error": "404"})
@@ -333,19 +329,17 @@ func getVideoMetadataHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid video ID"})
 		return
 	}
-
 	vrows, err := db.Query(`
-		SELECT v.id, v.uri
-		FROM videos v
-		WHERE v.id = $1
-	`, id)
+SELECT v.id, v.uri
+FROM videos v
+WHERE v.id = $1
+`, id)
 	if err != nil {
 		log.Printf("Video query error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	defer vrows.Close()
-
 	var video Video
 	if vrows.Next() {
 		if err := vrows.Scan(&video.ID, &video.URI); err != nil {
@@ -357,20 +351,18 @@ func getVideoMetadataHandler(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Video not found"})
 		return
 	}
-
 	mrows, err := db.Query(`
-		SELECT vm.id, mt.name, vm.value::text
-		FROM video_metadata vm
-		JOIN metadata_types mt ON vm.metadata_type_id = mt.id
-		WHERE vm.video_id = $1
-	`, video.ID)
+SELECT vm.id, mt.name, vm.value::text
+FROM video_metadata vm
+JOIN metadata_types mt ON vm.metadata_type_id = mt.id
+WHERE vm.video_id = $1
+`, video.ID)
 	if err != nil {
 		log.Printf("Video metadata query error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	defer mrows.Close()
-
 	for mrows.Next() {
 		var m Metadata
 		if err := mrows.Scan(&m.ID, &m.TypeName, &m.Value); err != nil {
@@ -380,20 +372,18 @@ func getVideoMetadataHandler(c *gin.Context) {
 		}
 		video.Metadata = append(video.Metadata, m)
 	}
-
 	trows, err := db.Query(`
-		SELECT tg.name
-		FROM video_tags vt
-		JOIN tags tg ON vt.tag_id = tg.id
-		WHERE vt.video_id = $1
-	`, video.ID)
+SELECT tg.name
+FROM video_tags vt
+JOIN tags tg ON vt.tag_id = tg.id
+WHERE vt.video_id = $1
+`, video.ID)
 	if err != nil {
 		log.Printf("Tags query error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	defer trows.Close()
-
 	for trows.Next() {
 		var tag Tag
 		if err := trows.Scan(&tag.Name); err != nil {
@@ -403,7 +393,6 @@ func getVideoMetadataHandler(c *gin.Context) {
 		}
 		video.Tags = append(video.Tags, tag)
 	}
-
 	c.JSON(http.StatusOK, video)
 }
 
@@ -436,10 +425,10 @@ func listContentsHandler(c *gin.Context) {
 				uri := entryPath
 				var exists bool
 				err = db.QueryRow(`SELECT EXISTS(
-	SELECT 1 FROM videos v 
-	JOIN video_tags vt ON v.id = vt.video_id 
-	JOIN tags t ON vt.tag_id = t.id 
-	WHERE v.uri = $1 AND t.name = 'commercial'
+SELECT 1 FROM videos v
+JOIN video_tags vt ON v.id = vt.video_id
+JOIN tags t ON vt.tag_id = t.id
+WHERE v.uri = $1 AND t.name = 'commercial'
 )`, uri).Scan(&exists)
 				if err != nil {
 					log.Printf("Error checking commercial tag for %s: %v", uri, err)
@@ -474,10 +463,10 @@ func scanNonCommercialsHandler(c *gin.Context) {
 		relURI = strings.ReplaceAll(relURI, "\\", "/")
 		var exists bool
 		err = db.QueryRow(`SELECT EXISTS(
-	SELECT 1 FROM videos v 
-	JOIN video_tags vt ON v.id = vt.video_id 
-	JOIN tags t ON vt.tag_id = t.id 
-	WHERE v.uri = $1 AND t.name = 'commercial'
+SELECT 1 FROM videos v
+JOIN video_tags vt ON v.id = vt.video_id
+JOIN tags t ON vt.tag_id = t.id
+WHERE v.uri = $1 AND t.name = 'commercial'
 )`, relURI).Scan(&exists)
 		if err != nil {
 			log.Printf("Error checking commercial tag for %s: %v", relURI, err)
@@ -504,7 +493,6 @@ func addVideoHandler(c *gin.Context) {
 	if req.TitleID == 0 {
 		req.TitleID = 0
 	}
-
 	var id int64
 	err := db.QueryRow("SELECT id FROM videos WHERE uri = $1", req.URI).Scan(&id)
 	if err == nil {
@@ -515,7 +503,6 @@ func addVideoHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error: " + err.Error()})
 		return
 	}
-
 	err = db.QueryRow("INSERT INTO videos (title_id, uri) VALUES ($1, $2) RETURNING id", req.TitleID, req.URI).Scan(&id)
 	if err != nil {
 		log.Printf("Failed to add video to DB: %v", err)
@@ -539,13 +526,11 @@ func detectBreaksHandler(c *gin.Context) {
 		return
 	}
 	log.Printf("DetectBreaks request: %+v", req)
-
 	if req.ID == 0 && req.URI == "" {
 		log.Printf("Invalid request: both id and uri are empty")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Must provide either id or uri"})
 		return
 	}
-
 	var fullPath string
 	var videoID int64
 	if req.ID != 0 {
@@ -579,7 +564,6 @@ func detectBreaksHandler(c *gin.Context) {
 			return
 		}
 	}
-
 	fullPath = filepath.Clean(fullPath)
 	log.Printf("Checking file: %s", fullPath)
 	if _, err := os.Stat(fullPath); err != nil {
@@ -587,14 +571,12 @@ func detectBreaksHandler(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "File not found: " + fullPath})
 		return
 	}
-
 	var detectorPath string
 	if req.Detector == "hard-cut" {
 		detectorPath = adBreakHardCutDetectorPath
 	} else {
 		detectorPath = adBreakFadeToBlackDetectorPath
 	}
-
 	absDetectorPath, err := filepath.Abs(detectorPath)
 	if err != nil {
 		log.Printf("Failed to resolve absolute path for %s: %v", detectorPath, err)
@@ -607,7 +589,6 @@ func detectBreaksHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ad break detector executable not found at " + absDetectorPath})
 		return
 	}
-
 	log.Printf("Running detector on %s with --no-format", fullPath)
 	cmd := exec.Command(absDetectorPath, fullPath, "--no-format")
 	output, err := cmd.CombinedOutput()
@@ -616,14 +597,12 @@ func detectBreaksHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ad break detection failed: " + string(output)})
 		return
 	}
-
 	outStr := strings.TrimSpace(string(output))
 	log.Printf("Detector raw output: %s", outStr)
 	if outStr == "No suitable ad insertion points detected." {
 		c.JSON(http.StatusOK, gin.H{"breaks": []interface{}{}, "video_id": videoID})
 		return
 	}
-
 	fields := strings.Fields(outStr)
 	log.Printf("Number of fields: %d", len(fields))
 	if len(fields) < 3 {
@@ -634,7 +613,6 @@ func detectBreaksHandler(c *gin.Context) {
 	if len(fields)%3 != 0 {
 		log.Printf("Invalid break data format: expected triplets, got %d fields (processing complete triplets only)", len(fields))
 	}
-
 	var breaks []map[string]float64
 	for i := 0; i < len(fields)-2; i += 3 {
 		start, err := strconv.ParseFloat(fields[i], 64)
@@ -654,13 +632,11 @@ func detectBreaksHandler(c *gin.Context) {
 		}
 		breaks = append(breaks, map[string]float64{"start": start, "mid": mid, "end": end})
 	}
-
 	if len(breaks) == 0 {
 		log.Printf("No valid breakpoints parsed from %d fields", len(fields))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "No valid breakpoints detected"})
 		return
 	}
-
 	log.Printf("Returning %d valid breaks for video ID %d", len(breaks), videoID)
 	c.JSON(http.StatusOK, gin.H{"breaks": breaks, "video_id": videoID})
 }
@@ -671,7 +647,7 @@ func addBreakHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	_, err := db.Exec("INSERT INTO video_metadata (video_id, metadata_type_id, value) VALUES ($1, 1, to_jsonb($2::numeric))", req.ID, req.Time)
+	_, err := db.Exec("INSERT INTO video_metadata (video_id, metadata_type_id, value) VALUES ($1, 1, $2::jsonb)", req.ID, req.Value)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -679,33 +655,35 @@ func addBreakHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
+type AddBreaksItem struct {
+	ID    int64           `json:"id"`
+	Value json.RawMessage `json:"value"`
+}
+
 func addBreaksHandler(c *gin.Context) {
-	var req []AddBreakReq
+	var req []AddBreaksItem
 	if err := c.BindJSON(&req); err != nil {
 		log.Printf("BindJSON error for add-breaks: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body: " + err.Error()})
 		return
 	}
-
 	if len(req) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No breakpoints provided"})
 		return
 	}
-
 	tx, err := db.Begin()
 	if err != nil {
 		log.Printf("Failed to start transaction: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start transaction: " + err.Error()})
 		return
 	}
-
 	for _, breakPoint := range req {
 		if breakPoint.ID == 0 {
 			tx.Rollback()
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid video ID in breakpoint"})
 			return
 		}
-		_, err := tx.Exec("INSERT INTO video_metadata (video_id, metadata_type_id, value) VALUES ($1, 1, to_jsonb($2::numeric))", breakPoint.ID, breakPoint.Time)
+		_, err := tx.Exec("INSERT INTO video_metadata (video_id, metadata_type_id, value) VALUES ($1, 1, $2::jsonb)", breakPoint.ID, breakPoint.Value)
 		if err != nil {
 			tx.Rollback()
 			log.Printf("Failed to insert breakpoint for video ID %d: %v", breakPoint.ID, err)
@@ -713,13 +691,11 @@ func addBreaksHandler(c *gin.Context) {
 			return
 		}
 	}
-
 	if err := tx.Commit(); err != nil {
 		log.Printf("Failed to commit transaction: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit transaction: " + err.Error()})
 		return
 	}
-
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
@@ -730,19 +706,16 @@ func fixVideoHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body: " + err.Error()})
 		return
 	}
-
 	if req.ID == 0 {
 		log.Printf("Invalid request: video ID is empty")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Must provide video ID"})
 		return
 	}
-
 	if !req.Remux && !req.Audio && !req.Video {
 		log.Printf("Invalid request: at least one fix option must be selected")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "At least one fix option (remux, audio, video) must be selected"})
 		return
 	}
-
 	var uri string
 	err := db.QueryRow("SELECT uri FROM videos WHERE id = $1", req.ID).Scan(&uri)
 	if err == sql.ErrNoRows {
@@ -754,7 +727,6 @@ func fixVideoHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error: " + err.Error()})
 		return
 	}
-
 	fullPath := filepath.Join(videoBaseDir, uri)
 	fullPath = filepath.Clean(fullPath)
 	log.Printf("Checking file: %s", fullPath)
@@ -763,46 +735,36 @@ func fixVideoHandler(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "File not found: " + fullPath})
 		return
 	}
-
 	tempDir := "./temp_videos"
 	if err := os.MkdirAll(tempDir, os.ModePerm); err != nil {
 		log.Printf("Failed to create temp directory %s: %v", tempDir, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create temp directory: " + err.Error()})
 		return
 	}
-
 	tempFileName := fmt.Sprintf("%d_fixed.mp4", req.ID)
 	tempPath := filepath.Join(tempDir, tempFileName)
-
 	if _, err := os.Stat(tempPath); err == nil {
 		log.Printf("Temp file already exists: %s", tempPath)
 		tempURI := "/temp_videos/" + tempFileName
 		c.JSON(http.StatusOK, gin.H{"temp_uri": tempURI})
 		return
 	}
-
 	var cmd *exec.Cmd
 	logMsg := "Running FFmpeg to fix video %s with options: remux=%v, audio=%v, video=%v"
 	log.Printf(logMsg, fullPath, req.Remux, req.Audio, req.Video)
-
 	if req.Video {
-		// If video is selected, re-encode to H.264/AAC/MP4, ignoring remux and audio
 		cmd = exec.Command("ffmpeg", "-i", fullPath, "-c:v", "libx264", "-preset", "fast", "-c:a", "aac", "-f", "mp4", tempPath)
 	} else if req.Audio {
-		// If audio is selected (and video is not), re-encode audio to AAC, copy video, use MP4
 		cmd = exec.Command("ffmpeg", "-i", fullPath, "-c:v", "copy", "-c:a", "aac", "-f", "mp4", tempPath)
 	} else if req.Remux {
-		// If only remux is selected, copy both streams, use MP4
 		cmd = exec.Command("ffmpeg", "-i", fullPath, "-c", "copy", "-f", "mp4", tempPath)
 	}
-
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("FFmpeg failed: %v, output: %s", err, string(output))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fix video: " + string(output)})
 		return
 	}
-
 	log.Printf("FFmpeg output: %s", string(output))
 	tempURI := "/temp_videos/" + tempFileName
 	c.JSON(http.StatusOK, gin.H{"temp_uri": tempURI})
@@ -814,7 +776,7 @@ func updateBreakHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	_, err := db.Exec("UPDATE video_metadata SET value = to_jsonb($1::numeric) WHERE id = $2 AND metadata_type_id = 1", req.Time, req.ID)
+	_, err := db.Exec("UPDATE video_metadata SET value = $1::jsonb WHERE id = $2 AND metadata_type_id = 1", req.Value, req.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -836,19 +798,248 @@ func deleteBreakHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
+func previewFadeHandler(c *gin.Context) {
+	var req PreviewFadeReq
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.Value["type"] != "fade" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Not a fade break"})
+		return
+	}
+	timeVal, ok := req.Value["time"].(float64)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid time"})
+		return
+	}
+	color, ok := req.Value["color"].(string)
+	if !ok {
+		color = "#000000"
+	}
+	fadeOut, ok := req.Value["fade_out"].(map[string]interface{})
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_out"})
+		return
+	}
+	fadeOutVideo, ok := fadeOut["video"].(map[string]interface{})
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_out video"})
+		return
+	}
+	fovStartRel, ok := fadeOutVideo["start"].(float64)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_out video start"})
+		return
+	}
+	fovEndRel, ok := fadeOutVideo["end"].(float64)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_out video end"})
+		return
+	}
+	fovStart := timeVal + fovStartRel
+	fovEnd := timeVal + fovEndRel
+	fovDur := fovEnd - fovStart
+	fadeOutAudio, ok := fadeOut["audio"].(map[string]interface{})
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_out audio"})
+		return
+	}
+	foaStartRel, ok := fadeOutAudio["start"].(float64)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_out audio start"})
+		return
+	}
+	foaEndRel, ok := fadeOutAudio["end"].(float64)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_out audio end"})
+		return
+	}
+	foaStart := timeVal + foaStartRel
+	foaEnd := timeVal + foaEndRel
+	foaDur := foaEnd - foaStart
+
+	fadeIn, ok := req.Value["fade_in"].(map[string]interface{})
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_in"})
+		return
+	}
+	fadeInVideo, ok := fadeIn["video"].(map[string]interface{})
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_in video"})
+		return
+	}
+	fivStartRel, ok := fadeInVideo["start"].(float64)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_in video start"})
+		return
+	}
+	fivEndRel, ok := fadeInVideo["end"].(float64)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_in video end"})
+		return
+	}
+	fivStart := timeVal + fivStartRel
+	fivEnd := timeVal + fivEndRel
+	fivDur := fivEnd - fivStart
+	fadeInAudio, ok := fadeIn["audio"].(map[string]interface{})
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_in audio"})
+		return
+	}
+	fiaStartRel, ok := fadeInAudio["start"].(float64)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_in audio start"})
+		return
+	}
+	fiaEndRel, ok := fadeInAudio["end"].(float64)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_in audio end"})
+		return
+	}
+	fiaStart := timeVal + fiaStartRel
+	fiaEnd := timeVal + fiaEndRel
+	fiaDur := fiaEnd - fiaStart
+
+	var uri string
+	err := db.QueryRow("SELECT uri FROM videos WHERE id = $1", req.ID).Scan(&uri)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		return
+	}
+	fullPath := filepath.Join(videoBaseDir, uri)
+	if _, err := os.Stat(fullPath); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Video file not found"})
+		return
+	}
+
+	tempDir := "./temp_videos"
+	if err := os.MkdirAll(tempDir, os.ModePerm); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create temp directory"})
+		return
+	}
+	tempFileName := fmt.Sprintf("%d_fade_preview_%d.mp4", req.ID, time.Now().UnixNano())
+	tempPath := filepath.Join(tempDir, tempFileName)
+
+	preStart := math.Min(timeVal - req.Left, math.Min(fovStart, foaStart))
+	preEnd := math.Max(timeVal, math.Max(fovEnd, foaEnd))
+	postStart := math.Min(fivStart, fiaStart)
+	postEnd := math.Max(timeVal + req.Right, math.Max(fivEnd, fiaEnd))
+
+	preTemp := filepath.Join(tempDir, fmt.Sprintf("pre_%d.ts", time.Now().UnixNano()))
+	cmd := exec.Command("ffmpeg", "-ss", fmt.Sprintf("%.4f", preStart), "-to", fmt.Sprintf("%.4f", preEnd), "-i", fullPath, "-c", "copy", preTemp)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("FFmpeg pre extract failed: %v, output: %s", err, string(output))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to extract pre clip: " + string(output)})
+		return
+	}
+
+	preFaded := filepath.Join(tempDir, fmt.Sprintf("pre_faded_%d.mp4", time.Now().UnixNano()))
+	args := []string{"-i", preTemp}
+	vf := ""
+	if fovDur > 0 {
+		st := fovStart - preStart
+		if st < 0 {
+			st = 0
+		}
+		vf = fmt.Sprintf("fade=out:st=%.4f:d=%.4f:color=%s", st, fovDur, color)
+	}
+	af := ""
+	if foaDur > 0 {
+		st := foaStart - preStart
+		if st < 0 {
+			st = 0
+		}
+		af = fmt.Sprintf("afade=out:st=%.4f:d=%.4f", st, foaDur)
+	}
+	if vf != "" {
+		args = append(args, "-vf", vf)
+	}
+	if af != "" {
+		args = append(args, "-af", af)
+	}
+	args = append(args, "-c:v", "libx264", "-preset", "fast", "-c:a", "aac", preFaded)
+	cmd = exec.Command("ffmpeg", args...)
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("FFmpeg pre fade failed: %v, output: %s", err, string(output))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to apply fade to pre clip: " + string(output)})
+		return
+	}
+
+	postTemp := filepath.Join(tempDir, fmt.Sprintf("post_%d.ts", time.Now().UnixNano()))
+	cmd = exec.Command("ffmpeg", "-ss", fmt.Sprintf("%.4f", postStart), "-to", fmt.Sprintf("%.4f", postEnd), "-i", fullPath, "-c", "copy", postTemp)
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("FFmpeg post extract failed: %v, output: %s", err, string(output))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to extract post clip: " + string(output)})
+		return
+	}
+
+	postFaded := filepath.Join(tempDir, fmt.Sprintf("post_faded_%d.mp4", time.Now().UnixNano()))
+	args = []string{"-i", postTemp}
+	vf = ""
+	if fivDur > 0 {
+		st := fivStart - postStart
+		if st < 0 {
+			st = 0
+		}
+		vf = fmt.Sprintf("fade=in:st=%.4f:d=%.4f:color=%s", st, fivDur, color)
+	}
+	af = ""
+	if fiaDur > 0 {
+		st := fiaStart - postStart
+		if st < 0 {
+			st = 0
+		}
+		af = fmt.Sprintf("afade=in:st=%.4f:d=%.4f", st, fiaDur)
+	}
+	if vf != "" {
+		args = append(args, "-vf", vf)
+	}
+	if af != "" {
+		args = append(args, "-af", af)
+	}
+	args = append(args, "-c:v", "libx264", "-preset", "fast", "-c:a", "aac", postFaded)
+	cmd = exec.Command("ffmpeg", args...)
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("FFmpeg post fade failed: %v, output: %s", err, string(output))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to apply fade to post clip: " + string(output)})
+		return
+	}
+
+	args = []string{"-i", preFaded, "-i", postFaded, "-filter_complex", "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[v][a]", "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "fast", "-c:a", "aac", tempPath}
+	cmd = exec.Command("ffmpeg", args...)
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("FFmpeg concat failed: %v, output: %s", err, string(output))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to concat clips: " + string(output)})
+		return
+	}
+
+	os.Remove(preTemp)
+	os.Remove(postTemp)
+	os.Remove(preFaded)
+	os.Remove(postFaded)
+
+	tempURI := "/temp_videos/" + tempFileName
+	c.JSON(http.StatusOK, gin.H{"temp_uri": tempURI})
+}
+
 func updateAdBreaksHandler(c *gin.Context) {
 	rows, err := db.Query(`
-		SELECT t.id, t.name, t.description
-		FROM titles t
-		ORDER BY t.name
-	`)
+SELECT t.id, t.name, t.description
+FROM titles t
+ORDER BY t.name
+`)
 	if err != nil {
 		log.Printf("Query error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	defer rows.Close()
-
 	var titles []Title
 	for rows.Next() {
 		var t Title
@@ -857,20 +1048,18 @@ func updateAdBreaksHandler(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-
 		tmrows, err := db.Query(`
-			SELECT mt.name, tm.value::text
-			FROM title_metadata tm
-			JOIN metadata_types mt ON tm.metadata_type_id = mt.id
-			WHERE tm.title_id = $1
-		`, t.ID)
+SELECT mt.name, tm.value::text
+FROM title_metadata tm
+JOIN metadata_types mt ON tm.metadata_type_id = mt.id
+WHERE tm.title_id = $1
+`, t.ID)
 		if err != nil {
 			log.Printf("Title metadata query error: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		defer tmrows.Close()
-
 		for tmrows.Next() {
 			var m Metadata
 			if err := tmrows.Scan(&m.TypeName, &m.Value); err != nil {
@@ -880,20 +1069,18 @@ func updateAdBreaksHandler(c *gin.Context) {
 			}
 			t.TitleMetadata = append(t.TitleMetadata, m)
 		}
-
 		vrows, err := db.Query(`
-			SELECT v.id, v.uri
-			FROM videos v
-			WHERE v.title_id = $1
-			ORDER BY v.id
-		`, t.ID)
+SELECT v.id, v.uri
+FROM videos v
+WHERE v.title_id = $1
+ORDER BY v.id
+`, t.ID)
 		if err != nil {
 			log.Printf("Videos query error: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		defer vrows.Close()
-
 		for vrows.Next() {
 			var v Video
 			if err := vrows.Scan(&v.ID, &v.URI); err != nil {
@@ -901,20 +1088,18 @@ func updateAdBreaksHandler(c *gin.Context) {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
-
 			mrows, err := db.Query(`
-				SELECT vm.id, mt.name, vm.value::text
-				FROM video_metadata vm
-				JOIN metadata_types mt ON vm.metadata_type_id = mt.id
-				WHERE vm.video_id = $1
-			`, v.ID)
+SELECT vm.id, mt.name, vm.value::text
+FROM video_metadata vm
+JOIN metadata_types mt ON vm.metadata_type_id = mt.id
+WHERE vm.video_id = $1
+`, v.ID)
 			if err != nil {
 				log.Printf("Video metadata query error: %v", err)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
 			defer mrows.Close()
-
 			for mrows.Next() {
 				var m Metadata
 				if err := mrows.Scan(&m.ID, &m.TypeName, &m.Value); err != nil {
@@ -924,20 +1109,18 @@ func updateAdBreaksHandler(c *gin.Context) {
 				}
 				v.Metadata = append(v.Metadata, m)
 			}
-
 			trows, err := db.Query(`
-				SELECT tg.name
-				FROM video_tags vt
-				JOIN tags tg ON vt.tag_id = tg.id
-				WHERE vt.video_id = $1
-			`, v.ID)
+SELECT tg.name
+FROM video_tags vt
+JOIN tags tg ON vt.tag_id = tg.id
+WHERE vt.video_id = $1
+`, v.ID)
 			if err != nil {
 				log.Printf("Tags query error: %v", err)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
 			defer trows.Close()
-
 			for trows.Next() {
 				var tag Tag
 				if err := trows.Scan(&tag.Name); err != nil {
@@ -947,17 +1130,13 @@ func updateAdBreaksHandler(c *gin.Context) {
 				}
 				v.Tags = append(v.Tags, tag)
 			}
-
 			t.Videos = append(t.Videos, v)
 		}
-
 		if len(t.Videos) == 0 && len(t.TitleMetadata) == 0 {
 			log.Printf("No data for title ID %d: %s", t.ID, t.Name)
 		}
-
 		titles = append(titles, t)
 	}
-
 	c.HTML(http.StatusOK, "update_ad_break_points.html", gin.H{"Titles": titles})
 }
 
@@ -981,7 +1160,6 @@ func apiTitlesHandler(c *gin.Context) {
 	search := strings.TrimSpace(c.Query("search"))
 	limitStr := c.Query("limit")
 	offsetStr := c.Query("offset")
-
 	limit := 10
 	if limitStr != "" {
 		if l, err := strconv.Atoi(limitStr); err == nil {
@@ -994,7 +1172,6 @@ func apiTitlesHandler(c *gin.Context) {
 			offset = o
 		}
 	}
-
 	query := `SELECT id, name, description FROM titles`
 	args := []interface{}{}
 	if search != "" {
@@ -1003,14 +1180,12 @@ func apiTitlesHandler(c *gin.Context) {
 	}
 	query += ` ORDER BY name LIMIT $` + strconv.Itoa(len(args)+1) + ` OFFSET $` + strconv.Itoa(len(args)+2)
 	args = append(args, limit, offset)
-
 	rows, err := db.Query(query, args...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	defer rows.Close()
-
 	var titles []Title
 	for rows.Next() {
 		var t Title
@@ -1020,7 +1195,6 @@ func apiTitlesHandler(c *gin.Context) {
 		}
 		titles = append(titles, t)
 	}
-
 	c.JSON(http.StatusOK, titles)
 }
 
@@ -1078,7 +1252,6 @@ func apiStationsHandler(c *gin.Context) {
 	search := strings.TrimSpace(c.Query("search"))
 	limitStr := c.Query("limit")
 	offsetStr := c.Query("offset")
-
 	limit := 10
 	if limitStr != "" {
 		if l, err := strconv.Atoi(limitStr); err == nil {
@@ -1091,7 +1264,6 @@ func apiStationsHandler(c *gin.Context) {
 			offset = o
 		}
 	}
-
 	query := `SELECT id, name, unix_start FROM stations`
 	args := []interface{}{}
 	if search != "" {
@@ -1100,14 +1272,12 @@ func apiStationsHandler(c *gin.Context) {
 	}
 	query += ` ORDER BY name LIMIT $` + strconv.Itoa(len(args)+1) + ` OFFSET $` + strconv.Itoa(len(args)+2)
 	args = append(args, limit, offset)
-
 	rows, err := db.Query(query, args...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	defer rows.Close()
-
 	var stations []Station
 	for rows.Next() {
 		var s Station
@@ -1117,7 +1287,6 @@ func apiStationsHandler(c *gin.Context) {
 		}
 		stations = append(stations, s)
 	}
-
 	c.JSON(http.StatusOK, stations)
 }
 

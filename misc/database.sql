@@ -2,12 +2,12 @@
 -- PostgreSQL database dump
 --
 
-\restrict LYGJnpJzIp44Zjk7lfetzKYWYMlVbiUxJRoiWAeP3yghnjfCNLANIbW2yFKPLoQ
+\restrict dnVUJxlAJf3NWZUpJYAmesfJwBmF8Of4ekFSgwU7vZjYuLC3fACXas6RhkwrWON
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.6
 
--- Started on 2025-10-13 19:42:46
+-- Started on 2025-10-15 16:37:07
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -2830,6 +2830,34 @@ COPY public.video_tags (id, video_id, tag_id) FROM stdin;
 131	619	4
 132	618	4
 133	620	4
+134	634	4
+135	635	4
+136	647	4
+137	646	4
+138	645	4
+139	644	4
+140	643	4
+141	642	4
+142	641	4
+143	640	4
+144	639	4
+145	638	4
+146	637	4
+147	636	4
+148	648	4
+149	649	4
+150	650	4
+151	653	4
+152	652	4
+153	651	4
+154	661	4
+155	660	4
+156	659	4
+157	658	4
+158	657	4
+159	656	4
+160	655	4
+161	654	4
 \.
 
 
@@ -2861,7 +2889,6 @@ COPY public.videos (id, title_id, uri, duration, loudnorm_input_i, loudnorm_inpu
 27	0	Commercials/N64/Super Mario 64/Super Mario 64 Commercial.mp4	27.538333000000	-24.01	2.5	-11.47	-34.04
 28	0	Commercials/N64/Super Smash Bros/Super Smash Bros. Commercial.mp4	30.348333000000	-13.86	1.2	-5.05	-23.91
 29	0	Commercials/N64/The Legend of Zelda Majora's Mask/The Legend of Zelda Majora's Mask Trailer.mp4	60.433333000000	-21.06	9.9	-3.2	-31.45
-31	0	Commercials/N64/Turok 2 Seeds of Evil/Turok 2 Seeds of Evil Commercial.mp4	30.068333000000	-12.71	1.4	-2.69	-22.75
 34	0	Commercials/PS1/Vigilante 8/Vigilante 8 Banned Commercial.mp4	32.067000000000	-14.18	4.4	-1.72	-24.66
 35	0	Commercials/PS1/Duke Nukem/Duke Nukem Commercial.mp4	14.883333000000	-19.06	3.1	-6.45	-29.41
 36	0	Commercials/PS1/Duke Nukem Time to Kill/Duke Nukem Time to Kill Commercial.mp4	30.091667000000	-17.42	2.5	-4.01	-27.42
@@ -2888,6 +2915,7 @@ COPY public.videos (id, title_id, uri, duration, loudnorm_input_i, loudnorm_inpu
 63	0	Commercials/NES/Konami/Konami Commercial.mp4	31.346667000000	-18.46	7	-7.12	-29.06
 64	0	Commercials/PS2/Final Fantasy X/Final Fantasy X Promo Trailer 2.mp4	170.225000000000	-16.91	8.8	0.52	-27.33
 272	0	Malcolm in the Middle/4/Malcolm in the Middle 0407 Malcolm Holds His Tongue.mkv	1315.981375000000	-24.78	12.6	-3.36	-35.84
+637	0	Commercials/N64/Nintendo 64 Christmas Commercial.mp4	29.841000000000	-16.69	8	-2.65	-26.85
 66	0	Commercials/PS2/Final Fantasy X-2/Final Fantasy X-2 Promo Japanese.mp4	180.975000000000	-18.58	4.7	-1.22	-28.75
 69	0	Bob's Burgers/2/Bob's Burgers 0203 Synchronized Swimming.mkv	1272.384000000000	-26.44	9.4	-5.23	-36.74
 68	0	Bob's Burgers/2/Bob's Burgers 0202 Bob Day Afternoon.mkv	1291.488000000000	-23.3	8.3	-1.33	-33.67
@@ -3335,6 +3363,7 @@ COPY public.videos (id, title_id, uri, duration, loudnorm_input_i, loudnorm_inpu
 484	0	3rd Rock from the Sun/6/3rd Rock from the Sun 610 There's No Business Like Dick Business.mkv	1241.536000000000	-21.99	6.9	-3.28	-32.59
 493	0	3rd Rock from the Sun/6/3rd Rock from the Sun 619 The Thing that Wouldn't Die (Part 1).mkv	1242.133000000000	-22.6	7.5	-3.97	-33.52
 494	0	3rd Rock from the Sun/6/3rd Rock from the Sun 620 The Thing That Wouldn't Die (Alternate Ending).mkv	265.962000000000	-15.54	15.1	0.14	-27.37
+643	0	Commercials/N64/Nintendo 64 Nintendo Squad Player's Choice Commercial.mp4	30.061000000000	-21.91	3	-8.87	-31.99
 498	0	Beyond Belief Fact or Fiction/1/Beyond Belief Fact or Fiction 103 The Prophecy, Couch Potato, Love Over the Counter, Imaginary Friend, Last Man on Earth.avi	2574.972400000000	-20.66	5.7	-2.59	-31.12
 499	0	Beyond Belief Fact or Fiction/1/Beyond Belief Fact or Fiction 104 E-Mail, Cup of Joe, Secret of the Family Tomb, Wheezer, The Unknown Patient.avi	2581.979400000000	-20.41	5.8	-2.89	-30.8
 502	0	Beyond Belief Fact or Fiction/2/Beyond Belief Fact or Fiction 201 The Plane, The Gun, The Portrait, The Pass, The Caller.avi	2581.979400000000	-22.54	12.3	-2.35	-33.46
@@ -3380,6 +3409,12 @@ COPY public.videos (id, title_id, uri, duration, loudnorm_input_i, loudnorm_inpu
 516	0	Beyond Belief Fact or Fiction/3/Beyond Belief Fact or Fiction 302 One for the Road, The Music Box, Two to One, Damsel, The Horn.avi	2585.983400000000	-21.7	8	-2.36	-32.37
 515	0	Beyond Belief Fact or Fiction/3/Beyond Belief Fact or Fiction 301 Morning Sickness, The Curse of Hampton Manor, Wax Executioner, Blood Bank, Ring Toss.avi	2587.985400000000	-21.59	6.2	-2.14	-31.98
 520	0	Beyond Belief Fact or Fiction/3/Beyond Belief Fact or Fiction 306 Red Line, Two Sisters, Eclipse, The Ice Box, The Gathering.avi	2581.979400000000	-21.7	10.1	-1.65	-32.42
+647	0	Commercials/N64/Nintendo 64 Sports Commercial.mp4	60.381000000000	-17.91	2.2	-5.26	-27.92
+646	0	Commercials/N64/Nintendo 64 Player's Choice Million Seller Label Maker Commercial.mp4	30.241000000000	-12.69	2.7	-1.13	-22.72
+648	0	Commercials/N64/BattleTanx/BattleTanx Commercial.mp4	30.241000000000	-21.88	8.8	-7.66	-32.03
+645	0	Commercials/N64/Nintendo 64 Player's Choice Locker Room With Voiceover Commercial.mp4	30.241000000000	-23.72	2.4	-10.67	-33.72
+644	0	Commercials/N64/Nintendo 64 Player's Choice Locker Room Commercial.mp4	36.481000000000	-20.51	4.2	-6.25	-30.8
+31	0	Commercials/N64/Turok 2 Seeds of Evil/Turok 2 Seeds of Evil Long Commercial.mp4	30.068333000000	-12.71	1.4	-2.69	-22.75
 554	0	Commercials/SNES/DOOM/DOOM TV Commercial.mp4	15.001000000000	-14.76	5.7	-0.82	-25.14
 543	0	Commercials/PC/DOOM 3/DOOM 3 Trailer.mp4	68.941000000000	-29.23	11.4	-17.54	-39.57
 550	0	Commercials/Xbox/DOOM 3/DOOM 3 Trailer.mp4	83.777596000000	-15.76	8.9	-3.16	-25.95
@@ -3393,6 +3428,7 @@ COPY public.videos (id, title_id, uri, duration, loudnorm_input_i, loudnorm_inpu
 552	0	Commercials/Xbox/DOOM 3/Doom 3 Pre Release Unrated Trailer.mp4	138.101000000000	-24.16	7.6	-5.44	-34.55
 560	0	Commercials/N64/The Legend of Zelda Majora's Mask/The Legend of Zelda Majora's Mask French Commercial 2.mp4	31.031000000000	-15.58	2.8	-1.13	-25.63
 569	0	Commercials/N64/The Legend of Zelda Majora's Mask/The Legend of Zelda Majora's Mask Radio Zelda Short 3.mp4	15.001000000000	-16.66	2.5	-4.15	-26.68
+638	0	Commercials/N64/Nintendo 64 Scott Adsit Sports Ad #1.mp4	32.981000000000	-20.6	7.3	-7.06	-31.27
 563	0	Commercials/N64/The Legend of Zelda Majora's Mask/The Legend of Zelda Majora's Mask Japanese Commercial 1.mp4	29.651882000000	-18.94	10.4	-8.45	-29.67
 566	0	Commercials/N64/The Legend of Zelda Majora's Mask/The Legend of Zelda Majora's Mask Radio Zelda Commercial 2.mp4	67.467000000000	-22.5	7.1	-4.44	-33.03
 568	0	Commercials/N64/The Legend of Zelda Majora's Mask/The Legend of Zelda Majora's Mask Radio Zelda Short 2.mp4	15.301000000000	-26.56	1.3	-13.43	-36.63
@@ -3466,13 +3502,33 @@ COPY public.videos (id, title_id, uri, duration, loudnorm_input_i, loudnorm_inpu
 623	0	Carpoolers/1/Carpoolers 103 Who Would You Do.avi	1290.144000000000	-18.25	7	0.74	-28.86
 625	0	Carpoolers/1/Carpoolers 105 A Divorce to Remember.avi	1287.120000000000	-17.11	7.4	-0	-27.59
 624	0	Carpoolers/1/Carpoolers 104 Down for the Count.avi	1289.136000000000	-21.46	8.3	0.07	-32.12
+634	0	Commercials/N64/Extreme-G and Turok Dinosaur Hunter/Extreme-G_Turok Commercial (1997).mp4	29.884082000000	-18.04	1.7	-3.69	-28.04
 628	0	Carpoolers/1/Carpoolers 108 First Fight.avi	1172.592000000000	-24.74	6.2	-4.56	-35.17
+636	0	Commercials/N64/Nintendo 64 3rd Dimension Commercial 2.mp4	60.141000000000	-23.62	2.3	-10.31	-33.64
 627	0	Carpoolers/1/Carpoolers 107 The Seminar.avi	1231.080000000000	-24.86	6	-2.91	-35.27
+641	0	Commercials/N64/Nintendo 64 Get N or Get Out Dance Commercial.mp4	18.181000000000	-20.52	3.5	-8.16	-30.55
 629	0	Carpoolers/1/Carpoolers 109 The Handsomest Man.avi	1250.592000000000	-25.09	6.2	-4.83	-35.64
 630	0	Carpoolers/1/Carpoolers 110 Wheels of Fortune.avi	1262.232000000000	-24.29	5.8	-3.52	-34.85
 631	0	Carpoolers/1/Carpoolers 111 The Recital.avi	1237.872000000000	-24.57	5.7	-2.77	-34.96
 633	0	Carpoolers/1/Carpoolers 113 Take Your Daughter to Work Day.avi	1220.016000000000	-25.03	6.2	-2.75	-35.62
 632	0	Carpoolers/1/Carpoolers 112 Lost in America.avi	1262.304000000000	-24.33	6.7	-2.68	-34.86
+635	0	Commercials/N64/Nintendo 64 3rd Dimension Commercial 1.mp4	66.401000000000	-21.91	2.2	-8.1	-31.94
+642	0	Commercials/N64/Nintendo 64 Get N or Get Out I Quit Commercial.mp4	15.141000000000	-24.44	1.9	-11.59	-35.07
+649	0	Commercials/N64/BattleTanx Global Assault/BattleTanx Global Assault Commercial.mp4	30.232381000000	-24.67	1.9	-13.08	-34.72
+651	0	Commercials/N64/Jet Force Gemini/Jet Force Gemini The Bugs are Coming Commercial v2.mp4	30.141000000000	-28.3	5.6	-14.11	-38.36
+661	0	Commercials/N64/Goldeneye/Goldeneye 007 Spanish Commercial.mp4	29.837642000000	-14.5	1.9	-3.28	-24.51
+650	0	Commercials/N64/Jet Force Gemini/Jet Force Gemini The Bugs are Coming Commercial v1.mp4	36.041000000000	-11.2	8.7	0.53	-22.22
+653	0	Commercials/N64/Turok 2 Seeds of Evil/Turok 2 Seeds of Evil Short Commercial.mp4	18.141000000000	-16.93	6.8	-6.88	-27.06
+652	0	Commercials/N64/Mario Party/Mario Party Commercial.mp4	30.501000000000	-27.49	6.7	-14.11	-37.73
+639	0	Commercials/N64/Nintendo 64 Scott Adsit Sports Ad #2.mp4	32.981000000000	-20.19	5.2	-4.73	-30.49
+640	0	Commercials/N64/Nintendo 64 Scott Adsit Sports Ad #3.mp4	33.121000000000	-17.7	11.8	-4.51	-28.37
+659	0	Commercials/N64/Goldeneye/GoldenEye 007 UK Commercial.mp4	38.681000000000	-12.07	6.8	-0.2	-23.19
+658	0	Commercials/N64/Goldeneye/GoldenEye 007 Obey Commercial.mp4	21.141000000000	-20.69	2.2	-7.55	-30.69
+654	0	Commercials/N64/Goldeneye/GoldenEye 007 Australian Commercial 1.mp4	30.121000000000	-18.17	2.5	-2.27	-28.28
+656	0	Commercials/N64/Goldeneye/GoldenEye 007 Commercial.mp4	30.101000000000	-16.55	7.5	-2.32	-27.11
+657	0	Commercials/N64/Goldeneye/GoldenEye 007 Japanese Commercial.mp4	30.021000000000	-8.1	3.7	1.83	-18.2
+655	0	Commercials/N64/Goldeneye/GoldenEye 007 Australian Commercial 2.mp4	30.061000000000	-12.8	2.5	0.82	-22.89
+660	0	Commercials/N64/Goldeneye/GoldenEye 007 UK Joyful Commercial.mp4	10.054240000000	-27.1	2.4	-15.84	-37.38
 \.
 
 
@@ -3554,7 +3610,7 @@ SELECT pg_catalog.setval('public.video_metadata_id_seq', 1622, true);
 -- Name: video_tags_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.video_tags_id_seq', 133, true);
+SELECT pg_catalog.setval('public.video_tags_id_seq', 161, true);
 
 
 --
@@ -3563,7 +3619,7 @@ SELECT pg_catalog.setval('public.video_tags_id_seq', 133, true);
 -- Name: videos_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.videos_id_seq', 633, false);
+SELECT pg_catalog.setval('public.videos_id_seq', 661, true);
 
 
 --
@@ -3829,11 +3885,11 @@ ALTER TABLE ONLY public.videos
     ADD CONSTRAINT videos_title_id_fkey FOREIGN KEY (title_id) REFERENCES public.titles(id) ON DELETE CASCADE;
 
 
--- Completed on 2025-10-13 19:42:47
+-- Completed on 2025-10-15 16:37:07
 
 --
 -- PostgreSQL database dump complete
 --
 
-\unrestrict LYGJnpJzIp44Zjk7lfetzKYWYMlVbiUxJRoiWAeP3yghnjfCNLANIbW2yFKPLoQ
+\unrestrict dnVUJxlAJf3NWZUpJYAmesfJwBmF8Of4ekFSgwU7vZjYuLC3fACXas6RhkwrWON
 
