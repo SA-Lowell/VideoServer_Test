@@ -52,12 +52,31 @@ type fpsPair struct {
     den int
 }
 
+type BreakPoint struct {
+	Time     float64
+	IsFade   bool
+	Color    string
+	FadeOut  FadePhase
+	FadeIn   FadePhase
+}
+
+type FadePhase struct {
+	Video FadeRange
+	Audio FadeRange
+}
+
+type FadeRange struct {
+	Start float64
+	End   float64
+}
+
 type bufferedChunk struct {
     segPath string
     dur float64
     isAd bool
     videoID int64
     fps fpsPair
+    effective_advance float64
 }
 
 type bitReader struct {
@@ -160,7 +179,15 @@ func sanitizeTrackID(name string) string {
     return strings.ReplaceAll(strings.ReplaceAll(name, " ", "_"), "'", "")
 }
 
-func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur float64) ([]string, [][]byte, string, float64, fpsPair, error) {
+func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur float64, fadeType string, videoSt, videoD, audioSt, audioD float64, color string) ([]string, [][]byte, string, float64, fpsPair, error) {
+    if startTime < 0 {
+        adjust := -startTime
+        chunkDur += adjust
+        videoSt += adjust
+        audioSt += adjust
+        startTime = 0
+        log.Printf("Station %s: Clamped negative startTime to 0, adjusted dur to %.3f, videoSt %.4f, audioSt %.4f", st.name, chunkDur, videoSt, audioSt)
+    }
     if db == nil {
         errorLogger.Printf("Station %s: Database connection is nil for video %d", st.name, videoID)
         return nil, nil, "", 0, fpsPair{}, fmt.Errorf("database connection is nil")
@@ -175,7 +202,15 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         errorLogger.Printf("Station %s: Failed to get URI for video %d: %v", st.name, videoID, err)
         return nil, nil, "", 0, fpsPair{}, fmt.Errorf("failed to get URI for video %d: %v", videoID, err)
     }
-    fullEpisodePath := filepath.Join(videoBaseDir, uri)
+    originalPath := filepath.Join(videoBaseDir, uri)
+    normalizedPath := filepath.Join("./normalized", filepath.Base(uri))
+    fullEpisodePath := originalPath
+    if _, statErr := os.Stat(normalizedPath); statErr == nil {
+        fullEpisodePath = normalizedPath
+        log.Printf("Station %s: Using normalized path for video %d: %s", st.name, videoID, normalizedPath)
+    } else {
+        log.Printf("Station %s: Normalized path not found for video %d, using original: %s", st.name, videoID, originalPath)
+    }
     if _, err := os.Stat(fullEpisodePath); err != nil {
         errorLogger.Printf("Station %s: Episode file not found: %s", st.name, fullEpisodePath)
         return nil, nil, "", 0, fpsPair{}, fmt.Errorf("episode file not found: %s", fullEpisodePath)
@@ -194,6 +229,10 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             errorLogger.Printf("Station %s: No remaining duration for video %d at start time %.3f", st.name, videoID, startTime)
             return nil, nil, "", 0, fpsPair{}, fmt.Errorf("no remaining duration for video %d at start time %f", videoID, startTime)
         }
+    }
+    if adjustedChunkDur < 0.001 {
+        log.Printf("Station %s: Negligible chunk duration %.3fs for video %d at %.3fs, skipping without loss assumption", st.name, adjustedChunkDur, videoID, startTime)
+        return nil, nil, "", adjustedChunkDur, fpsPair{}, nil // Return dur>0 but no files, effective advance
     }
     tempDir := filepath.Join(".", "temp_encoded_segments")
     if err := os.MkdirAll(tempDir, 0755); err != nil {
@@ -227,7 +266,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         var probeResult struct {
             Streams []struct {
                 SampleRate string `json:"sample_rate"`
-                Channels   int    `json:"channels"`
+                Channels int `json:"channels"`
             } `json:"streams"`
         }
         if err := json.Unmarshal(outputProbe, &probeResult); err != nil {
@@ -298,16 +337,22 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
     if err != nil {
         errorLogger.Printf("Station %s: Failed to query loudnorm measurements for video %d: %v", st.name, videoID, err)
     }
+
     var cmdAudio *exec.Cmd
     var outputAudio []byte
     var audioData []byte
+    var argsAudio []string
     if hasAudio {
-        argsAudio := []string{
+        argsAudio = []string{
             "-y",
             "-err_detect", "ignore_err",
             "-analyzeduration", "100M",
             "-probesize", "100M",
-            "-ss", fmt.Sprintf("%.3f", startTime),
+        }
+        if startTime > 0 {
+            argsAudio = append(argsAudio, "-ss", fmt.Sprintf("%.3f", startTime))
+        }
+        argsAudio = append(argsAudio,
             "-i", fullEpisodePath,
             "-t", fmt.Sprintf("%.3f", adjustedChunkDur),
             "-map", "0:a:0",
@@ -326,20 +371,41 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-threads", "0",
             "-f", "opus",
             opusPath,
-        }
-        if loudI.Valid {
-            loudnormFilter := fmt.Sprintf(
+        )
+
+        var audioFilter string
+        if loudI.Valid && fullEpisodePath == originalPath {
+            audioFilter = fmt.Sprintf(
                 "loudnorm=I=-23:TP=-1.5:LRA=11:measured_I=%.2f:measured_LRA=%.2f:measured_TP=%.2f:measured_thresh=%.2f:offset=0:linear=true",
                 loudI.Float64, loudLRA.Float64, loudTP.Float64, loudThresh.Float64,
             )
+            log.Printf("Station %s: Base loudnorm filter for video %d: %s", st.name, videoID, audioFilter)
+        }
+
+        if fadeType != "" && audioD > 0 {
+            afadeType := "out"
+            if fadeType == "in" {
+                afadeType = "in"
+            }
+            afadeFilter := fmt.Sprintf("afade=t=%s:st=%.4f:d=%.4f", afadeType, audioSt, audioD)
+            if audioFilter != "" {
+                audioFilter += "," + afadeFilter  // Chain: loudnorm,afade
+            } else {
+                audioFilter = afadeFilter
+            }
+            log.Printf("Station %s: Applied audio fade %s to chain: %s", st.name, fadeType, afadeFilter)
+        }
+
+        if audioFilter != "" {
             for i := len(argsAudio) - 1; i >= 0; i-- {
                 if argsAudio[i] == "-c:a" {
-                    argsAudio = append(argsAudio[:i], append([]string{"-af", loudnormFilter}, argsAudio[i:]...)...)
+                    argsAudio = append(argsAudio[:i], append([]string{"-af", audioFilter}, argsAudio[i:]...)...)
                     break
                 }
             }
-            log.Printf("Station %s: Applying loudnorm filter to audio for video %d: %s", st.name, videoID, loudnormFilter)
+            log.Printf("Station %s: Inserted combined audio filter: %s", st.name, audioFilter)
         }
+
         cmdAudio = exec.Command("ffmpeg", argsAudio...)
         outputAudio, err = cmdAudio.CombinedOutput()
         outputAudioStr := string(outputAudio)
@@ -378,6 +444,14 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-threads", "0",
             "-f", "opus",
             opusPath,
+        }
+        if fadeType != "" && audioD > 0 {
+            afadeType := "out"
+            if fadeType == "in" {
+                afadeType = "in"
+            }
+            afadeFilter := fmt.Sprintf("afade=t=%s:st=%.4f:d=%.4f", afadeType, audioSt, audioD)
+            argsSilent = append(argsSilent[:len(argsSilent)-1], "-af", afadeFilter, opusPath)
         }
         cmdSilent := exec.Command("ffmpeg", argsSilent...)
         outputSilent, err := cmdSilent.CombinedOutput()
@@ -423,7 +497,11 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         "-err_detect", "ignore_err",
         "-analyzeduration", "100M",
         "-probesize", "100M",
-        "-ss", fmt.Sprintf("%.3f", startTime),
+    }
+    if startTime > 0 {
+        argsVideo = append(argsVideo, "-ss", fmt.Sprintf("%.3f", startTime))
+    }
+    argsVideo = append(argsVideo,
         "-i", fullEpisodePath,
         "-t", fmt.Sprintf("%.3f", adjustedChunkDur),
         "-c:v", "libx264",
@@ -438,7 +516,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         "-force_fps",
         "-r", fmt.Sprintf("%d/%d", fpsNum, fpsDen),
         "-fps_mode", "cfr",
-        "-force_key_frames", "0",
+        "-force_key_frames", "expr:eq(n,0)",
         "-sc_threshold", "0",
         "-an",
         "-bsf:v", "h264_mp4toannexb",
@@ -447,11 +525,26 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         "-x264-params", keyFrameParams,
         "-threads", "0",
         fullSegPath,
-    }
-    if isFinalChunk {
-        insertIndex := len(argsVideo) - 7
-        argsVideo = append(argsVideo[:insertIndex], append([]string{"-force_key_frames", "0:expr=eq(n,0)"}, argsVideo[insertIndex:]...)...)
-        log.Printf("Station %s: Forcing IDR frame at start for final chunk %s", st.name, fullSegPath)
+    )
+    if fadeType != "" && videoD > 0 {
+        vfadeType := "out"
+        if fadeType == "in" {
+            vfadeType = "in"
+        }
+        vfadeFilter := fmt.Sprintf("fade=t=%s:st=%.4f:d=%.4f:color=%s", vfadeType, videoSt, videoD, color)
+        insertIndex := -1
+        for i, arg := range argsVideo {
+            if arg == "-c:v" {
+                insertIndex = i + 2
+                break
+            }
+        }
+        if insertIndex != -1 {
+            argsVideo = append(argsVideo[:insertIndex], append([]string{"-vf", vfadeFilter}, argsVideo[insertIndex:]...)...)
+        } else {
+            argsVideo = append(argsVideo, "-vf", vfadeFilter)
+        }
+        log.Printf("Station %s: Applied video fade %s: %s", st.name, fadeType, vfadeFilter)
     }
     cmdVideo = exec.Command("ffmpeg", argsVideo...)
     outputVideo, err = cmdVideo.CombinedOutput()
@@ -471,12 +564,17 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         }
         keyintMinReencode := gopSizeReencode
         keyFrameParamsReencode := fmt.Sprintf("keyint=%d:min-keyint=1:scenecut=0", gopSizeReencode)
-        tempMP4Args := []string{
+        var tempMP4Args []string
+        tempMP4Args = []string{
             "-y",
             "-err_detect", "ignore_err",
             "-analyzeduration", "100M",
             "-probesize", "100M",
-            "-ss", fmt.Sprintf("%.3f", startTime),
+        }
+        if startTime > 0 {
+            tempMP4Args = append(tempMP4Args, "-ss", fmt.Sprintf("%.3f", startTime))
+        }
+        tempMP4Args = append(tempMP4Args,
             "-i", fullEpisodePath,
             "-t", fmt.Sprintf("%.3f", adjustedChunkDur),
             "-c:v", "libx264",
@@ -490,7 +588,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-force_fps",
             "-r", fmt.Sprintf("%d/%d", fpsNum, fpsDen),
             "-fps_mode", "cfr",
-            "-force_key_frames", "0",
+            "-force_key_frames", "expr:eq(n,0)",
             "-sc_threshold", "0",
             "-g", fmt.Sprintf("%d", gopSizeReencode),
             "-keyint_min", fmt.Sprintf("%d", keyintMinReencode),
@@ -505,10 +603,46 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-strict", "experimental",
             "-f", "mp4",
             tempMP4Path,
-        }
-        if isFinalChunk {
-            insertIndex := len(tempMP4Args) - 7
-            tempMP4Args = append(tempMP4Args[:insertIndex], append([]string{"-force_key_frames", "0:expr=eq(n,0)"}, tempMP4Args[insertIndex:]...)...)
+        )
+        if fadeType != "" {
+            if videoD > 0 {
+                vfadeType := "out"
+                if fadeType == "in" {
+                    vfadeType = "in"
+                }
+                vfadeFilter := fmt.Sprintf("fade=t=%s:st=%.4f:d=%.4f:color=%s", vfadeType, videoSt, videoD, color)
+                insertIndex := -1
+                for i, arg := range tempMP4Args {
+                    if arg == "-c:v" {
+                        insertIndex = i + 2
+                        break
+                    }
+                }
+                if insertIndex != -1 {
+                    tempMP4Args = append(tempMP4Args[:insertIndex], append([]string{"-vf", vfadeFilter}, tempMP4Args[insertIndex:]...)...)
+                } else {
+                    tempMP4Args = append(tempMP4Args, "-vf", vfadeFilter)
+                }
+            }
+            if audioD > 0 && hasAudio {
+                afadeType := "out"
+                if fadeType == "in" {
+                    afadeType = "in"
+                }
+                afadeFilter := fmt.Sprintf("afade=t=%s:st=%.4f:d=%.4f", afadeType, audioSt, audioD)
+                insertIndex := -1
+                for i, arg := range tempMP4Args {
+                    if arg == "-c:a" {
+                        insertIndex = i + 2
+                        break
+                    }
+                }
+                if insertIndex != -1 {
+                    tempMP4Args = append(tempMP4Args[:insertIndex], append([]string{"-af", afadeFilter}, tempMP4Args[insertIndex:]...)...)
+                } else {
+                    tempMP4Args = append(tempMP4Args, "-af", afadeFilter)
+                }
+            }
         }
         if !hasAudio {
             tempMP4Args = tempMP4Args[:len(tempMP4Args)-7]
@@ -524,7 +658,8 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         log.Printf("Station %s: Full re-encode succeeded, creating segments from %s", st.name, tempMP4Path)
         var cmdReencodeVideo *exec.Cmd
         var outputReencodeVideo []byte
-        argsReencodeVideo := []string{
+        var argsReencodeVideo []string
+        argsReencodeVideo = []string{
             "-y",
             "-err_detect", "ignore_err",
             "-analyzeduration", "100M",
@@ -541,7 +676,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-force_fps",
             "-r", fmt.Sprintf("%d/%d", fpsNum, fpsDen),
             "-fps_mode", "cfr",
-            "-force_key_frames", "0",
+            "-force_key_frames", "expr:eq(n,0)",
             "-g", fmt.Sprintf("%d", gopSizeReencode),
             "-keyint_min", fmt.Sprintf("%d", keyintMinReencode),
             "-bf", "0",
@@ -552,9 +687,24 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-f", "h264",
             fullSegPath,
         }
-        if isFinalChunk {
-            insertIndex := len(argsReencodeVideo) - 7
-            argsReencodeVideo = append(argsReencodeVideo[:insertIndex], append([]string{"-force_key_frames", "0:expr=eq(n,0)"}, argsReencodeVideo[insertIndex:]...)...)
+        if fadeType != "" && videoD > 0 {
+            vfadeType := "out"
+            if fadeType == "in" {
+                vfadeType = "in"
+            }
+            vfadeFilter := fmt.Sprintf("fade=t=%s:st=%.4f:d=%.4f:color=%s", vfadeType, videoSt, videoD, color)
+            insertIndex := -1
+            for i, arg := range argsReencodeVideo {
+                if arg == "-c:v" {
+                    insertIndex = i + 2
+                    break
+                }
+            }
+            if insertIndex != -1 {
+                argsReencodeVideo = append(argsReencodeVideo[:insertIndex], append([]string{"-vf", vfadeFilter}, argsReencodeVideo[insertIndex:]...)...)
+            } else {
+                argsReencodeVideo = append(argsReencodeVideo, "-vf", vfadeFilter)
+            }
         }
         cmdReencodeVideo = exec.Command("ffmpeg", argsReencodeVideo...)
         outputReencodeVideo, err = cmdReencodeVideo.CombinedOutput()
@@ -568,7 +718,8 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
         if hasAudio {
             var cmdReencodeAudio *exec.Cmd
             var outputReencodeAudio []byte
-            argsReencodeAudio := []string{
+            var argsReencodeAudio []string
+            argsReencodeAudio = []string{
                 "-y",
                 "-err_detect", "ignore_err",
                 "-analyzeduration", "100M",
@@ -585,14 +736,29 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
                 "-f", "opus",
                 opusPath,
             }
-            if loudI.Valid {
-                loudnormFilter := fmt.Sprintf(
+            var audioFilterReencode string
+            if loudI.Valid && fullEpisodePath == originalPath {
+                audioFilterReencode = fmt.Sprintf(
                     "loudnorm=I=-23:TP=-1.5:LRA=11:measured_I=%.2f:measured_LRA=%.2f:measured_TP=%.2f:measured_thresh=%.2f:offset=0:linear=true",
                     loudI.Float64, loudLRA.Float64, loudTP.Float64, loudThresh.Float64,
                 )
+            }
+            if fadeType != "" && audioD > 0 {
+                afadeType := "out"
+                if fadeType == "in" {
+                    afadeType = "in"
+                }
+                afadeFilter := fmt.Sprintf("afade=t=%s:st=%.4f:d=%.4f", afadeType, audioSt, audioD)
+                if audioFilterReencode != "" {
+                    audioFilterReencode += "," + afadeFilter
+                } else {
+                    audioFilterReencode = afadeFilter
+                }
+            }
+            if audioFilterReencode != "" {
                 for i := len(argsReencodeAudio) - 1; i >= 0; i-- {
                     if argsReencodeAudio[i] == "-c:a" {
-                        argsReencodeAudio = append(argsReencodeAudio[:i], append([]string{"-af", loudnormFilter}, argsReencodeAudio[i:]...)...)
+                        argsReencodeAudio = append(argsReencodeAudio[:i], append([]string{"-af", audioFilterReencode}, argsReencodeAudio[i:]...)...)
                         break
                     }
                 }
@@ -752,12 +918,16 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
     }
     if math.Abs(audioDur-actualDur) > 0.02 { // Increased threshold
         log.Printf("Station %s: Audio duration %.3fs differs from video duration %.3fs, re-encoding audio", st.name, audioDur, actualDur)
-        argsAudio := []string{
+        argsAudio = []string{
             "-y",
             "-err_detect", "ignore_err",
             "-analyzeduration", "100M",
             "-probesize", "100M",
-            "-ss", fmt.Sprintf("%.3f", startTime),
+        }
+        if startTime > 0 {
+            argsAudio = append(argsAudio, "-ss", fmt.Sprintf("%.3f", startTime))
+        }
+        argsAudio = append(argsAudio,
             "-i", fullEpisodePath,
             "-t", fmt.Sprintf("%.3f", actualDur),
             "-map", "0:a:0",
@@ -776,39 +946,33 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-threads", "0",
             "-f", "opus",
             opusPath,
-        }
-        if loudI.Valid && hasAudio {
-            loudnormFilter := fmt.Sprintf(
+        )
+        var audioFilterReencode string
+        if loudI.Valid && hasAudio && fullEpisodePath == originalPath {
+            audioFilterReencode = fmt.Sprintf(
                 "loudnorm=I=-23:TP=-1.5:LRA=11:measured_I=%.2f:measured_LRA=%.2f:measured_TP=%.2f:measured_thresh=%.2f:offset=0:linear=true",
                 loudI.Float64, loudLRA.Float64, loudTP.Float64, loudThresh.Float64,
             )
+            log.Printf("Station %s: Applying loudnorm filter to re-encoded audio for video %d: %s", st.name, videoID, audioFilterReencode)
+        }
+        if fadeType != "" && audioD > 0 {
+            afadeType := "out"
+            if fadeType == "in" {
+                afadeType = "in"
+            }
+            afadeFilter := fmt.Sprintf("afade=t=%s:st=%.4f:d=%.4f", afadeType, audioSt, audioD)
+            if audioFilterReencode != "" {
+                audioFilterReencode += "," + afadeFilter
+            } else {
+                audioFilterReencode = afadeFilter
+            }
+        }
+        if audioFilterReencode != "" {
             for i := len(argsAudio) - 1; i >= 0; i-- {
                 if argsAudio[i] == "-c:a" {
-                    argsAudio = append(argsAudio[:i], append([]string{"-af", loudnormFilter}, argsAudio[i:]...)...)
+                    argsAudio = append(argsAudio[:i], append([]string{"-af", audioFilterReencode}, argsAudio[i:]...)...)
                     break
                 }
-            }
-            log.Printf("Station %s: Applying loudnorm filter to re-encoded audio for video %d: %s", st.name, videoID, loudnormFilter)
-        }
-        if !hasAudio {
-            argsAudio = []string{
-                "-y",
-                "-f", "lavfi",
-                "-i", fmt.Sprintf("anullsrc=r=48000:cl=stereo:d=%.3f", actualDur),
-                "-c:a", "libopus",
-                "-b:a", "128k",
-                "-ar", "48000",
-                "-ac", "2",
-                "-frame_duration", "20",
-                "-page_duration", "20000",
-                "-application", "audio",
-                "-vbr", "on",
-                "-avoid_negative_ts", "make_zero",
-                "-fflags", "+genpts",
-                "-max_delay", "0",
-                "-threads", "0",
-                "-f", "opus",
-                opusPath,
             }
         }
         cmdAudio = exec.Command("ffmpeg", argsAudio...)
@@ -873,7 +1037,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-force_fps",
             "-r", fmt.Sprintf("%d/%d", fpsNum, fpsDen),
             "-fps_mode", "cfr",
-            "-force_key_frames", "0:expr=eq(n,0)",
+            "-force_key_frames", "expr:eq(n,0)",
             "-sc_threshold", "0",
             "-bsf:v", "h264_mp4toannexb",
             "-g", fmt.Sprintf("%d", gopSize),
@@ -882,6 +1046,25 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-threads", "0",
             "-f", "h264",
             repairedSegPath,
+        }
+        if fadeType != "" && videoD > 0 {
+            vfadeType := "out"
+            if fadeType == "in" {
+                vfadeType = "in"
+            }
+            vfadeFilter := fmt.Sprintf("fade=t=%s:st=%.4f:d=%.4f:color=%s", vfadeType, videoSt, videoD, color)
+            insertIndex := -1
+            for i, arg := range args {
+                if arg == "-c:v" {
+                    insertIndex = i + 2
+                    break
+                }
+            }
+            if insertIndex != -1 {
+                args = append(args[:insertIndex], append([]string{"-vf", vfadeFilter}, args[insertIndex:]...)...)
+            } else {
+                args = append(args, "-vf", vfadeFilter)
+            }
         }
         cmdRepair = exec.Command("ffmpeg", args...)
         outputRepair, err = cmdRepair.CombinedOutput()
@@ -927,29 +1110,72 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
     return segments, spsPPS, fmtpLine, actualDur, fpsPair{num: fpsNum, den: fpsDen}, nil
 }
 
-func getBreakPoints(videoID int64, db *sql.DB) ([]float64, error) {
-    rows, err := db.Query("SELECT value FROM video_metadata WHERE video_id = $1 AND metadata_type_id = 1", videoID)
-    if err != nil {
-        return nil, err
-    }
-    defer rows.Close()
-    var bps []float64
-    for rows.Next() {
-        var raw json.RawMessage
-        if err := rows.Scan(&raw); err != nil {
-            return nil, err
-        }
-        var bp float64
-        if err := json.Unmarshal(raw, &bp); err != nil {
-            return nil, err
-        }
-        bps = append(bps, bp)
-    }
-    if err := rows.Err(); err != nil {
-        return nil, err
-    }
-    sort.Float64s(bps)
-    return bps, nil
+func getBreakPoints(videoID int64, db *sql.DB) ([]BreakPoint, error) {
+	rows, err := db.Query("SELECT value FROM video_metadata WHERE video_id = $1 AND metadata_type_id = 1", videoID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var bps []BreakPoint
+	for rows.Next() {
+		var raw json.RawMessage
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var val interface{}
+		if err := json.Unmarshal(raw, &val); err != nil {
+			return nil, err
+		}
+		switch v := val.(type) {
+		case float64:
+			bps = append(bps, BreakPoint{Time: v, IsFade: false})
+		case map[string]interface{}:
+			if typ, ok := v["type"].(string); ok && typ == "fade" {
+				timeVal, ok := v["time"].(float64)
+				if !ok {
+					continue // invalid
+				}
+				color, _ := v["color"].(string) // default ""
+				fadeOutMap, _ := v["fade_out"].(map[string]interface{})
+				fadeOutVideoMap, _ := fadeOutMap["video"].(map[string]interface{})
+				fadeOutAudioMap, _ := fadeOutMap["audio"].(map[string]interface{})
+				fadeInMap, _ := v["fade_in"].(map[string]interface{})
+				fadeInVideoMap, _ := fadeInMap["video"].(map[string]interface{})
+				fadeInAudioMap, _ := fadeInMap["audio"].(map[string]interface{})
+
+				fadeOutVideoStart, _ := fadeOutVideoMap["start"].(float64)
+				fadeOutVideoEnd, _ := fadeOutVideoMap["end"].(float64)
+				fadeOutAudioStart, _ := fadeOutAudioMap["start"].(float64)
+				fadeOutAudioEnd, _ := fadeOutAudioMap["end"].(float64)
+				fadeInVideoStart, _ := fadeInVideoMap["start"].(float64)
+				fadeInVideoEnd, _ := fadeInVideoMap["end"].(float64)
+				fadeInAudioStart, _ := fadeInAudioMap["start"].(float64)
+				fadeInAudioEnd, _ := fadeInAudioMap["end"].(float64)
+
+				bp := BreakPoint{
+					Time:   timeVal,
+					IsFade: true,
+					Color:  color,
+					FadeOut: FadePhase{
+						Video: FadeRange{Start: fadeOutVideoStart, End: fadeOutVideoEnd},
+						Audio: FadeRange{Start: fadeOutAudioStart, End: fadeOutAudioEnd},
+					},
+					FadeIn: FadePhase{
+						Video: FadeRange{Start: fadeInVideoStart, End: fadeInVideoEnd},
+						Audio: FadeRange{Start: fadeInAudioStart, End: fadeInAudioEnd},
+					},
+				}
+				bps = append(bps, bp)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(bps, func(i, j int) bool {
+		return bps[i].Time < bps[j].Time
+	})
+	return bps, nil
 }
 
 func getVideoDur(videoID int64, db *sql.DB) float64 {
@@ -1116,7 +1342,10 @@ func getQueueDuration(videoIDs []int64, db *sql.DB) (float64, error) {
 
 func manageProcessing(st *Station, db *sql.DB) {
     const maxRetries = 3
+    const maxAdRetries = 5
     const maxFinalChunkRetries = 5
+    const minChunkDur = 0.001
+    const minFinalChunkDur = 0.001
     for {
         select {
         case <-st.stopCh:
@@ -1138,15 +1367,6 @@ func manageProcessing(st *Station, db *sql.DB) {
                 log.Printf("Station %s (adsEnabled: %v): No viewers, waiting", st.name, st.adsEnabled)
                 st.mu.Unlock()
                 time.Sleep(time.Second)
-                continue
-            }
-            // Resource monitoring
-            var memStats runtime.MemStats
-            runtime.ReadMemStats(&memStats)
-            if memStats.Alloc > 4*1024*1024*1024 { // 4GB
-                errorLogger.Printf("Station %s: High memory usage (%d bytes), pausing processing", st.name, memStats.Alloc)
-                st.mu.Unlock()
-                time.Sleep(5 * time.Second)
                 continue
             }
             // Remove stale chunks
@@ -1174,64 +1394,28 @@ func manageProcessing(st *Station, db *sql.DB) {
             for _, chunk := range st.segmentList {
                 remainingDur += chunk.dur
                 if !chunk.isAd && chunk.videoID == st.currentVideo {
-                    sumNonAd += chunk.dur
+                    sumNonAd += chunk.effective_advance
                 }
             }
             log.Printf("Station %s (adsEnabled: %v): Remaining buffer %.3fs, non-ad %.3fs, current video %d, offset %.3fs", st.name, st.adsEnabled, remainingDur, sumNonAd, st.currentVideo, st.currentOffset)
-            if remainingDur < BufferThreshold || len(st.segmentList) < 4 { // Changed to 4 chunks
+            if remainingDur < BufferThreshold || len(st.segmentList) < 4 {
                 videoDur := getVideoDur(st.currentVideo, db)
                 if videoDur <= 0 {
-                    errorLogger.Printf("Station %s (adsEnabled: %v): Invalid duration for video %d, advancing", st.name, st.adsEnabled, st.currentVideo)
+                    errorLogger.Printf("Station %s: Invalid duration for video %d, advancing", st.name, st.currentVideo)
                     st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
                     st.currentVideo = st.videoQueue[st.currentIndex]
                     st.currentOffset = 0.0
                     st.spsPPS = nil
                     st.fmtpLine = ""
-                    st.currentVideoRTPTS = st.currentVideoRTPTS // Maintain continuity
+                    st.currentVideoRTPTS = st.currentVideoRTPTS
                     st.currentAudioSamples = st.currentAudioSamples
-                    log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s", st.name, st.adsEnabled, st.currentVideo)
+                    log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s due to invalid duration", st.name, st.adsEnabled, st.currentVideo)
                     st.mu.Unlock()
                     continue
                 }
                 nextStart := st.currentOffset + sumNonAd
-                if nextStart >= videoDur || math.Abs(nextStart-videoDur) < 0.001 {
+                if nextStart >= videoDur {
                     log.Printf("Station %s (adsEnabled: %v): Reached end of video %d (%.3fs >= %.3fs), advancing", st.name, st.adsEnabled, st.currentVideo, nextStart, videoDur)
-                    st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
-                    st.currentVideo = st.videoQueue[st.currentIndex]
-                    st.currentOffset = 0.0
-                    st.spsPPS = nil
-                    st.fmtpLine = ""
-                    st.currentVideoRTPTS = st.currentVideoRTPTS // Maintain continuity
-                    st.currentAudioSamples = st.currentAudioSamples
-                    log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s", st.name, st.adsEnabled, st.currentVideo)
-                    st.mu.Unlock()
-                    continue
-                }
-                breaks, err := getBreakPoints(st.currentVideo, db)
-                if err != nil {
-                    errorLogger.Printf("Station %s (adsEnabled: %v): Failed to get break points for video %d: %v", st.name, st.adsEnabled, st.currentVideo, err)
-                    breaks = []float64{}
-                }
-                log.Printf("Station %s (adsEnabled: %v): Break points for video %d: %v", st.name, st.adsEnabled, st.currentVideo, breaks)
-                var nextBreak float64 = math.MaxFloat64
-                for _, b := range breaks {
-                    if b > nextStart {
-                        nextBreak = b
-                        break
-                    }
-                }
-                chunkDur := ChunkDuration
-                chunkEnd := nextStart + chunkDur
-                isFinalChunk := chunkEnd >= videoDur || math.Abs(chunkEnd-videoDur) < 0.001
-                if isFinalChunk {
-                    chunkEnd = videoDur
-                    chunkDur = videoDur - nextStart
-                } else if nextBreak < chunkEnd {
-                    chunkEnd = nextBreak
-                    chunkDur = nextBreak - nextStart
-                }
-                if chunkDur <= 0 {
-                    errorLogger.Printf("Station %s (adsEnabled: %v): Invalid chunk duration (%.3fs) at %.3fs for video %d, advancing", st.name, st.adsEnabled, chunkDur, nextStart, st.currentVideo)
                     st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
                     st.currentVideo = st.videoQueue[st.currentIndex]
                     st.currentOffset = 0.0
@@ -1243,7 +1427,67 @@ func manageProcessing(st *Station, db *sql.DB) {
                     st.mu.Unlock()
                     continue
                 }
-                retryLimit := maxRetries
+                remainingInVideo := videoDur - nextStart
+                _ = remainingInVideo // Use to avoid "declared and not used" error
+                breaks, getBreakPointsErr := getBreakPoints(st.currentVideo, db)
+                if getBreakPointsErr != nil {
+                    errorLogger.Printf("Station %s (adsEnabled: %v): Failed to get break points for video %d: %v", st.name, st.adsEnabled, st.currentVideo, getBreakPointsErr)
+                    breaks = []BreakPoint{}
+                }
+                log.Printf("Station %s (adsEnabled: %v): Break points for video %d: %v", st.name, st.adsEnabled, st.currentVideo, breaks)
+                var nextBreak *BreakPoint
+                for i := range breaks {
+                    if breaks[i].Time > nextStart {
+                        nextBreak = &breaks[i]
+                        break
+                    }
+                }
+                chunkDur := ChunkDuration
+                chunkEnd := nextStart + chunkDur
+                isFinalChunk := false
+                if nextBreak == nil {
+                    if chunkEnd >= videoDur {
+                        chunkDur = videoDur - nextStart
+                        isFinalChunk = true
+                    }
+                } else {
+                    outVideoStart := nextBreak.FadeOut.Video.Start
+                    outVideoEnd := nextBreak.FadeOut.Video.End
+                    outAudioStart := nextBreak.FadeOut.Audio.Start
+                    outAudioEnd := nextBreak.FadeOut.Audio.End
+                    outStartMin := math.Min(outVideoStart, outAudioStart)
+                    outEndMax := math.Max(outVideoEnd, outAudioEnd)
+                    chunkEnd = nextBreak.Time + outStartMin
+                    if chunkEnd < nextStart { 
+                        skipAmount := nextBreak.Time + outEndMax - nextStart
+                        log.Printf("Station %s (adsEnabled: %v): Skipping past break at %.3fs, advancing offset by %.3fs", st.name, st.adsEnabled, nextBreak.Time, skipAmount)
+                        st.currentOffset += skipAmount
+                        st.mu.Unlock()
+                        continue
+                    }
+                    chunkDur = chunkEnd - nextStart
+                }
+                if chunkDur <= 0 {
+                    st.mu.Unlock()
+                    continue
+                }
+                if isFinalChunk && chunkDur < minFinalChunkDur {
+                    log.Printf("Station %s (adsEnabled: %v): Skipping small final chunk (%.3fs) for video %d", st.name, st.adsEnabled, chunkDur, st.currentVideo)
+                    st.currentOffset += chunkDur
+                    if st.currentOffset + sumNonAd >= videoDur {
+                        st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
+                        st.currentVideo = st.videoQueue[st.currentIndex]
+                        st.currentOffset = 0.0
+                        st.spsPPS = nil
+                        st.fmtpLine = ""
+                        st.currentVideoRTPTS = st.currentVideoRTPTS
+                        st.currentAudioSamples = st.currentAudioSamples
+                        log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s due to small final skip", st.name, st.adsEnabled, st.currentVideo)
+                    }
+                    st.mu.Unlock()
+                    continue
+                }
+                var retryLimit int = maxRetries
                 if isFinalChunk {
                     retryLimit = maxFinalChunkRetries
                     log.Printf("Station %s (adsEnabled: %v): Processing final chunk for video %d at %.3fs, duration %.3fs", st.name, st.adsEnabled, st.currentVideo, nextStart, chunkDur)
@@ -1253,9 +1497,10 @@ func manageProcessing(st *Station, db *sql.DB) {
                 var fmtpLine string
                 var actualDur float64
                 var fps fpsPair
-                var retryCount int // Explicit declaration
+                var err error
+                var retryCount int
                 for retryCount = 0; retryCount < retryLimit; retryCount++ {
-                    segments, spsPPS, fmtpLine, actualDur, fps, err = processVideo(st, st.currentVideo, db, nextStart, chunkDur)
+                    segments, spsPPS, fmtpLine, actualDur, fps, err = processVideo(st, st.currentVideo, db, nextStart, chunkDur, "", 0, 0, 0, 0, "")
                     if err != nil {
                         errorLogger.Printf("Station %s (adsEnabled: %v): Failed to process %s chunk for video %d at %.3fs (retry %d/%d): %v", st.name, st.adsEnabled, map[bool]string{true: "final", false: "episode"}[isFinalChunk], st.currentVideo, nextStart, retryCount+1, retryLimit, err)
                         if segments != nil && len(segments) > 0 {
@@ -1273,21 +1518,6 @@ func manageProcessing(st *Station, db *sql.DB) {
                         }
                         continue
                     }
-                    if len(st.spsPPS) == 0 {
-                        st.spsPPS = spsPPS
-                        st.fmtpLine = fmtpLine
-                    }
-                    newChunk := bufferedChunk{
-                        segPath: segments[0],
-                        dur: actualDur,
-                        isAd: false,
-                        videoID: st.currentVideo,
-                        fps: fps,
-                    }
-                    st.segmentList = append(st.segmentList, newChunk)
-                    remainingDur += actualDur
-                    sumNonAd += actualDur
-                    log.Printf("Station %s (adsEnabled: %v): Queued %s chunk for video %d at %.3fs, duration %.3fs", st.name, st.adsEnabled, map[bool]string{true: "final", false: "episode"}[isFinalChunk], st.currentVideo, nextStart, actualDur)
                     break
                 }
                 if retryCount == retryLimit {
@@ -1299,18 +1529,134 @@ func manageProcessing(st *Station, db *sql.DB) {
                     st.fmtpLine = ""
                     st.currentVideoRTPTS = st.currentVideoRTPTS
                     st.currentAudioSamples = st.currentAudioSamples
-                    log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s", st.name, st.adsEnabled, st.currentVideo)
+                    log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s due to failed chunk", st.name, st.adsEnabled, st.currentVideo)
                     st.mu.Unlock()
                     continue
                 }
-                if st.adsEnabled && nextBreak == chunkEnd && len(breaks) > 0 {
-                    log.Printf("Station %s (adsEnabled: %v): Inserting ad break at %.3fs for video %d", st.name, st.adsEnabled, nextBreak, st.currentVideo)
+                if err == nil && actualDur > 0 {
+                    if len(segments) > 0 {
+                        if len(st.spsPPS) == 0 {
+                            st.spsPPS = spsPPS
+                            st.fmtpLine = fmtpLine
+                        }
+                        newChunk := bufferedChunk{
+                            segPath: segments[0],
+                            dur: actualDur,
+                            isAd: false,
+                            videoID: st.currentVideo,
+                            fps: fps,
+                            effective_advance: actualDur,
+                        }
+                        st.segmentList = append(st.segmentList, newChunk)
+                        remainingDur += actualDur
+                        sumNonAd += actualDur
+                        log.Printf("Station %s (adsEnabled: %v): Queued %s chunk for video %d at %.3fs, duration %.3fs", st.name, st.adsEnabled, map[bool]string{true: "final", false: "episode"}[isFinalChunk], st.currentVideo, nextStart, actualDur)
+                    } else {
+                        st.currentOffset += actualDur
+                        sumNonAd += actualDur
+                        log.Printf("Station %s (adsEnabled: %v): Advanced offset by negligible %.3fs without queuing chunk for video %d at %.3fs", st.name, st.adsEnabled, actualDur, st.currentVideo, nextStart)
+                        if st.currentOffset >= videoDur {
+                            st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
+                            st.currentVideo = st.videoQueue[st.currentIndex]
+                            st.currentOffset = 0.0
+                            st.spsPPS = nil
+                            st.fmtpLine = ""
+                            st.currentVideoRTPTS = st.currentVideoRTPTS
+                            st.currentAudioSamples = st.currentAudioSamples
+                            log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s due to negligible advance", st.name, st.adsEnabled, st.currentVideo)
+                        }
+                    }
+                }
+                var adDurTotal float64
+                if st.adsEnabled && nextBreak != nil {
+                    log.Printf("Station %s (adsEnabled: %v): Inserting ad break at %.3fs for video %d", st.name, st.adsEnabled, nextBreak.Time, st.currentVideo)
+                    outVideoStart := nextBreak.FadeOut.Video.Start
+                    outVideoEnd := nextBreak.FadeOut.Video.End
+                    outAudioStart := nextBreak.FadeOut.Audio.Start
+                    outAudioEnd := nextBreak.FadeOut.Audio.End
+                    outStartMin := math.Min(outVideoStart, outAudioStart)
+                    outEndMax := math.Max(outVideoEnd, outAudioEnd)
+                    outDur := outEndMax - outStartMin
+                    var requested_dur float64
+                    requested_dur = outDur
+                    if outDur > 0 {
+                        var videoSt, videoD, audioSt, audioD float64
+                        videoSt = outVideoStart - outStartMin
+                        videoD = outVideoEnd - outVideoStart
+                        audioSt = outAudioStart - outStartMin
+                        audioD = outAudioEnd - outAudioStart
+                        fadeOutStart := nextBreak.Time + outStartMin
+                        adjust := 0.0
+                        if fadeOutStart < nextStart {
+                            adjust = nextStart - fadeOutStart
+                            fadeOutStart = nextStart
+                            outDur -= adjust
+                            videoSt += adjust
+                            audioSt += adjust
+                        }
+                        if fadeOutStart < 0 {
+                            adjust = -fadeOutStart
+                            fadeOutStart = 0
+                            outDur -= adjust
+                            videoSt += adjust
+                            audioSt += adjust
+                        }
+                        if outDur <= 0 {
+                            log.Printf("Station %s (adsEnabled: %v): Skipping fade out with non-positive duration after adjust (%.3fs)", st.name, st.adsEnabled, outDur)
+                        } else {
+                            if videoSt + videoD > outDur {
+                                videoD = outDur - videoSt
+                            }
+                            if audioSt + audioD > outDur {
+                                audioD = outDur - audioSt
+                            }
+                            var segments []string
+                            var spsPPS [][]byte
+                            var fmtpLine string
+                            var actualDur float64
+                            var fps fpsPair
+                            var err error
+                            segments, spsPPS, fmtpLine, actualDur, fps, err = processVideo(st, st.currentVideo, db, fadeOutStart, outDur, "out", videoSt, videoD, audioSt, audioD, nextBreak.Color)
+                            if err != nil {
+                                errorLogger.Printf("Station %s (adsEnabled: %v): Failed to process fade_out chunk: %v", st.name, st.adsEnabled, err)
+                            } else if actualDur > 0 {
+                                if len(segments) > 0 {
+                                    if len(st.spsPPS) == 0 {
+                                        st.spsPPS = spsPPS
+                                        st.fmtpLine = fmtpLine
+                                    }
+                                    net := outEndMax - outStartMin
+                                    net = math.Max(0, net)
+                                    effective := net
+                                    if requested_dur > 0 {
+                                        effective = net * (actualDur / requested_dur)
+                                    }
+                                    newChunk := bufferedChunk{
+                                        segPath: segments[0],
+                                        dur: actualDur,
+                                        isAd: false,
+                                        videoID: st.currentVideo,
+                                        fps: fps,
+                                        effective_advance: effective,
+                                    }
+                                    st.segmentList = append(st.segmentList, newChunk)
+                                    remainingDur += actualDur
+                                    sumNonAd += effective
+                                    log.Printf("Station %s (adsEnabled: %v): Queued fade_out chunk at %.3fs, duration %.3fs, effective advance %.3fs", st.name, st.adsEnabled, fadeOutStart, actualDur, effective)
+                                } else {
+                                    st.currentOffset += actualDur
+                                    sumNonAd += actualDur
+                                    log.Printf("Station %s (adsEnabled: %v): Advanced offset by negligible fade_out %.3fs without queuing", st.name, st.adsEnabled, actualDur)
+                                }
+                            }
+                        }
+                    }
                     if len(adIDs) == 0 {
                         errorLogger.Printf("Station %s (adsEnabled: %v): No adIDs available, skipping ad break", st.name, st.adsEnabled)
                     } else {
                         availableAds := make([]int64, len(adIDs))
                         copy(availableAds, adIDs)
-                        adDurTotal := 0.0
+                        adDurTotal = 0.0
                         for i := 0; i < 3 && len(availableAds) > 0; i++ {
                             idx := rand.Intn(len(availableAds))
                             adID := availableAds[idx]
@@ -1322,7 +1668,13 @@ func manageProcessing(st *Station, db *sql.DB) {
                             }
                             var adRetryCount int
                             for adRetryCount = 0; adRetryCount < maxAdRetries; adRetryCount++ {
-                                segments, spsPPS, fmtpLine, actualDur, fps, err = processVideo(st, adID, db, 0, adDur)
+                                var segments []string
+                                var spsPPS [][]byte
+                                var fmtpLine string
+                                var actualDur float64
+                                var fps fpsPair
+                                var err error
+                                segments, spsPPS, fmtpLine, actualDur, fps, err = processVideo(st, adID, db, 0, adDur, "", 0, 0, 0, 0, "")
                                 if err != nil {
                                     errorLogger.Printf("Station %s (adsEnabled: %v): Failed to process ad %d (retry %d/%d): %v", st.name, st.adsEnabled, adID, adRetryCount+1, maxAdRetries, err)
                                     if segments != nil && len(segments) > 0 {
@@ -1340,21 +1692,26 @@ func manageProcessing(st *Station, db *sql.DB) {
                                     }
                                     continue
                                 }
-                                if len(st.spsPPS) == 0 {
-                                    st.spsPPS = spsPPS
-                                    st.fmtpLine = fmtpLine
+                                if len(segments) > 0 {
+                                    if len(st.spsPPS) == 0 {
+                                        st.spsPPS = spsPPS
+                                        st.fmtpLine = fmtpLine
+                                    }
+                                    adChunk := bufferedChunk{
+                                        segPath: segments[0],
+                                        dur: actualDur,
+                                        isAd: true,
+                                        videoID: adID,
+                                        fps: fps,
+                                        effective_advance: 0,
+                                    }
+                                    st.segmentList = append(st.segmentList, adChunk)
+                                    remainingDur += actualDur
+                                    adDurTotal += actualDur
+                                    log.Printf("Station %s (adsEnabled: %v): Queued ad %d with duration %.3fs at break %.3fs", st.name, st.adsEnabled, adID, actualDur, nextBreak.Time)
+                                } else {
+                                    log.Printf("Station %s (adsEnabled: %v): Negligible ad duration %.3fs for ad %d, skipping", st.name, st.adsEnabled, actualDur, adID)
                                 }
-                                adChunk := bufferedChunk{
-                                    segPath: segments[0],
-                                    dur: actualDur,
-                                    isAd: true,
-                                    videoID: adID,
-                                    fps: fps,
-                                }
-                                st.segmentList = append(st.segmentList, adChunk)
-                                remainingDur += actualDur
-                                adDurTotal += actualDur
-                                log.Printf("Station %s (adsEnabled: %v): Queued ad %d with duration %.3fs at break %.3fs", st.name, st.adsEnabled, adID, actualDur, nextBreak)
                                 break
                             }
                             if adRetryCount == maxAdRetries {
@@ -1364,44 +1721,71 @@ func manageProcessing(st *Station, db *sql.DB) {
                             }
                             availableAds = append(availableAds[:idx], availableAds[idx+1:]...)
                         }
-                        if adDurTotal > 0 {
-                            sumNonAd = 0.0
-                            for _, c := range st.segmentList {
-                                if !c.isAd && c.videoID == st.currentVideo {
-                                    sumNonAd += c.dur
-                                }
+                    }
+                    resumePoint := nextBreak.Time + outEndMax
+                    inVideoStart := nextBreak.FadeIn.Video.Start
+                    inVideoEnd := nextBreak.FadeIn.Video.End
+                    inAudioStart := nextBreak.FadeIn.Audio.Start
+                    inAudioEnd := nextBreak.FadeIn.Audio.End
+                    inStartMin := math.Min(inVideoStart, inAudioStart)
+                    inEndMax := math.Max(inVideoEnd, inAudioEnd)
+                    inDur := inEndMax - inStartMin
+                    requested_dur = inDur
+                    if inDur > 0 {
+                        var videoSt, videoD, audioSt, audioD float64
+                        videoSt = inVideoStart - inStartMin
+                        videoD = inVideoEnd - inVideoStart
+                        audioSt = inAudioStart - inStartMin
+                        audioD = inAudioEnd - inAudioStart
+                        fadeInStart := nextBreak.Time + inStartMin
+                        adjust := 0.0
+                        overlap := inStartMin < outEndMax
+                        if !overlap {
+                            if fadeInStart < resumePoint {
+                                adjust = resumePoint - fadeInStart
+                                fadeInStart += adjust
+                                inDur -= adjust
+                                videoSt += adjust
+                                audioSt += adjust
                             }
-                            nextStart = st.currentOffset + sumNonAd
-                            if nextStart < videoDur {
-                                retryLimit := maxRetries
-                                isPostAdFinalChunk := nextStart+ChunkDuration >= videoDur || math.Abs(nextStart+ChunkDuration-videoDur) < 0.001
-                                if isPostAdFinalChunk {
-                                    retryLimit = maxFinalChunkRetries
-                                    log.Printf("Station %s (adsEnabled: %v): Processing final chunk after ads for video %d at %.3fs", st.name, st.adsEnabled, st.currentVideo, nextStart)
-                                }
-                                var postAdRetryCount int // Explicit declaration
-                                for postAdRetryCount = 0; postAdRetryCount < retryLimit; postAdRetryCount++ {
-                                    segments, spsPPS, fmtpLine, actualDur, fps, err = processVideo(st, st.currentVideo, db, nextStart, ChunkDuration)
-                                    if err != nil {
-                                        errorLogger.Printf("Station %s (adsEnabled: %v): Failed to pre-queue %s chunk after ads for video %d at %.3fs (retry %d/%d): %v", st.name, st.adsEnabled, map[bool]string{true: "final", false: "episode"}[isPostAdFinalChunk], st.currentVideo, nextStart, postAdRetryCount+1, retryLimit, err)
-                                        if segments != nil && len(segments) > 0 {
-                                            os.Remove(segments[0])
-                                            os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
-                                        }
-                                        time.Sleep(time.Millisecond * 500)
-                                        continue
-                                    }
-                                    if actualDur <= 0 {
-                                        errorLogger.Printf("Station %s (adsEnabled: %v): Invalid duration (%.3fs) for chunk after ads at %.3fs, retrying", st.name, st.adsEnabled, actualDur, nextStart)
-                                        if segments != nil && len(segments) > 0 {
-                                            os.Remove(segments[0])
-                                            os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
-                                        }
-                                        continue
-                                    }
+                        } // else, no adjust, duplicate content
+                        if fadeInStart < 0 {
+                            adjust = -fadeInStart
+                            fadeInStart = 0
+                            inDur -= adjust
+                            videoSt += adjust
+                            audioSt += adjust
+                        }
+                        if inDur <= 0 {
+                            log.Printf("Station %s: Skipping initial fade in with non-positive duration after adjust (%.3fs)", st.name, inDur)
+                        } else {
+                            if videoSt + videoD > inDur {
+                                videoD = inDur - videoSt
+                            }
+                            if audioSt + audioD > inDur {
+                                audioD = inDur - audioSt
+                            }
+                            var segments []string
+                            var spsPPS [][]byte
+                            var fmtpLine string
+                            var actualDur float64
+                            var fps fpsPair
+                            var err error
+                            segments, spsPPS, fmtpLine, actualDur, fps, err = processVideo(st, st.currentVideo, db, fadeInStart, inDur, "in", videoSt, videoD, audioSt, audioD, nextBreak.Color)
+                            if err != nil {
+                                errorLogger.Printf("Station %s: Failed to process initial fade_in chunk: %v", st.name, err)
+                            } else if actualDur > 0 {
+                                if len(segments) > 0 {
                                     if len(st.spsPPS) == 0 {
                                         st.spsPPS = spsPPS
                                         st.fmtpLine = fmtpLine
+                                    }
+                                    maxStart := math.Max(outEndMax, inStartMin)
+                                    net := inEndMax - maxStart
+                                    net = math.Max(0, net)
+                                    effective := net
+                                    if requested_dur > 0 {
+                                        effective = net * (actualDur / requested_dur)
                                     }
                                     newChunk := bufferedChunk{
                                         segPath: segments[0],
@@ -1409,32 +1793,34 @@ func manageProcessing(st *Station, db *sql.DB) {
                                         isAd: false,
                                         videoID: st.currentVideo,
                                         fps: fps,
+                                        effective_advance: effective,
                                     }
                                     st.segmentList = append(st.segmentList, newChunk)
                                     remainingDur += actualDur
+                                    sumNonAd += effective
+                                    log.Printf("Station %s (adsEnabled: %v): Queued fade_in chunk at %.3fs, duration %.3fs, effective advance %.3fs", st.name, st.adsEnabled, fadeInStart, actualDur, effective)
+                                } else {
+                                    st.currentOffset += actualDur
                                     sumNonAd += actualDur
-                                    log.Printf("Station %s (adsEnabled: %v): Pre-queued %s chunk after ads for video %d at %.3fs, duration %.3fs", st.name, st.adsEnabled, map[bool]string{true: "final", false: "episode"}[isPostAdFinalChunk], st.currentVideo, nextStart, actualDur)
-                                    break
-                                }
-                                if postAdRetryCount == retryLimit && !isPostAdFinalChunk {
-                                    errorLogger.Printf("Station %s (adsEnabled: %v): Max retries failed for chunk after ads at %.3fs, advancing video", st.name, st.adsEnabled, nextStart)
-                                    st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
-                                    st.currentVideo = st.videoQueue[st.currentIndex]
-                                    st.currentOffset = 0.0
-                                    st.spsPPS = nil
-                                    st.fmtpLine = ""
-                                    st.currentVideoRTPTS = st.currentVideoRTPTS
-                                    st.currentAudioSamples = st.currentAudioSamples
-                                    log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s", st.name, st.adsEnabled, st.currentVideo)
+                                    log.Printf("Station %s (adsEnabled: %v): Advanced offset by negligible fade_in %.3fs without queuing", st.name, st.adsEnabled, actualDur)
                                 }
                             }
                         }
+                    }
+                    if adDurTotal > 0 {
+                        sumNonAd = 0.0
+                        for _, c := range st.segmentList {
+                            if !c.isAd && c.videoID == st.currentVideo {
+                                sumNonAd += c.effective_advance
+                            }
+                        }
+                        nextStart = st.currentOffset + sumNonAd
                     }
                 }
             }
             log.Printf("Station %s (adsEnabled: %v): Buffer check complete, remainingDur %.3fs, segmentList: %v", st.name, st.adsEnabled, remainingDur, st.segmentList)
             st.mu.Unlock()
-            time.Sleep(time.Millisecond * 500) // Reduced for faster processing
+            time.Sleep(time.Millisecond * 500)
         }
     }
 }
@@ -1469,7 +1855,7 @@ func sender(st *Station, db *sql.DB) {
             sumNonAd := 0.0
             for _, c := range st.segmentList {
                 if !c.isAd && c.videoID == st.currentVideo {
-                    sumNonAd += c.dur
+                    sumNonAd += c.effective_advance
                 }
             }
             isFinalChunk := !chunk.isAd && (st.currentOffset+sumNonAd >= videoDur || math.Abs(st.currentOffset+sumNonAd-videoDur) < 0.001)
@@ -1495,15 +1881,28 @@ func sender(st *Station, db *sql.DB) {
             fpsNum := chunk.fps.num
             fpsDen := chunk.fps.den
             fps := float64(fpsNum) / float64(fpsDen)
-            log.Printf("Station %s (adsEnabled: %v): Processing chunk %d/%d: segPath=%s, videoID=%d, isAd=%v, dur=%.3fs, fps=%d/%d", st.name, st.adsEnabled, 1, len(st.segmentList), chunk.segPath, chunk.videoID, chunk.isAd, chunk.dur, fpsNum, fpsDen)
-            // Load chunk-specific SPS/PPS
+            log.Printf("Station %s (adsEnabled: %v): Processing chunk %d/%d: segPath=%s, videoID=%d, isAd=%v, dur=%.3fs, effective_advance=%.3fs, fps=%d/%d", st.name, st.adsEnabled, 1, len(st.segmentList), chunk.segPath, chunk.videoID, chunk.isAd, chunk.dur, chunk.effective_advance, fpsNum, fpsDen)
+            st.mu.Unlock()
             data, err := os.ReadFile(segPath)
-            if err != nil {
+            if err != nil || len(data) == 0 {
                 errorLogger.Printf("Station %s (adsEnabled: %v): %s segment %s read error: %v", st.name, st.adsEnabled, map[bool]string{true: "Final", false: "Segment"}[isFinalChunk], segPath, err)
+                st.mu.Lock()
+                os.Remove(segPath)  // Clean up even if missing
+                os.Remove(strings.Replace(segPath, ".h264", ".opus", 1))
+                st.segmentList = st.segmentList[1:]
                 st.mu.Unlock()
                 continue
             }
             nalus := splitNALUs(data)
+            if len(nalus) == 0 {
+                errorLogger.Printf("Station %s (adsEnabled: %v): No NALUs found in segment %s", st.name, st.adsEnabled, segPath)
+                st.mu.Lock()
+                os.Remove(segPath)
+                os.Remove(strings.Replace(segPath, ".h264", ".opus", 1))
+                st.segmentList = st.segmentList[1:]
+                st.mu.Unlock()
+                continue
+            }
             chunkSpsPPS := [][]byte{}
             for _, nalu := range nalus {
                 if len(nalu) > 0 {
@@ -1520,25 +1919,26 @@ func sender(st *Station, db *sql.DB) {
                 chunkSpsPPS = st.spsPPS
                 log.Printf("Station %s (adsEnabled: %v): Using station SPS/PPS for chunk %s", st.name, st.adsEnabled, segPath)
             }
-            st.mu.Unlock()
             testSample := media.Sample{Data: []byte{}, Duration: time.Duration(0)}
             if err := st.trackVideo.WriteSample(testSample); err != nil {
-                errorLogger.Printf("Station %s (adsEnabled: %v): Video track write test error for %s: %v", st.name, st.adsEnabled, segPath, err)
                 if strings.Contains(err.Error(), "not bound") {
+                    errorLogger.Printf("Station %s (adsEnabled: %v): Track not bound, waiting for negotiation...")
+                    time.Sleep(500 * time.Millisecond)
+                    continue
+                } else {
+                    errorLogger.Printf("Station %s (adsEnabled: %v): Video track write test error for %s: %v", st.name, st.adsEnabled, segPath, err)
                     st.mu.Lock()
                     if st.viewers == 0 {
                         close(st.stopCh)
                         st.stopCh = make(chan struct{})
-                        st.mu.Unlock()
-                        return
                     }
-                    newTrackVideo, err := webrtc.NewTrackLocalStaticSample(
+                    newTrackVideo, err2 := webrtc.NewTrackLocalStaticSample(
                         webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264},
                         fmt.Sprintf("video_%s_%t", sanitizeTrackID(st.name), st.adsEnabled),
                         "pion",
                     )
-                    if err != nil {
-                        errorLogger.Printf("Station %s (adsEnabled: %v): Failed to reinitialize video track: %v", st.name, st.adsEnabled, err)
+                    if err2 != nil {
+                        errorLogger.Printf("Station %s (adsEnabled: %v): Failed to reinitialize video track: %v", st.name, st.adsEnabled, err2)
                         st.viewers = 0
                         close(st.stopCh)
                         st.stopCh = make(chan struct{})
@@ -1548,14 +1948,19 @@ func sender(st *Station, db *sql.DB) {
                     st.trackVideo = newTrackVideo
                     log.Printf("Station %s (adsEnabled: %v): Reinitialized video track", st.name, st.adsEnabled)
                     st.mu.Unlock()
-                    return
+                    continue // Continue to try sending the chunk with new track
                 }
             }
             audioPath := strings.Replace(segPath, ".h264", ".opus", 1)
             audioData, err := os.ReadFile(audioPath)
             if err != nil {
                 errorLogger.Printf("Station %s (adsEnabled: %v): Failed to read audio %s: %v", st.name, st.adsEnabled, audioPath, err)
-                audioData = []byte{}
+                st.mu.Lock()
+                os.Remove(segPath)
+                os.Remove(audioPath)
+                st.segmentList = st.segmentList[1:]
+                st.mu.Unlock()
+                continue
             }
             var transmissionWG sync.WaitGroup
             transmissionWG.Add(2)
@@ -1644,21 +2049,6 @@ func sender(st *Station, db *sql.DB) {
                             errorLogger.Printf("Station %s (adsEnabled: %v): Video track not bound for frame %d in %s: %v", st.name, st.adsEnabled, frameIdx, segPath, err)
                             st.mu.Lock()
                             st.currentVideoRTPTS = currentVideoTS
-                            newTrackVideo, err := webrtc.NewTrackLocalStaticSample(
-                                webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264},
-                                fmt.Sprintf("video_%s_%t", sanitizeTrackID(st.name), st.adsEnabled),
-                                "pion",
-                            )
-                            if err != nil {
-                                errorLogger.Printf("Station %s (adsEnabled: %v): Failed to reinitialize video track: %v", st.name, st.adsEnabled, err)
-                                st.viewers = 0
-                                close(st.stopCh)
-                                st.stopCh = make(chan struct{})
-                                st.mu.Unlock()
-                                return
-                            }
-                            st.trackVideo = newTrackVideo
-                            log.Printf("Station %s (adsEnabled: %v): Reinitialized video track", st.name, st.adsEnabled)
                             st.mu.Unlock()
                             return
                         }
@@ -1739,7 +2129,7 @@ func sender(st *Station, db *sql.DB) {
                     }
                     if err != nil {
                         errorLogger.Printf("Station %s (adsEnabled: %v): Failed to parse ogg page for %s: %v", st.name, st.adsEnabled, segPath, err)
-                        continue
+                        return
                     }
                     if len(payload) < 1 || (len(payload) >= 8 && (string(payload[:8]) == "OpusHead" || string(payload[:8]) == "OpusTags")) {
                         log.Printf("Station %s (adsEnabled: %v): Skipping header packet: %s", st.name, st.adsEnabled, string(payload[:8]))
@@ -1754,23 +2144,6 @@ func sender(st *Station, db *sql.DB) {
                     if !boundChecked {
                         if err := st.trackAudio.WriteSample(testSample); err != nil {
                             errorLogger.Printf("Station %s (adsEnabled: %v): Audio track not bound for sample %d in %s: %v", st.name, st.adsEnabled, packetIdx, segPath, err)
-                            st.mu.Lock()
-                            newTrackAudio, err := webrtc.NewTrackLocalStaticSample(
-                                webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
-                                fmt.Sprintf("audio_%s_%t", sanitizeTrackID(st.name), st.adsEnabled),
-                                "pion",
-                            )
-                            if err != nil {
-                                errorLogger.Printf("Station %s (adsEnabled: %v): Failed to reinitialize audio track: %v", st.name, st.adsEnabled, err)
-                                st.viewers = 0
-                                close(st.stopCh)
-                                st.stopCh = make(chan struct{})
-                                st.mu.Unlock()
-                                return
-                            }
-                            st.trackAudio = newTrackAudio
-                            log.Printf("Station %s (adsEnabled: %v): Reinitialized audio track", st.name, st.adsEnabled)
-                            st.mu.Unlock()
                             return
                         }
                         boundChecked = true
@@ -1810,15 +2183,15 @@ func sender(st *Station, db *sql.DB) {
             select {
             case <-doneCh:
                 log.Printf("Station %s (adsEnabled: %v): Transmission completed normally for %s", st.name, st.adsEnabled, segPath)
-            case <-time.After(time.Duration(chunk.dur*float64(time.Second)) + 5*time.Second):
+            case <-time.After(time.Duration(chunk.dur*float64(time.Second)) + 20*time.Second):
                 errorLogger.Printf("Station %s (adsEnabled: %v): Timeout waiting for audio/video transmission for %s", st.name, st.adsEnabled, segPath)
             }
             st.mu.Lock()
             os.Remove(segPath)
             os.Remove(audioPath)
             if !chunk.isAd && chunk.videoID == st.currentVideo {
-                st.currentOffset += chunk.dur
-                log.Printf("Station %s (adsEnabled: %v): Updated offset to %.3fs for video %d after successful transmission", st.name, st.adsEnabled, st.currentOffset, st.currentVideo)
+                st.currentOffset += chunk.effective_advance
+                log.Printf("Station %s (adsEnabled: %v): Updated offset to %.3fs for video %d after successful transmission (effective advance %.3fs)", st.name, st.adsEnabled, st.currentOffset, st.currentVideo, chunk.effective_advance)
                 if videoDur > 0 && (st.currentOffset >= videoDur || math.Abs(st.currentOffset-videoDur) < 0.001) {
                     log.Printf("Station %s (adsEnabled: %v): Completed video %d, advancing to next", st.name, st.adsEnabled, st.currentVideo)
                     st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
@@ -1826,6 +2199,7 @@ func sender(st *Station, db *sql.DB) {
                     st.currentOffset = 0.0
                     st.spsPPS = nil
                     st.fmtpLine = ""
+                    st.segmentList = []bufferedChunk{}
                     log.Printf("Station %s (adsEnabled: %v): Transitioned to video %d with offset 0.0s", st.name, st.adsEnabled, st.currentVideo)
                 }
             }
@@ -1978,10 +2352,8 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
     startGoroutines := false
     if st.viewers == 1 {
         startGoroutines = true
-        st.stopCh = make(chan struct{}) // New stopCh
+        st.stopCh = make(chan struct{})
         st.processing = true
-
-        // Initial buffer filling block
         if err := os.MkdirAll(HlsDir, 0755); err != nil {
             log.Printf("Station %s: Failed to create webrtc_segments directory: %v", st.name, err)
             st.viewers--
@@ -1996,68 +2368,104 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
         }
         videoDur := getVideoDur(st.currentVideo, db)
         if videoDur <= 0 {
-            log.Printf("Station %s: Invalid duration for initial video %d, advancing", st.name, st.currentVideo)
+            errorLogger.Printf("Station %s: Invalid duration for initial video %d, advancing", st.name, st.currentVideo)
             st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
             st.currentVideo = st.videoQueue[st.currentIndex]
             st.currentOffset = 0.0
+            st.segmentList = []bufferedChunk{}
             videoDur = getVideoDur(st.currentVideo, db)
         }
         breaks, err := getBreakPoints(st.currentVideo, db)
         if err != nil {
-            log.Printf("Station %s: Failed to get break points for initial video %d: %v", st.name, st.currentVideo, err)
-            breaks = []float64{}
+            errorLogger.Printf("Station %s: Failed to get break points for initial video %d: %v", st.name, st.currentVideo, err)
+            breaks = []BreakPoint{}
         }
         log.Printf("Station %s: Initial break points for video %d: %v", st.name, st.currentVideo, breaks)
-        nextStart := st.currentOffset
-        st.segmentList = nil // Initialize empty segmentList
-        totalDur := 0.0
+        var nextStart float64 = st.currentOffset
+        st.segmentList = nil
+        var totalDur float64
         const maxRetries = 3
+        const maxAdRetries = 5
+        const maxFinalChunkRetries = 5
+        const minChunkDur = 0.001
+        const minFinalChunkDur = 0.001
         for totalDur < BufferThreshold && nextStart < videoDur {
-            var nextBreak float64 = math.MaxFloat64
-            for _, b := range breaks {
-                if b > nextStart {
-                    nextBreak = b
+            _ = videoDur - nextStart // Use remainingInVideo to avoid "declared and not used" error
+            var nextBreak *BreakPoint
+            for i := range breaks {
+                if breaks[i].Time > nextStart {
+                    nextBreak = &breaks[i]
                     break
                 }
             }
             chunkDur := ChunkDuration
             chunkEnd := nextStart + chunkDur
-            if chunkEnd > videoDur {
-                chunkEnd = videoDur
-                chunkDur = videoDur - nextStart
-            }
-            if nextBreak < chunkEnd {
-                chunkEnd = nextBreak
-                chunkDur = nextBreak - nextStart
+            isFinalChunk := false
+            if nextBreak == nil {
+                if chunkEnd >= videoDur {
+                    chunkDur = videoDur - nextStart
+                    isFinalChunk = true
+                }
+            } else {
+                outVideoStart := nextBreak.FadeOut.Video.Start
+                outVideoEnd := nextBreak.FadeOut.Video.End
+                outAudioStart := nextBreak.FadeOut.Audio.Start
+                outAudioEnd := nextBreak.FadeOut.Audio.End
+                outStartMin := math.Min(outVideoStart, outAudioStart)
+                outEndMax := math.Max(outVideoEnd, outAudioEnd)
+                chunkEnd = nextBreak.Time + outStartMin
+                if chunkEnd < nextStart {
+                    log.Printf("Station %s: Skipping past initial break at %.3fs, advancing nextStart to %.3fs", st.name, nextBreak.Time, nextBreak.Time + outEndMax)
+                    nextStart = nextBreak.Time + outEndMax
+                    continue
+                }
+                chunkDur = chunkEnd - nextStart
             }
             if chunkDur <= 0 {
-                log.Printf("Station %s: Zero chunk duration at %.3fs, breaking", st.name, nextStart)
-                break
+                continue
             }
-            var retryCount int
+            if isFinalChunk && chunkDur < minFinalChunkDur {
+                log.Printf("Station %s: Skipping small initial final chunk (%.3fs) for video %d", st.name, chunkDur, st.currentVideo)
+                st.currentOffset += chunkDur
+                if st.currentOffset >= videoDur {
+                    st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
+                    st.currentVideo = st.videoQueue[st.currentIndex]
+                    st.currentOffset = 0.0
+                    st.spsPPS = nil
+                    st.fmtpLine = ""
+                    st.currentVideoRTPTS = st.currentVideoRTPTS
+                    st.currentAudioSamples = st.currentAudioSamples
+                    log.Printf("Station %s: Transitioned to video %d with offset 0.0s due to small initial final skip", st.name, st.currentVideo)
+                }
+                continue
+            }
+            var retryLimit int = maxRetries
+            if isFinalChunk {
+                retryLimit = maxFinalChunkRetries
+                log.Printf("Station %s: Processing initial final chunk for video %d at %.3fs, duration %.3fs", st.name, st.currentVideo, nextStart, chunkDur)
+            }
             var segments []string
             var spsPPS [][]byte
             var fmtpLine string
             var actualDur float64
             var fps fpsPair
-            var adDurTotal float64 = 0.0
-            for retryCount = 0; retryCount < maxRetries; retryCount++ {
-                segments, spsPPS, fmtpLine, actualDur, fps, err = processVideo(st, st.currentVideo, db, nextStart, chunkDur)
+            var err error
+            var retryCount int
+            for retryCount = 0; retryCount < retryLimit; retryCount++ {
+                segments, spsPPS, fmtpLine, actualDur, fps, err = processVideo(st, st.currentVideo, db, nextStart, chunkDur, "", 0, 0, 0, 0, "")
                 if err != nil {
-                    log.Printf("Station %s: Failed to process initial chunk for video %d at %.3fs (retry %d/%d): %v", st.name, st.currentVideo, nextStart, retryCount+1, maxRetries, err)
+                    log.Printf("Station %s: Failed to process initial chunk for video %d at %.3fs (retry %d/%d): %v", st.name, st.currentVideo, nextStart, retryCount+1, retryLimit, err)
                     if segments != nil && len(segments) > 0 {
                         os.Remove(segments[0])
                         os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
                     }
-                    if retryCount+1 == maxRetries {
+                    if retryCount+1 == retryLimit {
                         log.Printf("Station %s: Max retries failed for initial chunk at %.3fs, advancing video", st.name, nextStart)
                         st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
                         st.currentVideo = st.videoQueue[st.currentIndex]
                         st.currentOffset = 0.0
                         st.spsPPS = nil
                         st.fmtpLine = ""
-                        st.currentVideoRTPTS = 0
-                        st.currentAudioSamples = 0
                         st.viewers--
                         st.mu.Unlock()
                         c.JSON(500, gin.H{"error": "Failed to process initial video chunk after retries"})
@@ -2066,31 +2474,142 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
                     }
                     continue
                 }
-                if len(st.spsPPS) == 0 {
-                    st.spsPPS = spsPPS
-                    st.fmtpLine = fmtpLine
+                if actualDur <= 0 {
+                    log.Printf("Station %s: Invalid duration (%.3fs) for initial chunk %s, retrying", st.name, actualDur, segments[0])
+                    if segments != nil && len(segments) > 0 {
+                        os.Remove(segments[0])
+                        os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
+                    }
+                    continue
                 }
-                st.segmentList = append(st.segmentList, bufferedChunk{
-                    segPath: segments[0],
-                    dur:     actualDur,
-                    isAd:    false,
-                    videoID: st.currentVideo,
-                    fps:     fps,
-                })
-                log.Printf("Station %s: Queued initial chunk for video %d at %.3fs, duration %.3fs", st.name, st.currentVideo, nextStart, actualDur)
-                totalDur += actualDur
                 break
             }
-            if retryCount == maxRetries {
-                break
+            if retryCount == retryLimit {
+                continue
             }
-            if st.adsEnabled && nextBreak == chunkEnd && len(breaks) > 0 {
-                log.Printf("Station %s: Inserting initial ad break at %.3fs for video %d", st.name, nextBreak, st.currentVideo)
+            if err == nil && actualDur > 0 {
+                if len(segments) > 0 {
+                    if len(st.spsPPS) == 0 {
+                        st.spsPPS = spsPPS
+                        st.fmtpLine = fmtpLine
+                    }
+                    newChunk := bufferedChunk{
+                        segPath: segments[0],
+                        dur: actualDur,
+                        isAd: false,
+                        videoID: st.currentVideo,
+                        fps: fps,
+                        effective_advance: actualDur,
+                    }
+                    st.segmentList = append(st.segmentList, newChunk)
+                    totalDur += actualDur
+                    nextStart += actualDur
+                } else {
+                    st.currentOffset += actualDur
+                    nextStart += actualDur
+                    log.Printf("Station %s: Advanced initial offset by negligible %.3fs without queuing chunk at %.3fs", st.name, actualDur, nextStart - actualDur)
+                    if st.currentOffset >= videoDur {
+                        st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
+                        st.currentVideo = st.videoQueue[st.currentIndex]
+                        st.currentOffset = 0.0
+                        st.spsPPS = nil
+                        st.fmtpLine = ""
+                        st.currentVideoRTPTS = st.currentVideoRTPTS
+                        st.currentAudioSamples = st.currentAudioSamples
+                        log.Printf("Station %s: Transitioned to video %d with offset 0.0s due to negligible initial advance", st.name, st.currentVideo)
+                    }
+                }
+            }
+            var adDurTotal float64
+            if st.adsEnabled && nextBreak != nil {
+                log.Printf("Station %s: Inserting initial ad break at %.3fs for video %d", st.name, nextBreak.Time, st.currentVideo)
+                outVideoStart := nextBreak.FadeOut.Video.Start
+                outVideoEnd := nextBreak.FadeOut.Video.End
+                outAudioStart := nextBreak.FadeOut.Audio.Start
+                outAudioEnd := nextBreak.FadeOut.Audio.End
+                outStartMin := math.Min(outVideoStart, outAudioStart)
+                outEndMax := math.Max(outVideoEnd, outAudioEnd)
+                outDur := outEndMax - outStartMin
+                var requested_dur float64
+                requested_dur = outDur
+                if outDur > 0 {
+                    var videoSt, videoD, audioSt, audioD float64
+                    videoSt = outVideoStart - outStartMin
+                    videoD = outVideoEnd - outVideoStart
+                    audioSt = outAudioStart - outStartMin
+                    audioD = outAudioEnd - outAudioStart
+                    fadeOutStart := nextBreak.Time + outStartMin
+                    adjust := 0.0
+                    if fadeOutStart < nextStart {
+                        adjust = nextStart - fadeOutStart
+                        fadeOutStart = nextStart
+                        outDur -= adjust
+                        videoSt += adjust
+                        audioSt += adjust
+                    }
+                    if fadeOutStart < 0 {
+                        adjust = -fadeOutStart
+                        fadeOutStart = 0
+                        outDur -= adjust
+                        videoSt += adjust
+                        audioSt += adjust
+                    }
+                    if outDur <= 0 {
+                        log.Printf("Station %s: Skipping initial fade out with non-positive duration after adjust (%.3fs)", st.name, outDur)
+                    } else {
+                        if videoSt + videoD > outDur {
+                            videoD = outDur - videoSt
+                        }
+                        if audioSt + audioD > outDur {
+                            audioD = outDur - audioSt
+                        }
+                        var segments []string
+                        var spsPPS [][]byte
+                        var fmtpLine string
+                        var actualDur float64
+                        var fps fpsPair
+                        var err error
+                        segments, spsPPS, fmtpLine, actualDur, fps, err = processVideo(st, st.currentVideo, db, fadeOutStart, outDur, "out", videoSt, videoD, audioSt, audioD, nextBreak.Color)
+                        if err != nil {
+                            errorLogger.Printf("Station %s: Failed to process initial fade_out chunk: %v", st.name, err)
+                        } else if actualDur > 0 {
+                            if len(segments) > 0 {
+                                if len(st.spsPPS) == 0 {
+                                    st.spsPPS = spsPPS
+                                    st.fmtpLine = fmtpLine
+                                }
+                                net := outEndMax - outStartMin
+                                net = math.Max(0, net)
+                                effective := net
+                                if requested_dur > 0 {
+                                    effective = net * (actualDur / requested_dur)
+                                }
+                                newChunk := bufferedChunk{
+                                    segPath: segments[0],
+                                    dur: actualDur,
+                                    isAd: false,
+                                    videoID: st.currentVideo,
+                                    fps: fps,
+                                    effective_advance: effective,
+                                }
+                                st.segmentList = append(st.segmentList, newChunk)
+                                totalDur += actualDur
+                                nextStart += effective
+                                log.Printf("Station %s: Queued initial fade_out chunk at %.3fs, duration %.3fs, effective advance %.3fs", st.name, fadeOutStart, actualDur, effective)
+                            } else {
+                                st.currentOffset += actualDur
+                                nextStart += actualDur
+                                log.Printf("Station %s: Advanced initial offset by negligible fade_out %.3fs without queuing", st.name, actualDur)
+                            }
+                        }
+                    }
+                }
                 if len(adIDs) == 0 {
                     errorLogger.Printf("Station %s: No adIDs available, skipping ad break", st.name)
                 } else {
                     availableAds := make([]int64, len(adIDs))
                     copy(availableAds, adIDs)
+                    adDurTotal = 0.0
                     for i := 0; i < 3 && len(availableAds) > 0; i++ {
                         idx := rand.Intn(len(availableAds))
                         adID := availableAds[idx]
@@ -2102,7 +2621,13 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
                         }
                         var adRetryCount int
                         for adRetryCount = 0; adRetryCount < maxAdRetries; adRetryCount++ {
-                            segments, spsPPS, fmtpLine, actualDur, fps, err = processVideo(st, adID, db, 0, adDur)
+                            var segments []string
+                            var spsPPS [][]byte
+                            var fmtpLine string
+                            var actualDur float64
+                            var fps fpsPair
+                            var err error
+                            segments, spsPPS, fmtpLine, actualDur, fps, err = processVideo(st, adID, db, 0, adDur, "", 0, 0, 0, 0, "")
                             if err != nil {
                                 errorLogger.Printf("Station %s: Failed to process ad %d (retry %d/%d): %v", st.name, adID, adRetryCount+1, maxAdRetries, err)
                                 if segments != nil && len(segments) > 0 {
@@ -2120,21 +2645,26 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
                                 }
                                 continue
                             }
-                            if len(st.spsPPS) == 0 {
-                                st.spsPPS = spsPPS
-                                st.fmtpLine = fmtpLine
+                            if len(segments) > 0 {
+                                if len(st.spsPPS) == 0 {
+                                    st.spsPPS = spsPPS
+                                    st.fmtpLine = fmtpLine
+                                }
+                                adChunk := bufferedChunk{
+                                    segPath: segments[0],
+                                    dur: actualDur,
+                                    isAd: true,
+                                    videoID: adID,
+                                    fps: fps,
+                                    effective_advance: 0,
+                                }
+                                st.segmentList = append(st.segmentList, adChunk)
+                                totalDur += actualDur
+                                adDurTotal += actualDur
+                                log.Printf("Station %s: Queued ad %d with duration %.3fs at break %.3fs", st.name, adID, actualDur, nextBreak.Time)
+                            } else {
+                                log.Printf("Station %s: Negligible ad duration %.3fs for ad %d, skipping", st.name, actualDur, adID)
                             }
-                            adChunk := bufferedChunk{
-                                segPath: segments[0],
-                                dur:     actualDur,
-                                isAd:    true,
-                                videoID: adID,
-                                fps:     fps,
-                            }
-                            st.segmentList = append(st.segmentList, adChunk)
-                            totalDur += actualDur
-                            adDurTotal += actualDur
-                            log.Printf("Station %s: Queued ad %d with duration %.3fs at break %.3fs", st.name, adID, actualDur, nextBreak)
                             break
                         }
                         if adRetryCount == maxAdRetries {
@@ -2145,25 +2675,200 @@ func signalingHandler(db *sql.DB, c *gin.Context) {
                         availableAds = append(availableAds[:idx], availableAds[idx+1:]...)
                     }
                 }
-            }
-            nextStart += actualDur + adDurTotal
-            if adDurTotal > 0 && totalDur < BufferThreshold && nextStart < videoDur {
-                chunkDur = ChunkDuration
-                if nextStart + chunkDur > videoDur {
-                    chunkDur = videoDur - nextStart
+                resumePoint := nextBreak.Time + outEndMax
+                inVideoStart := nextBreak.FadeIn.Video.Start
+                inVideoEnd := nextBreak.FadeIn.Video.End
+                inAudioStart := nextBreak.FadeIn.Audio.Start
+                inAudioEnd := nextBreak.FadeIn.Audio.End
+                inStartMin := math.Min(inVideoStart, inAudioStart)
+                inEndMax := math.Max(inVideoEnd, inAudioEnd)
+                inDur := inEndMax - inStartMin
+                requested_dur = inDur
+                if inDur > 0 {
+                    var videoSt, videoD, audioSt, audioD float64
+                    videoSt = inVideoStart - inStartMin
+                    videoD = inVideoEnd - inVideoStart
+                    audioSt = inAudioStart - inStartMin
+                    audioD = inAudioEnd - inAudioStart
+                    fadeInStart := nextBreak.Time + inStartMin
+                    adjust := 0.0
+                    overlap := inStartMin < outEndMax
+                    if !overlap {
+                        if fadeInStart < resumePoint {
+                            adjust = resumePoint - fadeInStart
+                            fadeInStart += adjust
+                            inDur -= adjust
+                            videoSt += adjust
+                            audioSt += adjust
+                        }
+                    } // else, no adjust, duplicate content
+                    if fadeInStart < 0 {
+                        adjust = -fadeInStart
+                        fadeInStart = 0
+                        inDur -= adjust
+                        videoSt += adjust
+                        audioSt += adjust
+                    }
+                    if inDur <= 0 {
+                        log.Printf("Station %s: Skipping initial fade in with non-positive duration after adjust (%.3fs)", st.name, inDur)
+                    } else {
+                        if videoSt + videoD > inDur {
+                            videoD = inDur - videoSt
+                        }
+                        if audioSt + audioD > inDur {
+                            audioD = inDur - audioSt
+                        }
+                        var segments []string
+                        var spsPPS [][]byte
+                        var fmtpLine string
+                        var actualDur float64
+                        var fps fpsPair
+                        var err error
+                        segments, spsPPS, fmtpLine, actualDur, fps, err = processVideo(st, st.currentVideo, db, fadeInStart, inDur, "in", videoSt, videoD, audioSt, audioD, nextBreak.Color)
+                        if err != nil {
+                            errorLogger.Printf("Station %s: Failed to process initial fade_in chunk: %v", st.name, err)
+                        } else if actualDur > 0 {
+                            if len(segments) > 0 {
+                                if len(st.spsPPS) == 0 {
+                                    st.spsPPS = spsPPS
+                                    st.fmtpLine = fmtpLine
+                                }
+                                maxStart := math.Max(outEndMax, inStartMin)
+                                net := inEndMax - maxStart
+                                net = math.Max(0, net)
+                                effective := net
+                                if requested_dur > 0 {
+                                    effective = net * (actualDur / requested_dur)
+                                }
+                                newChunk := bufferedChunk{
+                                    segPath: segments[0],
+                                    dur: actualDur,
+                                    isAd: false,
+                                    videoID: st.currentVideo,
+                                    fps: fps,
+                                    effective_advance: effective,
+                                }
+                                st.segmentList = append(st.segmentList, newChunk)
+                                totalDur += actualDur
+                                nextStart += effective
+                                log.Printf("Station %s: Queued initial fade_in chunk at %.3fs, duration %.3fs, effective advance %.3fs", st.name, fadeInStart, actualDur, effective)
+                            } else {
+                                st.currentOffset += actualDur
+                                nextStart += actualDur
+                                log.Printf("Station %s: Advanced initial offset by negligible fade_in %.3fs without queuing", st.name, actualDur)
+                            }
+                        }
+                    }
                 }
-                segments, spsPPS, fmtpLine, actualDur, fps, err = processVideo(st, st.currentVideo, db, nextStart, chunkDur)
-                if err == nil && actualDur > 0 {
-                    st.segmentList = append(st.segmentList, bufferedChunk{
-                        segPath: segments[0],
-                        dur:     actualDur,
-                        isAd:    false,
-                        videoID: st.currentVideo,
-                        fps:     fps,
-                    })
-                    totalDur += actualDur
-                    nextStart += actualDur
-                    log.Printf("Station %s: Queued post-ad chunk for video %d at %.3fs, duration %.3fs", st.name, st.currentVideo, nextStart-actualDur, actualDur)
+                if adDurTotal > 0 && totalDur < BufferThreshold && nextStart < videoDur {
+                    chunkDur = ChunkDuration
+                    if nextStart + chunkDur > videoDur {
+                        chunkDur = videoDur - nextStart
+                        isFinalChunk = true
+                    } else if nextBreak != nil {
+                        outStartMin := math.Min(nextBreak.FadeOut.Video.Start, nextBreak.FadeOut.Audio.Start)
+                        chunkEnd = nextBreak.Time + outStartMin
+                        chunkDur = chunkEnd - nextStart
+                        if chunkDur < 0 {
+                            chunkDur = 0
+                        }
+                    }
+                    if chunkDur <= 0 {
+                        continue
+                    }
+                    if isFinalChunk && chunkDur < minFinalChunkDur {
+                        log.Printf("Station %s: Skipping small initial post-ad final chunk (%.3fs) for video %d", st.name, chunkDur, st.currentVideo)
+                        st.currentOffset += chunkDur
+                        if st.currentOffset >= videoDur {
+                            st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
+                            st.currentVideo = st.videoQueue[st.currentIndex]
+                            st.currentOffset = 0.0
+                            st.spsPPS = nil
+                            st.fmtpLine = ""
+                            st.currentVideoRTPTS = st.currentVideoRTPTS
+                            st.currentAudioSamples = st.currentAudioSamples
+                            log.Printf("Station %s: Transitioned to video %d with offset 0.0s due to small initial post-ad final skip", st.name, st.currentVideo)
+                        }
+                        continue
+                    }
+                    var retryLimit int = maxRetries
+                    if isFinalChunk {
+                        retryLimit = maxFinalChunkRetries
+                        log.Printf("Station %s: Processing initial post-ad final chunk for video %d at %.3fs, duration %.3fs", st.name, st.currentVideo, nextStart, chunkDur)
+                    }
+                    var segments []string
+                    var spsPPS [][]byte
+                    var fmtpLine string
+                    var actualDur float64
+                    var fps fpsPair
+                    var err error
+                    var postAdRetryCount int
+                    for postAdRetryCount = 0; postAdRetryCount < retryLimit; postAdRetryCount++ {
+                        segments, spsPPS, fmtpLine, actualDur, fps, err = processVideo(st, st.currentVideo, db, nextStart, chunkDur, "", 0, 0, 0, 0, "")
+                        if err != nil {
+                            errorLogger.Printf("Station %s: Failed to queue %s chunk after ads for video %d at %.3fs (retry %d/%d): %v", st.name, map[bool]string{true: "final", false: "episode"}[isFinalChunk], st.currentVideo, nextStart, postAdRetryCount+1, retryLimit, err)
+                            if segments != nil && len(segments) > 0 {
+                                os.Remove(segments[0])
+                                os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
+                            }
+                            time.Sleep(time.Millisecond * 500)
+                            continue
+                        }
+                        if actualDur <= 0 {
+                            errorLogger.Printf("Station %s: Invalid duration (%.3fs) for initial chunk after ads at %.3fs, retrying", st.name, actualDur, nextStart)
+                            if segments != nil && len(segments) > 0 {
+                                os.Remove(segments[0])
+                                os.Remove(strings.Replace(segments[0], ".h264", ".opus", 1))
+                            }
+                            continue
+                        }
+                        break
+                    }
+                    if postAdRetryCount == retryLimit {
+                        errorLogger.Printf("Station %s: Max retries failed for initial chunk after ads at %.3fs, advancing video", st.name, nextStart)
+                        st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
+                        st.currentVideo = st.videoQueue[st.currentIndex]
+                        st.currentOffset = 0.0
+                        st.spsPPS = nil
+                        st.fmtpLine = ""
+                        st.currentVideoRTPTS = st.currentVideoRTPTS
+                        st.currentAudioSamples = st.currentAudioSamples
+                        log.Printf("Station %s: Transitioned to video %d with offset 0.0s due to failed initial post-ad chunk", st.name, st.currentVideo)
+                    }
+                    if err == nil && actualDur > 0 {
+                        if len(segments) > 0 {
+                            if len(st.spsPPS) == 0 {
+                                st.spsPPS = spsPPS
+                                st.fmtpLine = fmtpLine
+                            }
+                            newChunk := bufferedChunk{
+                                segPath: segments[0],
+                                dur: actualDur,
+                                isAd: false,
+                                videoID: st.currentVideo,
+                                fps: fps,
+                                effective_advance: actualDur,
+                            }
+                            st.segmentList = append(st.segmentList, newChunk)
+                            totalDur += actualDur
+                            nextStart += actualDur
+                            log.Printf("Station %s: Queued initial %s chunk after ads for video %d at %.3fs, duration %.3fs", st.name, map[bool]string{true: "final", false: "episode"}[isFinalChunk], st.currentVideo, nextStart - actualDur, actualDur)
+                        } else {
+                            st.currentOffset += actualDur
+                            nextStart += actualDur
+                            log.Printf("Station %s: Advanced initial offset by negligible post-ad %.3fs without queuing chunk at %.3fs", st.name, actualDur, nextStart - actualDur)
+                            if st.currentOffset >= videoDur {
+                                st.currentIndex = (st.currentIndex + 1) % len(st.videoQueue)
+                                st.currentVideo = st.videoQueue[st.currentIndex]
+                                st.currentOffset = 0.0
+                                st.spsPPS = nil
+                                st.fmtpLine = ""
+                                st.currentVideoRTPTS = st.currentVideoRTPTS
+                                st.currentAudioSamples = st.currentAudioSamples
+                                log.Printf("Station %s: Transitioned to video %d with offset 0.0s due to negligible post-ad advance", st.name, st.currentVideo)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2287,7 +2992,15 @@ func updateVideoDurations(db *sql.DB) error {
     if videoBaseDir == "" {
         return fmt.Errorf("videoBaseDir is not set, cannot process video files")
     }
-    rows, err := db.Query("SELECT id, uri FROM videos WHERE duration IS NULL OR duration = 0 OR loudnorm_input_i IS NULL OR loudnorm_input_i = 0")
+    normalizedDir := "./normalized"
+    if err := os.MkdirAll(normalizedDir, 0755); err != nil {
+        return fmt.Errorf("failed to create normalized directory: %v", err)
+    }
+    rows, err := db.Query(`
+        SELECT id, uri FROM videos 
+        WHERE (duration IS NULL OR duration = 0 OR loudnorm_input_i IS NULL OR loudnorm_input_i = 0)
+        AND NOT EXISTS (SELECT 1 FROM video_tags vt WHERE vt.video_id = videos.id AND vt.tag_id = 4)
+    `)
     if err != nil {
         return fmt.Errorf("failed to query videos with NULL or 0 duration or loudnorm: %v", err)
     }
@@ -2494,6 +3207,37 @@ func updateVideoDurations(db *sql.DB) error {
                     return
                 }
                 log.Printf("Updated loudnorm measurements for video %d (%s): I=%.2f, LRA=%.2f, TP=%.2f, Thresh=%.2f", id, fullPath, inputI, inputLRA, inputTP, inputThresh)
+
+                // Normalize the full video
+                normalizedPath := filepath.Join(normalizedDir, filepath.Base(uri))
+                if _, statErr := os.Stat(normalizedPath); statErr == nil {
+                    log.Printf("Normalized file already exists for video %d (%s), skipping normalization", id, fullPath)
+                    return
+                }
+                loudnormFilter := fmt.Sprintf(
+                    "loudnorm=I=-23:TP=-1.5:LRA=11:measured_I=%.2f:measured_LRA=%.2f:measured_TP=%.2f:measured_thresh=%.2f:offset=0:linear=true",
+                    inputI, inputLRA, inputTP, inputThresh,
+                )
+                cmdNormalize := exec.Command(
+                    "ffmpeg",
+                    "-err_detect", "ignore_err",
+                    "-analyzeduration", "100M",
+                    "-probesize", "100M",
+                    "-y",
+                    "-i", fullPath,
+                    "-c:v", "copy",
+                    "-c:a", "aac",
+                    "-af", loudnormFilter,
+                    normalizedPath,
+                )
+                outputNormalize, err := cmdNormalize.CombinedOutput()
+                if err != nil {
+                    mu.Lock()
+                    errors = append(errors, fmt.Errorf("ffmpeg normalization failed for video %d (%s): %v\nOutput: %s", id, fullPath, err, string(outputNormalize)))
+                    mu.Unlock()
+                    return
+                }
+                log.Printf("Created normalized video for %d at %s", id, normalizedPath)
             } else {
                 log.Printf("Loudnorm already set for video %d (%s), skipping", id, fullPath)
             }
