@@ -2999,7 +2999,6 @@ func updateVideoDurations(db *sql.DB) error {
     rows, err := db.Query(`
         SELECT id, uri FROM videos 
         WHERE (duration IS NULL OR duration = 0 OR loudnorm_input_i IS NULL OR loudnorm_input_i = 0)
-        AND NOT EXISTS (SELECT 1 FROM video_tags vt WHERE vt.video_id = videos.id AND vt.tag_id = 4)
     `)
     if err != nil {
         return fmt.Errorf("failed to query videos with NULL or 0 duration or loudnorm: %v", err)
