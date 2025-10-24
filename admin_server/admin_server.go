@@ -799,233 +799,213 @@ func deleteBreakHandler(c *gin.Context) {
 }
 
 func previewFadeHandler(c *gin.Context) {
-	var req PreviewFadeReq
-	if err := c.BindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	if req.Value["type"] != "fade" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Not a fade break"})
-		return
-	}
-	timeVal, ok := req.Value["time"].(float64)
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid time"})
-		return
-	}
-	color, ok := req.Value["color"].(string)
-	if !ok {
-		color = "#000000"
-	}
-	fadeOut, ok := req.Value["fade_out"].(map[string]interface{})
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_out"})
-		return
-	}
-	fadeOutVideo, ok := fadeOut["video"].(map[string]interface{})
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_out video"})
-		return
-	}
-	fovStartRel, ok := fadeOutVideo["start"].(float64)
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_out video start"})
-		return
-	}
-	fovEndRel, ok := fadeOutVideo["end"].(float64)
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_out video end"})
-		return
-	}
-	fovStart := timeVal + fovStartRel
-	fovEnd := timeVal + fovEndRel
-	fovDur := fovEnd - fovStart
-	fadeOutAudio, ok := fadeOut["audio"].(map[string]interface{})
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_out audio"})
-		return
-	}
-	foaStartRel, ok := fadeOutAudio["start"].(float64)
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_out audio start"})
-		return
-	}
-	foaEndRel, ok := fadeOutAudio["end"].(float64)
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_out audio end"})
-		return
-	}
-	foaStart := timeVal + foaStartRel
-	foaEnd := timeVal + foaEndRel
-	foaDur := foaEnd - foaStart
+    var req PreviewFadeReq
+    if err := c.BindJSON(&req); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+        return
+    }
+    if req.Value["type"] != "fade" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Not a fade break"})
+        return
+    }
+    timeVal, ok := req.Value["time"].(float64)
+    if !ok {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid time"})
+        return
+    }
+    color, ok := req.Value["color"].(string)
+    if !ok {
+        color = "#000000"
+    }
+    fadeOut, ok := req.Value["fade_out"].(map[string]interface{})
+    if !ok {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_out"})
+        return
+    }
+    fadeOutVideo, ok := fadeOut["video"].(map[string]interface{})
+    if !ok {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_out video"})
+        return
+    }
+    fovStartRel, ok := fadeOutVideo["start"].(float64)
+    if !ok {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_out video start"})
+        return
+    }
+    fovEndRel, ok := fadeOutVideo["end"].(float64)
+    if !ok {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_out video end"})
+        return
+    }
+    fovStart := timeVal + fovStartRel
+    fovEnd := timeVal + fovEndRel
+    fovDur := fovEnd - fovStart
+    fadeOutAudio, ok := fadeOut["audio"].(map[string]interface{})
+    if !ok {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_out audio"})
+        return
+    }
+    foaStartRel, ok := fadeOutAudio["start"].(float64)
+    if !ok {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_out audio start"})
+        return
+    }
+    foaEndRel, ok := fadeOutAudio["end"].(float64)
+    if !ok {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_out audio end"})
+        return
+    }
+    foaStart := timeVal + foaStartRel
+    foaEnd := timeVal + foaEndRel
+    foaDur := foaEnd - foaStart
 
-	fadeIn, ok := req.Value["fade_in"].(map[string]interface{})
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_in"})
-		return
-	}
-	fadeInVideo, ok := fadeIn["video"].(map[string]interface{})
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_in video"})
-		return
-	}
-	fivStartRel, ok := fadeInVideo["start"].(float64)
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_in video start"})
-		return
-	}
-	fivEndRel, ok := fadeInVideo["end"].(float64)
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_in video end"})
-		return
-	}
-	fivStart := timeVal + fivStartRel
-	fivEnd := timeVal + fivEndRel
-	fivDur := fivEnd - fivStart
-	fadeInAudio, ok := fadeIn["audio"].(map[string]interface{})
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_in audio"})
-		return
-	}
-	fiaStartRel, ok := fadeInAudio["start"].(float64)
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_in audio start"})
-		return
-	}
-	fiaEndRel, ok := fadeInAudio["end"].(float64)
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_in audio end"})
-		return
-	}
-	fiaStart := timeVal + fiaStartRel
-	fiaEnd := timeVal + fiaEndRel
-	fiaDur := fiaEnd - fiaStart
+    fadeIn, ok := req.Value["fade_in"].(map[string]interface{})
+    if !ok {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_in"})
+        return
+    }
+    fadeInVideo, ok := fadeIn["video"].(map[string]interface{})
+    if !ok {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_in video"})
+        return
+    }
+    fivStartRel, ok := fadeInVideo["start"].(float64)
+    if !ok {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_in video start"})
+        return
+    }
+    fivEndRel, ok := fadeInVideo["end"].(float64)
+    if !ok {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_in video end"})
+        return
+    }
+    fivStart := timeVal + fivStartRel
+    fivEnd := timeVal + fivEndRel
+    fivDur := fivEnd - fivStart
+    fadeInAudio, ok := fadeIn["audio"].(map[string]interface{})
+    if !ok {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_in audio"})
+        return
+    }
+    fiaStartRel, ok := fadeInAudio["start"].(float64)
+    if !ok {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_in audio start"})
+        return
+    }
+    fiaEndRel, ok := fadeInAudio["end"].(float64)
+    if !ok {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fade_in audio end"})
+        return
+    }
+    fiaStart := timeVal + fiaStartRel
+    fiaEnd := timeVal + fiaEndRel
+    fiaDur := fiaEnd - fiaStart
 
-	var uri string
-	err := db.QueryRow("SELECT uri FROM videos WHERE id = $1", req.ID).Scan(&uri)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
-		return
-	}
-	fullPath := filepath.Join(videoBaseDir, uri)
-	if _, err := os.Stat(fullPath); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Video file not found"})
-		return
-	}
+    var uri string
+    err := db.QueryRow("SELECT uri FROM videos WHERE id = $1", req.ID).Scan(&uri)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+        return
+    }
+    fullPath := filepath.Join(videoBaseDir, uri)
+    if _, err := os.Stat(fullPath); err != nil {
+        c.JSON(http.StatusNotFound, gin.H{"error": "Video file not found"})
+        return
+    }
 
-	tempDir := "./temp_videos"
-	if err := os.MkdirAll(tempDir, os.ModePerm); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create temp directory"})
-		return
-	}
-	tempFileName := fmt.Sprintf("%d_fade_preview_%d.mp4", req.ID, time.Now().UnixNano())
-	tempPath := filepath.Join(tempDir, tempFileName)
+    tempDir := "./temp_videos"
+    if err := os.MkdirAll(tempDir, os.ModePerm); err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create temp directory"})
+        return
+    }
+    tempFileName := fmt.Sprintf("%d_fade_preview_%d.mp4", req.ID, time.Now().UnixNano())
+    tempPath := filepath.Join(tempDir, tempFileName)
 
-	preStart := math.Min(timeVal - req.Left, math.Min(fovStart, foaStart))
-	preEnd := math.Max(timeVal, math.Max(fovEnd, foaEnd))
-	postStart := math.Min(fivStart, fiaStart)
-	postEnd := math.Max(timeVal + req.Right, math.Max(fivEnd, fiaEnd))
+    preStart := math.Min(timeVal - req.Left, math.Min(fovStart, foaStart))
+    preEnd := math.Max(timeVal, math.Max(fovEnd, foaEnd))
+    postStart := math.Min(fivStart, fiaStart)
+    postEnd := math.Max(timeVal + req.Right, math.Max(fivEnd, fiaEnd))
 
-	preTemp := filepath.Join(tempDir, fmt.Sprintf("pre_%d.ts", time.Now().UnixNano()))
-	cmd := exec.Command("ffmpeg", "-ss", fmt.Sprintf("%.4f", preStart), "-to", fmt.Sprintf("%.4f", preEnd), "-i", fullPath, "-c", "copy", preTemp)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("FFmpeg pre extract failed: %v, output: %s", err, string(output))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to extract pre clip: " + string(output)})
-		return
-	}
+    preFaded := filepath.Join(tempDir, fmt.Sprintf("pre_faded_%d.mp4", time.Now().UnixNano()))
+    args := []string{"-ss", fmt.Sprintf("%.4f", preStart), "-to", fmt.Sprintf("%.4f", preEnd), "-i", fullPath}
+    vf := ""
+    if fovDur > 0 {
+        st := fovStart - preStart
+        if st < 0 {
+            st = 0
+        }
+        vf = fmt.Sprintf("fade=out:st=%.4f:d=%.4f:color=%s", st, fovDur, color)
+    }
+    af := ""
+    if foaDur > 0 {
+        st := foaStart - preStart
+        if st < 0 {
+            st = 0
+        }
+        af = fmt.Sprintf("afade=out:st=%.4f:d=%.4f", st, foaDur)
+    }
+    if vf != "" {
+        args = append(args, "-vf", vf)
+    }
+    if af != "" {
+        args = append(args, "-af", af)
+    }
+    args = append(args, "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", preFaded)
+    cmd := exec.Command("ffmpeg", args...)
+    output, err := cmd.CombinedOutput()
+    if err != nil {
+        log.Printf("FFmpeg pre fade failed: %v, output: %s", err, string(output))
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to apply fade to pre clip: " + string(output)})
+        return
+    }
 
-	preFaded := filepath.Join(tempDir, fmt.Sprintf("pre_faded_%d.mp4", time.Now().UnixNano()))
-	args := []string{"-i", preTemp}
-	vf := ""
-	if fovDur > 0 {
-		st := fovStart - preStart
-		if st < 0 {
-			st = 0
-		}
-		vf = fmt.Sprintf("fade=out:st=%.4f:d=%.4f:color=%s", st, fovDur, color)
-	}
-	af := ""
-	if foaDur > 0 {
-		st := foaStart - preStart
-		if st < 0 {
-			st = 0
-		}
-		af = fmt.Sprintf("afade=out:st=%.4f:d=%.4f", st, foaDur)
-	}
-	if vf != "" {
-		args = append(args, "-vf", vf)
-	}
-	if af != "" {
-		args = append(args, "-af", af)
-	}
-	args = append(args, "-c:v", "libx264", "-preset", "fast", "-c:a", "aac", preFaded)
-	cmd = exec.Command("ffmpeg", args...)
-	output, err = cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("FFmpeg pre fade failed: %v, output: %s", err, string(output))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to apply fade to pre clip: " + string(output)})
-		return
-	}
+    postFaded := filepath.Join(tempDir, fmt.Sprintf("post_faded_%d.mp4", time.Now().UnixNano()))
+    args = []string{"-ss", fmt.Sprintf("%.4f", postStart), "-to", fmt.Sprintf("%.4f", postEnd), "-i", fullPath}
+    vf = ""
+    if fivDur > 0 {
+        st := fivStart - postStart
+        if st < 0 {
+            st = 0
+        }
+        vf = fmt.Sprintf("fade=in:st=%.4f:d=%.4f:color=%s", st, fivDur, color)
+    }
+    af = ""
+    if fiaDur > 0 {
+        st := fiaStart - postStart
+        if st < 0 {
+            st = 0
+        }
+        af = fmt.Sprintf("afade=in:st=%.4f:d=%.4f", st, fiaDur)
+    }
+    if vf != "" {
+        args = append(args, "-vf", vf)
+    }
+    if af != "" {
+        args = append(args, "-af", af)
+    }
+    args = append(args, "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", postFaded)
+    cmd = exec.Command("ffmpeg", args...)
+    output, err = cmd.CombinedOutput()
+    if err != nil {
+        log.Printf("FFmpeg post fade failed: %v, output: %s", err, string(output))
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to apply fade to post clip: " + string(output)})
+        return
+    }
 
-	postTemp := filepath.Join(tempDir, fmt.Sprintf("post_%d.ts", time.Now().UnixNano()))
-	cmd = exec.Command("ffmpeg", "-ss", fmt.Sprintf("%.4f", postStart), "-to", fmt.Sprintf("%.4f", postEnd), "-i", fullPath, "-c", "copy", postTemp)
-	output, err = cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("FFmpeg post extract failed: %v, output: %s", err, string(output))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to extract post clip: " + string(output)})
-		return
-	}
+    args = []string{"-i", preFaded, "-i", postFaded, "-filter_complex", "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[v][a]", "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "fast", "-c:a", "aac", tempPath}
+    cmd = exec.Command("ffmpeg", args...)
+    output, err = cmd.CombinedOutput()
+    if err != nil {
+        log.Printf("FFmpeg concat failed: %v, output: %s", err, string(output))
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to concat clips: " + string(output)})
+        return
+    }
 
-	postFaded := filepath.Join(tempDir, fmt.Sprintf("post_faded_%d.mp4", time.Now().UnixNano()))
-	args = []string{"-i", postTemp}
-	vf = ""
-	if fivDur > 0 {
-		st := fivStart - postStart
-		if st < 0 {
-			st = 0
-		}
-		vf = fmt.Sprintf("fade=in:st=%.4f:d=%.4f:color=%s", st, fivDur, color)
-	}
-	af = ""
-	if fiaDur > 0 {
-		st := fiaStart - postStart
-		if st < 0 {
-			st = 0
-		}
-		af = fmt.Sprintf("afade=in:st=%.4f:d=%.4f", st, fiaDur)
-	}
-	if vf != "" {
-		args = append(args, "-vf", vf)
-	}
-	if af != "" {
-		args = append(args, "-af", af)
-	}
-	args = append(args, "-c:v", "libx264", "-preset", "fast", "-c:a", "aac", postFaded)
-	cmd = exec.Command("ffmpeg", args...)
-	output, err = cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("FFmpeg post fade failed: %v, output: %s", err, string(output))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to apply fade to post clip: " + string(output)})
-		return
-	}
+    os.Remove(preFaded)
+    os.Remove(postFaded)
 
-	args = []string{"-i", preFaded, "-i", postFaded, "-filter_complex", "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[v][a]", "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "fast", "-c:a", "aac", tempPath}
-	cmd = exec.Command("ffmpeg", args...)
-	output, err = cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("FFmpeg concat failed: %v, output: %s", err, string(output))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to concat clips: " + string(output)})
-		return
-	}
-
-	os.Remove(preTemp)
-	os.Remove(postTemp)
-	os.Remove(preFaded)
-	os.Remove(postFaded)
-
-	tempURI := "/temp_videos/" + tempFileName
-	c.JSON(http.StatusOK, gin.H{"temp_uri": tempURI})
+    tempURI := "/temp_videos/" + tempFileName
+    c.JSON(http.StatusOK, gin.H{"temp_uri": tempURI})
 }
 
 func updateAdBreaksHandler(c *gin.Context) {

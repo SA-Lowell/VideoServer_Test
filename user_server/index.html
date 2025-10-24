@@ -103,19 +103,17 @@ window.addEventListener('load', async () => {
             const option = document.createElement('option');
             option.value = station;
             option.textContent = station;
-            if (station === "Malcolm in the Middle") option.selected = true;
             select.appendChild(option);
         });
         log('Loaded stations: ' + stations.join(', '));
     } catch (error) {
         log('Error loading stations: ' + error);
-        const fallbackStations = ["Bob's Burgers", "Malcolm in the Middle", "3rd Rock from the Sun", "Beyond Belief Fact or Fiction"];
+        const fallbackStations = [];
         const select = document.getElementById('station');
         fallbackStations.forEach(station => {
             const option = document.createElement('option');
             option.value = station;
             option.textContent = station;
-            if (station === "Malcolm in the Middle") option.selected = true;
             select.appendChild(option);
         });
         log('Using fallback stations: ' + fallbackStations.join(', '));

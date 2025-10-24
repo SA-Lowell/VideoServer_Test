@@ -498,25 +498,37 @@
                 timeInput.size = 12;
                 timeInput.onchange = () => {
                     const newTime = parseTime(timeInput.value);
-                    if (!isNaN(newTime) && newTime >= b.start && newTime <= b.end) {
+                    const video = document.getElementById(`video-player-${id}`);
+                    const dur = video.duration;
+                    if (isNaN(newTime) || newTime < 0 || (!isNaN(dur) && newTime > dur)) {
+                        alert('Invalid time or out of range');
+                        timeInput.value = formatTime(isHard ? b.value : b.value.time);
+                    } else {
                         const oldT = isHard ? b.value : b.value.time;
-                        const delta = newTime - oldT;
+                        const left_offset = oldT - b.start;
+                        const right_offset = b.end - oldT;
+                        let new_start = newTime - left_offset;
+                        let new_end = newTime + right_offset;
+                        new_start = Math.max(0, new_start);
+                        if (!isNaN(dur)) {
+                            new_end = Math.min(dur, new_end);
+                        }
+                        b.start = new_start;
+                        b.end = new_end;
                         if (isHard) {
                             b.value = newTime;
                         } else {
                             b.value.time = newTime;
                         }
-                        b.start += delta;
-                        b.end += delta;
+                        slider.min = b.start;
+                        slider.max = b.end;
                         slider.value = newTime;
+                        timeInput.value = formatTime(newTime);
                         if (isHard) {
                             displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(newTime)}, End: ${formatTime(b.end)}`;
                         } else {
                             displaySpan.innerHTML = `Breakpoint: ${formatTime(newTime)}`;
                         }
-                    } else {
-                        alert('Invalid time or out of range');
-                        timeInput.value = formatTime(isHard ? b.value : b.value.time);
                     }
                 };
                 div.appendChild(timeInput);
@@ -742,25 +754,37 @@
                 timeInput.size = 12;
                 timeInput.onchange = () => {
                     const newTime = parseTime(timeInput.value);
-                    if (!isNaN(newTime) && newTime >= b.start && newTime <= b.end) {
+                    const video = document.getElementById(`video-player-${id}`);
+                    const dur = video.duration;
+                    if (isNaN(newTime) || newTime < 0 || (!isNaN(dur) && newTime > dur)) {
+                        alert('Invalid time or out of range');
+                        timeInput.value = formatTime(isHard ? b.value : b.value.time);
+                    } else {
                         const oldT = isHard ? b.value : b.value.time;
-                        const delta = newTime - oldT;
+                        const left_offset = oldT - b.start;
+                        const right_offset = b.end - oldT;
+                        let new_start = newTime - left_offset;
+                        let new_end = newTime + right_offset;
+                        new_start = Math.max(0, new_start);
+                        if (!isNaN(dur)) {
+                            new_end = Math.min(dur, new_end);
+                        }
+                        b.start = new_start;
+                        b.end = new_end;
                         if (isHard) {
                             b.value = newTime;
                         } else {
                             b.value.time = newTime;
                         }
-                        b.start += delta;
-                        b.end += delta;
+                        slider.min = b.start;
+                        slider.max = b.end;
                         slider.value = newTime;
+                        timeInput.value = formatTime(newTime);
                         if (isHard) {
                             displaySpan.innerHTML = `Start: ${formatTime(b.start)}, Mid: ${formatTime(newTime)}, End: ${formatTime(b.end)}`;
                         } else {
                             displaySpan.innerHTML = `Breakpoint: ${formatTime(newTime)}`;
                         }
-                    } else {
-                        alert('Invalid time or out of range');
-                        timeInput.value = formatTime(isHard ? b.value : b.value.time);
                     }
                 };
                 div.appendChild(timeInput);
@@ -1126,12 +1150,17 @@
             const midpointInput = document.getElementById(`manual-midpoint-${id}`);
             const spanInput = document.getElementById(`manual-span-${id}`);
             const typeSelect = document.getElementById(`manual-type-${id}`);
+            const video = document.getElementById(`video-player-${id}`);
 
-            const midStr = midpointInput.value.trim();
+            let midStr = midpointInput.value.trim();
             const span = parseFloat(spanInput.value) || 3;
             const type = typeSelect.value;
 
-            const mid = parseTime(midStr);
+            let mid = parseTime(midStr);
+            if (midStr === '') {
+                mid = video.currentTime;
+                midpointInput.value = formatTime(mid);
+            }
             if (isNaN(mid) || mid < 0) {
                 alert('Invalid midpoint time. Use HH:MM:SS.dddd format.');
                 return;
