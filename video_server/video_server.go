@@ -480,8 +480,28 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
     } else {
         log.Printf("Station %s: ffmpeg video succeeded for %s", st.name, fullSegPath)
     }
-    // Extract audio to Opus (already encoded, just copy)
-    cmdExtractAudio := exec.Command("ffmpeg", "-y", "-i", tempMuxedPath, "-c:a", "copy", opusPath)
+    // Extract audio to Opus (re-encode instead of copy for clean container)
+    argsExtractA := []string{
+        "-y",
+        "-i", tempMuxedPath,
+        "-c:a", "libopus",
+        "-b:a", "128k",
+        "-ar", "48000",
+        "-ac", "2",
+        "-frame_duration", "20",
+        "-page_duration", "960",
+        "-application", "audio",
+        "-vbr", "on",
+        "-avoid_negative_ts", "make_zero",
+        "-fflags", "+genpts",
+        "-async", "1",
+        "-max_delay", "0",
+        "-threads", "0",
+        "-map_metadata", "-1",  // Strip metadata
+        "-f", "opus",
+        opusPath,
+    }
+    cmdExtractAudio := exec.Command("ffmpeg", argsExtractA...)
     outputExtractA, err := cmdExtractAudio.CombinedOutput()
     log.Printf("Station %s: FFmpeg audio extract output for %s: %s", st.name, opusPath, string(outputExtractA))
     if err != nil {
@@ -519,6 +539,7 @@ func processVideo(st *Station, videoID int64, db *sql.DB, startTime, chunkDur fl
             "-fflags", "+genpts",
             "-max_delay", "0",
             "-threads", "0",
+            "-map_metadata", "-1",
             "-f", "opus",
             opusPath,
         }
